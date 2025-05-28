@@ -25,9 +25,9 @@ TTS Saffron uses JSON files to define the structure and content of each test. Yo
 First, identify which of the supported core test types you want to create. Each type has a specific expected JSON structure for its items.
 
 *   **Supported Test Types (and their backend identifiers, used for `--test-type` argument):**
-    *   Human/Machine Classification: `hfr`
+    *   HFR: `hfr`
     *   MUSHRA - Granular: `mushra-granular`
-    *   Machine vs Human Granular: `hfr-granular`
+    *   HFR - Granular: `hfr-granular`
     *   Comparative Mean Opinion Score (CMOS): `cmos`
     *   MUSHRA: `mushra`
 
