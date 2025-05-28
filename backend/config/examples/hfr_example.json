@@ -1,0 +1,29 @@
+[
+  {
+    "id": 1,
+    "audio_path": "https://example.com/audio/hfr_sample_1.wav",
+    "label": "Human",
+    "description": "Speaker A discussing weather patterns.",
+    "attributes": {
+      "speaker_id": "speaker_A01",
+      "dataset": "custom_set_v1"
+    }
+  },
+  {
+    "id": 2,
+    "audio_path": "https://example.com/audio/hfr_sample_2.wav",
+    "label": "Machine",
+    "description": "Synthesized voice reading a news headline.",
+    "attributes": {
+      "tts_system": "SystemX_v2",
+      "emotion": "neutral"
+    }
+  },
+  {
+    "id": 3,
+    "audio_path": "URL_to_your_hfr_sample_3.mp3",
+    "label": "Human",
+    "description": "Speaker B in a conversational tone.",
+    "attributes": {}
+  }
+]

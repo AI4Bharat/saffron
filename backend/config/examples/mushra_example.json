@@ -1,0 +1,41 @@
+[
+  {
+    "id": 1,
+    "reference_audio": "https://example.com/audio/mushra_ref_1.wav",
+    "hidden_reference_audio": "https://example.com/audio/mushra_hidden_ref_1.wav",
+    "test_audios": [
+      {
+        "audio_path": "https://example.com/audio/mushra_1a_system1.wav",
+        "audio_id": "mog1_sys1",
+        "class": "System1"
+      },
+      {
+        "audio_path": "https://example.com/audio/mushra_1b_system2.wav",
+        "audio_id": "mog1_sys2",
+        "class": "System2_AnchorLow"
+      },
+      {
+        "audio_path": "URL_to_your_mushra_1c_system3.mp3",
+        "audio_id": "mog1_sys3",
+        "class": "System3"
+      }
+    ]
+  },
+  {
+    "id": 2,
+    "reference_audio": "URL_to_your_mushra_ref_2.wav",
+    "hidden_reference_audio": "URL_to_your_mushra_hidden_ref_2.wav",
+    "test_audios": [
+      {
+        "audio_path": "URL_to_your_mushra_2a_system1.mp3",
+        "audio_id": "mog2_sys1",
+        "class": "System1"
+      },
+      {
+        "audio_path": "URL_to_your_mushra_2b_system4.mp3",
+        "audio_id": "mog2_sys4",
+        "class": "System4"
+      }
+    ]
+  }
+]

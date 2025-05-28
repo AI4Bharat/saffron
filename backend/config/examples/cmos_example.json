@@ -1,0 +1,34 @@
+[
+  {
+    "id": 1,
+    "reference_audio": "https://example.com/audio/cmos_ref_1.wav",
+    "test_audios": [
+      {
+        "audio_path": "https://example.com/audio/cmos_test_1a_systemX.wav",
+        "audio_id": "cmos1_sysX",
+        "class": "SystemX"
+      },
+      {
+        "audio_path": "https://example.com/audio/cmos_test_1b_systemY.wav",
+        "audio_id": "cmos1_sysY",
+        "class": "SystemY"
+      }
+    ]
+  },
+  {
+    "id": 2,
+    "reference_audio": "URL_to_your_cmos_ref_2.mp3",
+    "test_audios": [
+      {
+        "audio_path": "URL_to_your_cmos_test_2a_systemX.mp3",
+        "audio_id": "cmos2_sysX",
+        "class": "SystemX"
+      },
+      {
+        "audio_path": "URL_to_your_cmos_test_2b_systemZ.mp3",
+        "audio_id": "cmos2_sysZ",
+        "class": "SystemZ"
+      }
+    ]
+  }
+]

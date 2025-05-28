@@ -1,0 +1,29 @@
+[
+  {
+    "id": 1,
+    "sample": {
+      "audio_path": "https://example.com/audio/hfr_granular_1.wav",
+      "audio_id": "hfrg_001",
+      "label": "Human"
+    },
+    "Sentence": "The quick brown fox jumps over the lazy dog."
+  },
+  {
+    "id": 2,
+    "sample": {
+      "audio_path": "URL_to_your_hfr_granular_2.mp3",
+      "audio_id": "hfrg_002",
+      "label": "Machine"
+    },
+    "Sentence": "She sells seashells by the seashore."
+  },
+  {
+    "id": 3,
+    "sample": {
+      "audio_path": "https://example.com/audio/hfr_granular_3.wav",
+      "audio_id": "hfrg_003",
+      "label": "Machine"
+    },
+    "Sentence": "Peter Piper picked a peck of pickled peppers."
+  }
+]

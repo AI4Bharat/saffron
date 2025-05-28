@@ -1,0 +1,20 @@
+Flask==2.3.3 # Or a more recent stable 2.x or 3.x version
+Flask-SQLAlchemy==3.1.1 # Or a more recent stable version
+Flask-Migrate==4.0.5 # For database migrations
+Flask-CORS==4.0.0 # For Cross-Origin Resource Sharing
+Werkzeug==3.0.1 # Dependency of Flask, often good to pin
+psycopg2-binary==2.9.9 # PostgreSQL adapter
+python-dotenv==1.0.0 # For loading .env files
+PyJWT==2.8.0 # For JWT handling
+gunicorn==21.2.0 # WSGI HTTP Server for production
+SQLAlchemy==2.0.25 # Core SQLAlchemy, often a dependency of Flask-SQLAlchemy
+
+# Optional, but good practice:
+blinker==1.7.0 # For signals in Flask
+click==8.1.7 # CLI library used by Flask
+itsdangerous==2.1.2 # Data serialization for Flask
+Jinja2==3.1.3 # Templating engine, Flask dependency
+MarkupSafe==2.1.3 # Used by Jinja2
+
+# If you kept the cache from Flask-Caching (even if not for screening timer)
+# Flask-Caching==2.1.0
