@@ -25,7 +25,7 @@ The platform supports:
 
 This version of TTS Saffron is focused on the following core test types:
 
-1.  **Human/Machine Classification (Similarity-based):**
+1.  **HFR:**
     *   Backend Identifier: `hfr`
     *   Description: Users listen to an audio sample and classify it as either human-spoken or machine-generated.
     *   Frontend Component: `HFR.vue`
@@ -33,7 +33,7 @@ This version of TTS Saffron is focused on the following core test types:
     *   Backend Identifier: `mushra-granular`
     *   Description: A MUSHRA-style test where users rate multiple test audio samples against a reference, focusing on various degradation aspects and quality attributes.
     *   Frontend Component: `MushraGranular.vue`
-3.  **Machine vs Human Granular (Single Stimulus with Ground Truth):**
+3.  **HFR - Granular:**
     *   Backend Identifier: `hfr-granular`
     *   Description: Users listen to a single audio sample and classify it as human or machine. If machine, they provide granular reasons for their classification.
     *   Frontend Component: `HFRGranular.vue`
