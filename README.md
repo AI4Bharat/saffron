@@ -14,7 +14,7 @@
 
 ## Overview
 
-TTS Saffron is a comprehensive platform designed to evaluate and improve text-to-speech (TTS) technologies. It allows researchers and developers to conduct various audio-based tests by leveraging user feedback, aiming to enhance the quality and naturalness of machine-generated speech. This repository provides the codebase for self-hosting the TTS Saffron platform.
+Saffron is a comprehensive platform designed to evaluate and improve text-to-speech (TTS) technologies. It allows researchers and developers to conduct various audio-based tests by leveraging user feedback, aiming to enhance the quality and naturalness of machine-generated speech. This repository provides the codebase for self-hosting the Saffron platform.
 
 The platform supports:
 - **Secure User Authentication:** Users can register and log in to participate in tests.
@@ -23,7 +23,7 @@ The platform supports:
 
 ## Supported Test Types
 
-This version of TTS Saffron is focused on the following core test types:
+This version of Saffron is focused on the following core test types:
 
 1.  **HFR:**
     *   Backend Identifier: `hfr`
@@ -73,9 +73,9 @@ This version of TTS Saffron is focused on the following core test types:
 
 ## Getting Started (Self-Hosting Guide)
 
-For detailed instructions on how to set up TTS Saffron on your own server, including prerequisites, backend setup, frontend setup, and running in production, please refer to our comprehensive guide:
+For detailed instructions on how to set up Saffron on your own server, including prerequisites, backend setup, frontend setup, and running in production, please refer to our comprehensive guide:
 
-➡️ **[Getting Started with TTS Saffron (Self-Hosting Guide)](./GETTING_STARTED.md)**
+➡️ **[Getting Started with Saffron (Self-Hosting Guide)](./GETTING_STARTED.md)**
 
 ## Creating and Loading Test Configurations
 
@@ -83,7 +83,7 @@ Setting up new tests involves creating JSON configuration files that define your
 
 **For detailed step-by-step instructions, including JSON structure examples for each supported test type and how to use the `load_config.py` script, please refer to the dedicated guide:**
 
-➡️ **[Guide: Setting Up a New Test in TTS Saffron](./backend/GUIDE.md)**
+➡️ **[Guide: Setting Up a New Test in Saffron](./backend/GUIDE.md)**
 
 ## Setting up for Prolific Studies
 
@@ -91,7 +91,7 @@ If you plan to use Prolific for recruiting participants, the setup involves load
 
 For detailed steps, please see the "Setting up for Prolific Studies" section in the:
 
-➡️ **[Getting Started with TTS Saffron (Self-Hosting Guide)](./GETTING_STARTED.md#setting-up-for-prolific-studies)**
+➡️ **[Getting Started with Saffron (Self-Hosting Guide)](./GETTING_STARTED.md#setting-up-for-prolific-studies)**
 
 ## API Endpoints
 -   **Authentication:**
