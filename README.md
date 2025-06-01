@@ -1,4 +1,4 @@
-# TTS Saffron
+# Saffron
 
 ## Table of Contents
 - [Overview](#overview)
