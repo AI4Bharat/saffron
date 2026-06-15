@@ -64,12 +64,26 @@ const router = createRouter({
 router.beforeEach((to, from, next) => {
   const authToken = localStorage.getItem('authToken');
 
-  if (to.meta.requiresAuth && !authToken) {
+  if (to.path === '/tracking') {
+    if (!authToken) {
+      next('/login');
+    } else {
+      let isAdmin = false;
+      try {
+        const payload = JSON.parse(atob(authToken.split('.')[1]));
+        isAdmin = (payload.username === 'admin');
+      } catch (e) {
+        console.error('Error parsing token:', e);
+      }
+      if (isAdmin) {
+        next();
+      } else {
+        next('/');
+      }
+    }
+  } else if (to.meta.requiresAuth && !authToken) {
     // If route requires authentication and authToken is not present, redirect to login
     next('/login');
-  // } else if (!to.meta.requiresAuth && authToken) {
-  //   // If route does not require authentication and authToken is present, redirect to home
-  //   next('/');
   } else {
     // Continue navigation
     next();

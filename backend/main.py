@@ -30,6 +30,23 @@ def create_app():
 app = create_app()
 with app.app_context():
     db.create_all()
+    # Self-healing migration to add completion_status column to rating table
+    try:
+        # PostgreSQL syntax first
+        db.session.execute(db.text("ALTER TABLE rating ADD COLUMN IF NOT EXISTS completion_status VARCHAR(50) DEFAULT 'completed'"))
+        db.session.commit()
+        print("Database migration: Successfully verified/added completion_status column (PostgreSQL)")
+    except Exception as e:
+        db.session.rollback()
+        try:
+            # SQLite / Standard fallback
+            db.session.execute(db.text("ALTER TABLE rating ADD COLUMN completion_status VARCHAR(50) DEFAULT 'completed'"))
+            db.session.commit()
+            print("Database migration: Successfully added completion_status column (SQLite)")
+        except Exception as ex:
+            db.session.rollback()
+            # Ignore error if it means the column already exists
+            print("Database migration info: Column 'completion_status' may already exist.")
 
 # Routes
 from application.views import *

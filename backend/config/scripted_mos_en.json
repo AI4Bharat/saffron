@@ -1,0 +1,86 @@
+[
+  {
+    "id": 1,
+    "audio_path": "https://tts-labelstudio-audios1.ai4bharat.org/Rohan%20Patolet%20English%20sample_en.wav",
+    "label": "Human",
+    "description": "Rohan Patolet English sample_en",
+    "attributes": {
+      "candidate_name": "Rohan Patolet English sample_en",
+      "duration_seconds": 294.0,
+      "source_audio_filepath": "/workspace/aivanta_whole_audio_task/original_audio/Rohan Patolet English sample_en.wav",
+      "language_id": "en"
+    }
+  },
+  {
+    "id": 2,
+    "audio_path": "https://tts-labelstudio-audios1.ai4bharat.org/Soniya_English_en.wav",
+    "label": "Human",
+    "description": "Soniya_English_en",
+    "attributes": {
+      "candidate_name": "Soniya_English_en",
+      "duration_seconds": 200.501333,
+      "source_audio_filepath": "/workspace/aivanta_whole_audio_task/original_audio/Soniya_English_en.wav",
+      "language_id": "en"
+    }
+  },
+  {
+    "id": 3,
+    "audio_path": "https://tts-labelstudio-audios1.ai4bharat.org/Nitin%20Bhatia_English_en.mp3",
+    "label": "Human",
+    "description": "Nitin Bhatia_English_en",
+    "attributes": {
+      "candidate_name": "Nitin Bhatia_English_en",
+      "duration_seconds": 240.312,
+      "source_audio_filepath": "/workspace/aivanta_whole_audio_task/original_audio/Nitin Bhatia_English_en.mp3",
+      "language_id": "en"
+    }
+  },
+  {
+    "id": 4,
+    "audio_path": "https://tts-labelstudio-audios1.ai4bharat.org/Bharti%20More_English_en.mp3",
+    "label": "Human",
+    "description": "Bharti More_English_en",
+    "attributes": {
+      "candidate_name": "Bharti More_English_en",
+      "duration_seconds": 245.712,
+      "source_audio_filepath": "/workspace/aivanta_whole_audio_task/original_audio/Bharti More_English_en.mp3",
+      "language_id": "en"
+    }
+  },
+  {
+    "id": 5,
+    "audio_path": "https://tts-labelstudio-audios1.ai4bharat.org/Anshu_English_en.mp3",
+    "label": "Human",
+    "description": "Anshu_English_en",
+    "attributes": {
+      "candidate_name": "Anshu_English_en",
+      "duration_seconds": 197.664,
+      "source_audio_filepath": "/workspace/aivanta_whole_audio_task/original_audio/Anshu_English_en.mp3",
+      "language_id": "en"
+    }
+  },
+  {
+    "id": 6,
+    "audio_path": "https://tts-labelstudio-audios1.ai4bharat.org/Dipti%20Rane_English_en.mp3",
+    "label": "Human",
+    "description": "Dipti Rane_English_en",
+    "attributes": {
+      "candidate_name": "Dipti Rane_English_en",
+      "duration_seconds": 110.764,
+      "source_audio_filepath": "/workspace/aivanta_whole_audio_task/original_audio/Dipti Rane_English_en.mp3",
+      "language_id": "en"
+    }
+  },
+  {
+    "id": 7,
+    "audio_path": "https://tts-labelstudio-audios1.ai4bharat.org/Catherine_English_en.mp3",
+    "label": "Human",
+    "description": "Catherine_English_en",
+    "attributes": {
+      "candidate_name": "Catherine_English_en",
+      "duration_seconds": 229.176,
+      "source_audio_filepath": "/workspace/aivanta_whole_audio_task/original_audio/Catherine_English_en.mp3",
+      "language_id": "en"
+    }
+  }
+]

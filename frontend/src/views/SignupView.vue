@@ -103,7 +103,10 @@
 
 <script setup>
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { API_BASE_URL } from '@/config';
+
+const router = useRouter()
 
 // Form fields
 const name = ref('')
@@ -168,7 +171,7 @@ const handleSubmit = async () => {
 
     localStorage.setItem('authToken', data.token) // Save token for authentication
 
-    router.push('/') // Redirect to home page
+    window.location.href = '/' // Redirect to home page with full refresh
   } catch (err) {
     const data = await response.json()
 

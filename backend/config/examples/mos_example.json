@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1,
+    "audio_path": "https://example.com/audio/sample_1.wav",
+    "label": "Human",
+    "description": "Standard speaker sample 1 for MOS quality evaluation.",
+    "attributes": {
+      "candidate_name": "Speaker 1",
+      "duration_seconds": 15.4
+    }
+  },
+  {
+    "id": 2,
+    "audio_path": "https://example.com/audio/sample_2.wav",
+    "label": "Machine",
+    "description": "Synthesized voice sample 2 for MOS quality evaluation.",
+    "attributes": {
+      "candidate_name": "Speaker 2",
+      "duration_seconds": 22.1
+    }
+  }
+]

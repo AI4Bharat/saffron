@@ -105,7 +105,18 @@ const handleSubmit = async () => {
       sessionStorage.setItem('authToken', data.token)
     }
 
-    router.push('/')  // Redirect to home page
+    // Redirect to admin dashboard if logged in as admin, otherwise home
+    let redirectPath = '/'
+    try {
+      const payload = JSON.parse(atob(data.token.split('.')[1]))
+      if (payload.username === 'admin') {
+        redirectPath = '/tracking'
+      }
+    } catch (e) {
+      console.error('Error decoding token for redirect:', e)
+    }
+
+    window.location.href = redirectPath  // Redirect with full refresh
   } catch (err) {
     console.error('Login error:', err)
     error.value = 'Invalid username or password'

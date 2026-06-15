@@ -34,6 +34,9 @@ if not app.debug:
 
 @app.errorhandler(Exception)
 def unhandled_exception(e):
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        return e
     app.logger.error('Unhandled Exception: %s', (e))
     return jsonify({'message': 'Internal Server Error'}), 500
 
@@ -95,6 +98,7 @@ def generate_token(username):
 
 @app.route('/api/login', methods=['POST'])
 def login():
+    import os
     data = request.get_json()
     username = data.get('username')
     password = data.get('password')
@@ -102,6 +106,13 @@ def login():
     if user and user.password == password:
         auth_token = generate_token(username)
         return jsonify({'token': auth_token}), 200
+    elif username == 'admin':
+        admin_pass = os.getenv('ADMIN_PASSWORD', 'admin')
+        if password == admin_pass:
+            auth_token = generate_token('admin')
+            return jsonify({'token': auth_token}), 200
+        else:
+            return jsonify({'message': 'Invalid username or password'}), 401
     else:
         return jsonify({'message': 'Invalid username or password'}), 401
 
@@ -161,18 +172,84 @@ def signup():
 def get_test(current_user, test_id):
     token = request.headers.get('Authorization').split()[1]
     required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
-    rater_id = Rater.query.filter_by(name=required["username"]).first_or_404().id
+    username = required["username"]
+    rater = Rater.query.filter_by(name=username).first()
+    if not rater:
+        if username == "admin":
+            rater = Rater.query.first()
+        if not rater:
+            return jsonify({'message': 'Rater not found'}), 404
+    rater_id = rater.id
     test = Test.query.filter_by(id=test_id).first_or_404()
 
-    # Get the page numbers that the rater has already done and shuffle the remaining samples
-    page_nos_done = Rating.query.filter_by(rater_id=rater_id, test_id=test_id).with_entities(Rating.page_no_progress).all()
-    page_nos_done = [page_no[0] for page_no in page_nos_done]
-    page_nos_done = list(map(int, page_nos_done))
+    # Get the page numbers and ratings that the rater has already done
+    ratings = Rating.query.filter_by(rater_id=rater_id, test_id=test_id).all()
+    latest_status = {}
+    for r in ratings:
+        if r.page_no_progress:
+            pid = str(r.page_no_progress)
+            if pid not in latest_status or r.time_of_submission > latest_status[pid]['time']:
+                latest_status[pid] = {
+                    'status': r.completion_status or 'completed',
+                    'time': r.time_of_submission
+                }
+    
+    completed_pages_raw = set(latest_status.keys())
+    
+    # Safely match original IDs with the string IDs from rating
+    all_page_ids = [sample['id'] for sample in test.json_entry]
+    page_nos_done = [pid for pid in all_page_ids if str(pid) in completed_pages_raw]
+    
     samples = [sample for sample in test.json_entry if sample['id'] not in page_nos_done]
-    random.shuffle(samples)
+    # Keep tasks in the original order instead of shuffling
+    # random.shuffle(samples)
     samples_done = [sample for sample in test.json_entry if sample['id'] in page_nos_done]
     samples_done.extend(samples)
-    required = samples_done
+    
+    # Map latest ratings by task ID to merge corrections
+    latest_ratings = {}
+    for r in ratings:
+        if r.page_no_progress:
+            pid = str(r.page_no_progress)
+            if pid not in latest_ratings or r.time_of_submission > latest_ratings[pid].time_of_submission:
+                latest_ratings[pid] = r
+
+    # Inject completion_status and merge corrected translations into each entry
+    required_response = []
+    for sample in samples_done:
+        # Performance optimization: shallow copy dictionary and copy nested dialogue lists to avoid copy.deepcopy
+        sample_copy = {k: v for k, v in sample.items()}
+        for k in ['dialogue', 'conversation', 'turns']:
+            if k in sample_copy and isinstance(sample_copy[k], list):
+                sample_copy[k] = [dict(turn) for turn in sample_copy[k]]
+        pid = str(sample_copy['id'])
+        if pid in latest_ratings:
+            rating = latest_ratings[pid]
+            sample_copy['completion_status'] = rating.completion_status or 'completed'
+            
+            # Merge corrected translations from results_json
+            rating_data = rating.results_json
+            if isinstance(rating_data, dict):
+                if 'pre_scene' in rating_data:
+                    sample_copy['pre_scene'] = rating_data['pre_scene']
+                if 'post_scene' in rating_data:
+                    sample_copy['post_scene'] = rating_data['post_scene']
+                
+                orig_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in sample_copy and isinstance(sample_copy[k], list)), None)
+                rated_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in rating_data and isinstance(rating_data[k], list)), None)
+                
+                if orig_conv_key and rated_conv_key:
+                    orig_list = sample_copy[orig_conv_key]
+                    rated_list = rating_data[rated_conv_key]
+                    for i, orig_turn in enumerate(orig_list):
+                        if i < len(rated_list):
+                            rated_turn = rated_list[i]
+                            for k, v in rated_turn.items():
+                                if k not in ['role', 'english', 'english_text', 'original', 'original_text', 'en', 'text_en', 'speaker', 'user']:
+                                    orig_turn[k] = v
+        else:
+            sample_copy['completion_status'] = 'uncompleted'
+        required_response.append(sample_copy)
 
     try:
         page_no = len(page_nos_done)
@@ -183,7 +260,7 @@ def get_test(current_user, test_id):
         'test_id': test.id,
         'test_type': test.test_type,
         'description': test.description,
-        'json_entry': required,
+        'json_entry': required_response,
         'page_no': page_no
     })
 
@@ -205,18 +282,34 @@ def create_rating(current_user):
         data['results_json']['time'] = datetime.now().isoformat()
         data['results_json']['time_taken'] = data['time_taken_to_submit'] / 1000
         data['results_json']['data_id'] = data.get('pageNo_progress')
+        completion_status = data.get('completion_status', 'completed')
 
-        rating = Rating(
-            id=db.session.query(db.func.max(Rating.id)).scalar() + 1 if db.session.query(db.func.max(Rating.id)).scalar() is not None else 1,
+        existing_rating = Rating.query.filter_by(
             rater_id=rater.id,
             test_id=data['test_id'],
-            results_json=data['results_json'],
-            time_taken_to_submit=data['time_taken_to_submit'],
             page_no_progress=data.get('pageNo_progress')
-        )
-        db.session.add(rating)
-        db.session.commit()
-        return jsonify({'message': 'Rating created successfully'}), 201
+        ).first()
+
+        if existing_rating:
+            existing_rating.results_json = data['results_json']
+            existing_rating.time_taken_to_submit = data['time_taken_to_submit']
+            existing_rating.completion_status = completion_status
+            existing_rating.time_of_submission = datetime.utcnow()
+            db.session.commit()
+            return jsonify({'message': 'Rating updated successfully'}), 200
+        else:
+            rating = Rating(
+                id=db.session.query(db.func.max(Rating.id)).scalar() + 1 if db.session.query(db.func.max(Rating.id)).scalar() is not None else 1,
+                rater_id=rater.id,
+                test_id=data['test_id'],
+                results_json=data['results_json'],
+                time_taken_to_submit=data['time_taken_to_submit'],
+                page_no_progress=data.get('pageNo_progress'),
+                completion_status=completion_status
+            )
+            db.session.add(rating)
+            db.session.commit()
+            return jsonify({'message': 'Rating created successfully'}), 201
     except Exception as e:
         app.logger.error('Error creating rating: %s', e)
         return jsonify({'message': 'Internal Server Error'}), 500
@@ -397,14 +490,25 @@ def get_test_for_prolific_user():
     # Step 4: Query the Rating table to get page numbers already completed
     ratings = Rating.query.filter_by(
         rater_id=rater.id, test_id=test.id
-    ).with_entities(Rating.page_no_progress).all()
-    completed_pages = {int(rating.page_no_progress)
-                       for rating in ratings if rating.page_no_progress}
+    ).all()
+    
+    latest_status = {}
+    for r in ratings:
+        if r.page_no_progress:
+            pid = str(r.page_no_progress)
+            if pid not in latest_status or r.time_of_submission > latest_status[pid]['time']:
+                latest_status[pid] = {
+                    'status': r.completion_status or 'completed',
+                    'time': r.time_of_submission
+                }
+    
+    completed_pages_raw = set(latest_status.keys())
 
     # Get all pages in the test
     all_pages = [entry['id'] for entry in test.json_entry]
 
     # Filter out completed pages and shuffle the remaining ones
+    completed_pages = {page for page in all_pages if str(page) in completed_pages_raw}
     remaining_pages = [page for page in all_pages if page not in completed_pages]
     random.shuffle(remaining_pages)
 
@@ -412,8 +516,53 @@ def get_test_for_prolific_user():
     entry_dict = {entry['id']: entry for entry in test.json_entry}
 
     # Combine completed pages (preserving their order) with shuffled remaining pages
-    full_test_sequence = [entry_dict[page_id] for page_id in completed_pages] + \
-                         [entry_dict[page_id] for page_id in remaining_pages]
+    shuffled_sequence = [entry_dict[page_id] for page_id in completed_pages] + \
+                        [entry_dict[page_id] for page_id in remaining_pages]
+                        
+    # Map latest ratings by task ID to merge corrections
+    latest_ratings = {}
+    for r in ratings:
+        if r.page_no_progress:
+            pid = str(r.page_no_progress)
+            if pid not in latest_ratings or r.time_of_submission > latest_ratings[pid].time_of_submission:
+                latest_ratings[pid] = r
+
+    full_test_sequence = []
+    for sample in shuffled_sequence:
+        # Performance optimization: shallow copy dictionary and copy nested dialogue lists to avoid copy.deepcopy
+        sample_copy = {k: v for k, v in sample.items()}
+        for k in ['dialogue', 'conversation', 'turns']:
+            if k in sample_copy and isinstance(sample_copy[k], list):
+                sample_copy[k] = [dict(turn) for turn in sample_copy[k]]
+        
+        pid = str(sample_copy['id'])
+        if pid in latest_ratings:
+            rating = latest_ratings[pid]
+            sample_copy['completion_status'] = rating.completion_status or 'completed'
+            
+            # Merge corrected translations from results_json
+            rating_data = rating.results_json
+            if isinstance(rating_data, dict):
+                if 'pre_scene' in rating_data:
+                    sample_copy['pre_scene'] = rating_data['pre_scene']
+                if 'post_scene' in rating_data:
+                    sample_copy['post_scene'] = rating_data['post_scene']
+                
+                orig_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in sample_copy and isinstance(sample_copy[k], list)), None)
+                rated_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in rating_data and isinstance(rating_data[k], list)), None)
+                
+                if orig_conv_key and rated_conv_key:
+                    orig_list = sample_copy[orig_conv_key]
+                    rated_list = rating_data[rated_conv_key]
+                    for i, orig_turn in enumerate(orig_list):
+                        if i < len(rated_list):
+                            rated_turn = rated_list[i]
+                            for k, v in rated_turn.items():
+                                if k not in ['role', 'english', 'english_text', 'original', 'original_text', 'en', 'text_en', 'speaker', 'user']:
+                                    orig_turn[k] = v
+        else:
+            sample_copy['completion_status'] = 'uncompleted'
+        full_test_sequence.append(sample_copy)
 
     auth_token = generate_token(rater.name)
 
@@ -467,7 +616,8 @@ def save_rating():
         "session_id": "session_id",
         "test_id": 123,
         "results_json": {...},
-        "time_taken_to_submit": 300
+        "time_taken_to_submit": 300,
+        "completion_status": "completed"
     }
     """
     data = request.get_json()
@@ -475,6 +625,7 @@ def save_rating():
     test_id = data.get('test_id')
     results_json = data.get('results_json')
     time_taken_to_submit = data.get('time_taken_to_submit')
+    completion_status = data.get('completion_status', 'completed')
 
     if not session_id or not test_id or not results_json or not time_taken_to_submit:
         return jsonify({'message': 'Missing required fields'}), 400
@@ -505,7 +656,8 @@ def save_rating():
         test_id=test_id,
         results_json=results_json,
         time_taken_to_submit=time_taken_to_submit,
-        page_no_progress=data.get('pageNo_progress')
+        page_no_progress=data.get('pageNo_progress'),
+        completion_status=completion_status
     )
 
     try:
@@ -616,9 +768,13 @@ def verify_test(test_id):
     token = request.headers.get('Authorization').split()[1]
     required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
     
-    rater = Rater.query.filter_by(name=required["username"]).first_or_404()
+    username = required["username"]
+    rater = Rater.query.filter_by(name=username).first()
     if not rater:
-        return jsonify({'message': 'Rater not found'}), 404
+        if username == "admin":
+            rater = Rater.query.first()
+        if not rater:
+            return jsonify({'message': 'Rater not found'}), 404
     
     test = Test.query.filter_by(id=test_id).first_or_404()
     if not test:
@@ -627,13 +783,13 @@ def verify_test(test_id):
     ratings = Rating.query.filter_by(
                 rater_id=rater.id, test_id=test.id
             ).with_entities(Rating.page_no_progress).all()
-    completed_pages = {int(rating.page_no_progress)
-                       for rating in ratings if rating.page_no_progress}
+    completed_pages_raw = {rating.page_no_progress for rating in ratings if rating.page_no_progress}
 
     # Get all pages in the test
     all_pages = [entry['id'] for entry in test.json_entry]
 
     # Filter out completed pages and shuffle the remaining ones
+    completed_pages = {page for page in all_pages if str(page) in completed_pages_raw}
     remaining_pages = [page for page in all_pages if page not in completed_pages]
 
     if len(remaining_pages) == 0:
@@ -659,8 +815,9 @@ def get_tracking():
             test_groups = {}
             for rating in ratings:
                 test_id = rating.test_id
-                test_groups.setdefault(test_id, 0)
-                test_groups[test_id] += 1
+                test_groups.setdefault(test_id, set())
+                if rating.page_no_progress is not None:
+                    test_groups[test_id].add(rating.page_no_progress)
 
             for test_id, completed in test_groups.items():
                 test = Test.query.get(test_id)
@@ -670,7 +827,7 @@ def get_tracking():
                     'test_id': test.id,
                     'test_type': test.test_type,
                     'test_desc': test.description,
-                    'completed_pages': completed,
+                    'completed_pages': len(completed),
                     'total_pages': total
                 })
 
@@ -679,3 +836,154 @@ def get_tracking():
     except Exception as e:
         app.logger.error(f"Error in tracking endpoint: {e}")
         return jsonify({'error': 'Failed to fetch tracking data.'}), 500
+
+
+@app.route('/api/admin/dashboard', methods=['GET'])
+@token_required
+def get_admin_dashboard(current_user):
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    try:
+        from sqlalchemy.orm import defer
+        import re
+
+        # 1. Fetch all raters and all ratings once to avoid N+1 queries
+        raters = Rater.query.all()
+        total_registered_users = len(raters)
+        
+        all_ratings = Rating.query.all()
+        
+        # Group ratings in memory
+        ratings_by_rater = {}
+        ratings_by_test = {}
+        for r in all_ratings:
+            ratings_by_rater.setdefault(r.rater_id, []).append(r)
+            ratings_by_test.setdefault(r.test_id, []).append(r)
+            
+        raters_data = []
+        active_users_count = 0
+        
+        for rater in raters:
+            rater_ratings = ratings_by_rater.get(rater.id, [])
+            completed_tasks_count = len({r.page_no_progress for r in rater_ratings if r.page_no_progress})
+            
+            last_active = None
+            if rater_ratings:
+                last_active_dt = max(r.time_of_submission for r in rater_ratings)
+                last_active = last_active_dt.isoformat()
+            
+            is_active = completed_tasks_count > 0
+            if is_active:
+                active_users_count += 1
+                
+            status_text = f"{completed_tasks_count} Tasks Completed" if completed_tasks_count != 1 else "1 Task Completed"
+            raters_data.append({
+                'id': rater.id,
+                'name': rater.name,
+                'email': rater.email,
+                'gender': rater.gender,
+                'age': rater.age,
+                'completed_tasks_count': completed_tasks_count,
+                'last_active': last_active,
+                'status': status_text
+            })
+            
+        pending_registrations_count = total_registered_users - active_users_count
+        
+        # 2. Test batches metrics (Defer the heavy json_entry column to avoid loading/deserializing 120MB)
+        tests = Test.query.options(defer(Test.json_entry)).all()
+        total_tests_count = len(tests)
+        
+        languages_list = ["hindi", "bengali", "gujarati", "kannada", "malayalam", "marathi", "odia", "tamil", "telugu", "urdu", "english"]
+        
+        tests_data = []
+        languages_map = {}
+        
+        total_global_tasks = 0
+        total_global_unique_completed = 0
+        total_global_submissions = 0
+        
+        for test in tests:
+            desc = test.description or "No description"
+            
+            # Infer language from description first (very fast)
+            lang = ""
+            desc_lower = desc.lower()
+            for l in languages_list:
+                if l in desc_lower:
+                    lang = l.capitalize()
+                    break
+                    
+            if not lang:
+                # Fallback to json_entry only if not in description (unlikely)
+                if test.json_entry and isinstance(test.json_entry, list) and len(test.json_entry) > 0:
+                    first_item = test.json_entry[0]
+                    lang = first_item.get('target_language') or first_item.get('language') or first_item.get('metadata', {}).get('language') or ""
+                    lang = lang.capitalize() if lang else "Unknown"
+                else:
+                    lang = "Unknown"
+            
+            # Parse total tasks count from description if available (Tasks X to Y)
+            total_tasks = 0
+            match = re.search(r"Tasks (\d+) to (\d+)", desc)
+            if match:
+                total_tasks = int(match.group(2)) - int(match.group(1)) + 1
+            else:
+                total_tasks = len(test.json_entry) if test.json_entry else 0
+                
+            test_ratings = ratings_by_test.get(test.id, [])
+            unique_completed = len({r.page_no_progress for r in test_ratings if r.page_no_progress})
+            total_submissions = len(test_ratings)
+            
+            tests_data.append({
+                'id': test.id,
+                'description': desc,
+                'test_type': test.test_type,
+                'language': lang,
+                'total_tasks': total_tasks,
+                'unique_completed_tasks': unique_completed,
+                'total_submissions': total_submissions
+            })
+            
+            languages_map.setdefault(lang, {
+                'language': lang,
+                'test_count': 0,
+                'total_tasks': 0,
+                'unique_completed_tasks': 0,
+                'total_submissions': 0
+            })
+            languages_map[lang]['test_count'] += 1
+            languages_map[lang]['total_tasks'] += total_tasks
+            languages_map[lang]['unique_completed_tasks'] += unique_completed
+            languages_map[lang]['total_submissions'] += total_submissions
+            
+            total_global_tasks += total_tasks
+            total_global_unique_completed += unique_completed
+            total_global_submissions += total_submissions
+            
+        languages_data = list(languages_map.values())
+        languages_data.sort(key=lambda x: x['language'])
+        
+        total_consents_count = Consent.query.count()
+        total_sessions_count = Session.query.count()
+        
+        return jsonify({
+            'stats': {
+                'total_registered_users': total_registered_users,
+                'active_users': active_users_count,
+                'pending_registrations': pending_registrations_count,
+                'total_tests': total_tests_count,
+                'total_tasks': total_global_tasks,
+                'unique_tasks_completed': total_global_unique_completed,
+                'total_submissions': total_global_submissions,
+                'total_consents': total_consents_count,
+                'total_sessions': total_sessions_count
+            },
+            'languages': languages_data,
+            'tests': tests_data,
+            'raters': raters_data
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error in admin dashboard endpoint: {e}")
+        return jsonify({'error': 'Failed to load admin dashboard statistics.'}), 500

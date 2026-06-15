@@ -11,6 +11,8 @@ class TestType(Enum):
     MUSHRA = "mushra"
     MVH_GRANULAR = "hfr-granular"
     CMOS = "cmos"
+    MOS = "mos"
+    TRANSLATION_CORRECTION = "translation-correction"
 
 def load_json_config(config_path: str):
     with open(config_path, 'r') as f:
@@ -24,7 +26,7 @@ def populate_database_from_config(test_type: TestType, config_data: list, prolif
             description = f"Test data from config for {test_type.value} task"
         test = Test(
             id=db.session.query(db.func.max(Test.id)).scalar() + 1 if db.session.query(db.func.max(Test.id)).scalar() is not None else 1,
-            test_type=test_type,
+            test_type=test_type.value,
             description=description,
             json_entry=config_data
         )

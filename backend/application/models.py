@@ -66,6 +66,7 @@ class Rating(db.Model):
     time_of_submission = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     time_taken_to_submit = db.Column(db.Float, nullable=False)  # Assuming seconds
     page_no_progress = db.Column(db.String(50), nullable=True)  # Page or progress
+    completion_status = db.Column(db.String(50), nullable=True, default='completed')
 
     def __repr__(self):
         return f"<Rating Rater ID={self.rater_id}, Test ID={self.test_id}>"
