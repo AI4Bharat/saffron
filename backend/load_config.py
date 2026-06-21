@@ -13,6 +13,7 @@ class TestType(Enum):
     CMOS = "cmos"
     MOS = "mos"
     TRANSLATION_CORRECTION = "translation-correction"
+    SENTENCE_CORRECTION = "sentence-correction"
 
 def load_json_config(config_path: str):
     with open(config_path, 'r') as f:

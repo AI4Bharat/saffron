@@ -194,7 +194,7 @@ def get_test(current_user, test_id):
                     'time': r.time_of_submission
                 }
     
-    completed_pages_raw = set(latest_status.keys())
+    completed_pages_raw = {pid for pid, val in latest_status.items() if val['status'] in ['completed', 'skipped']}
     
     # Safely match original IDs with the string IDs from rating
     all_page_ids = [sample['id'] for sample in test.json_entry]
@@ -227,14 +227,22 @@ def get_test(current_user, test_id):
             rating = latest_ratings[pid]
             sample_copy['completion_status'] = rating.completion_status or 'completed'
             
-            # Merge corrected translations from results_json
+            # Merge corrected translations and evaluation decisions from results_json
             rating_data = rating.results_json
             if isinstance(rating_data, dict):
                 if 'pre_scene' in rating_data:
                     sample_copy['pre_scene'] = rating_data['pre_scene']
                 if 'post_scene' in rating_data:
                     sample_copy['post_scene'] = rating_data['post_scene']
-                
+                # Sentence-correction tasks carry a single top-level corrected text.
+                if 'text' in rating_data:
+                    sample_copy['text'] = rating_data['text']
+                # Merge conversation evaluation decisions
+                if 'evaluation' in rating_data:
+                    sample_copy['evaluation'] = rating_data['evaluation']
+                if 'comments' in rating_data:
+                    sample_copy['comments'] = rating_data['comments']
+
                 orig_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in sample_copy and isinstance(sample_copy[k], list)), None)
                 rated_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in rating_data and isinstance(rating_data[k], list)), None)
                 
@@ -502,15 +510,18 @@ def get_test_for_prolific_user():
                     'time': r.time_of_submission
                 }
     
-    completed_pages_raw = set(latest_status.keys())
+    completed_pages_raw = {pid for pid, val in latest_status.items() if val['status'] in ['completed', 'skipped']}
 
     # Get all pages in the test
     all_pages = [entry['id'] for entry in test.json_entry]
 
-    # Filter out completed pages and shuffle the remaining ones
+    # Filter out completed pages and shuffle the remaining ones deterministically per user
     completed_pages = {page for page in all_pages if str(page) in completed_pages_raw}
     remaining_pages = [page for page in all_pages if page not in completed_pages]
-    random.shuffle(remaining_pages)
+    
+    user_seed = f"saffron_{rater.id}_{test.id}"
+    user_random = random.Random(user_seed)
+    user_random.shuffle(remaining_pages)
 
     # Create a dictionary for quick lookup of entries by ID
     entry_dict = {entry['id']: entry for entry in test.json_entry}
@@ -540,14 +551,22 @@ def get_test_for_prolific_user():
             rating = latest_ratings[pid]
             sample_copy['completion_status'] = rating.completion_status or 'completed'
             
-            # Merge corrected translations from results_json
+            # Merge corrected translations and evaluation decisions from results_json
             rating_data = rating.results_json
             if isinstance(rating_data, dict):
                 if 'pre_scene' in rating_data:
                     sample_copy['pre_scene'] = rating_data['pre_scene']
                 if 'post_scene' in rating_data:
                     sample_copy['post_scene'] = rating_data['post_scene']
-                
+                # Sentence-correction tasks carry a single top-level corrected text.
+                if 'text' in rating_data:
+                    sample_copy['text'] = rating_data['text']
+                # Merge conversation evaluation decisions
+                if 'evaluation' in rating_data:
+                    sample_copy['evaluation'] = rating_data['evaluation']
+                if 'comments' in rating_data:
+                    sample_copy['comments'] = rating_data['comments']
+
                 orig_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in sample_copy and isinstance(sample_copy[k], list)), None)
                 rated_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in rating_data and isinstance(rating_data[k], list)), None)
                 
@@ -739,7 +758,8 @@ def get_database():
             'test_id': rating.test_id,
             'results_json': rating.results_json,
             'time_taken_to_submit': rating.time_taken_to_submit,
-            'page_no_progress': rating.page_no_progress
+            'page_no_progress': rating.page_no_progress,
+            'completion_status': rating.completion_status or 'completed'
         })
     return jsonify(results)
 
@@ -758,7 +778,8 @@ def get_database_test(test_id):
             'test_id': rate.test_id,
             'results_json': rate.results_json,
             'time_taken_to_submit': rate.time_taken_to_submit,
-            'page_no_progress': rate.page_no_progress
+            'page_no_progress': rate.page_no_progress,
+            'completion_status': rate.completion_status or 'completed'
         })
     return jsonify(results)
 
@@ -782,8 +803,8 @@ def verify_test(test_id):
 
     ratings = Rating.query.filter_by(
                 rater_id=rater.id, test_id=test.id
-            ).with_entities(Rating.page_no_progress).all()
-    completed_pages_raw = {rating.page_no_progress for rating in ratings if rating.page_no_progress}
+            ).all()
+    completed_pages_raw = {rating.page_no_progress for rating in ratings if rating.page_no_progress and rating.completion_status in ['completed', 'skipped']}
 
     # Get all pages in the test
     all_pages = [entry['id'] for entry in test.json_entry]
@@ -865,7 +886,7 @@ def get_admin_dashboard(current_user):
         
         for rater in raters:
             rater_ratings = ratings_by_rater.get(rater.id, [])
-            completed_tasks_count = len({r.page_no_progress for r in rater_ratings if r.page_no_progress})
+            completed_tasks_count = len({r.page_no_progress for r in rater_ratings if r.page_no_progress and r.completion_status in ['completed', 'skipped']})
             
             last_active = None
             if rater_ratings:
@@ -932,8 +953,8 @@ def get_admin_dashboard(current_user):
                 total_tasks = len(test.json_entry) if test.json_entry else 0
                 
             test_ratings = ratings_by_test.get(test.id, [])
-            unique_completed = len({r.page_no_progress for r in test_ratings if r.page_no_progress})
-            total_submissions = len(test_ratings)
+            unique_completed = len({r.page_no_progress for r in test_ratings if r.page_no_progress and r.completion_status in ['completed', 'skipped']})
+            total_submissions = len([r for r in test_ratings if r.completion_status in ['completed', 'skipped']])
             
             tests_data.append({
                 'id': test.id,

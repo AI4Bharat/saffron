@@ -50,7 +50,8 @@
                     'active-task': currentIndex === task.originalIndex,
                     'completed-task': task.completion_status === 'completed',
                     'skipped-task': task.completion_status === 'skipped',
-                    'pending-task': task.completion_status !== 'completed' && task.completion_status !== 'skipped'
+                    'saved-task': task.completion_status === 'saved',
+                    'pending-task': task.completion_status !== 'completed' && task.completion_status !== 'skipped' && task.completion_status !== 'saved'
                   }"
                   @click="jumpToTask(task.originalIndex)"
                 >
@@ -58,14 +59,17 @@
                     <!-- Custom Indicator Dot/Icon -->
                     <div class="status-dot-container me-2">
                       <span v-if="task.completion_status === 'completed'" class="status-indicator bg-success shadow-sm">
-                        <i class="bi bi-check text-white"></i>
-                      </span>
-                      <span v-else-if="task.completion_status === 'skipped'" class="status-indicator bg-warning shadow-sm">
-                        <i class="bi bi-arrow-right text-white"></i>
-                      </span>
-                      <span v-else class="status-indicator bg-secondary-subtle border text-muted">
-                        {{ task.originalIndex + 1 }}
-                      </span>
+                      <i class="bi bi-check text-white"></i>
+                    </span>
+                    <span v-else-if="task.completion_status === 'skipped'" class="status-indicator bg-skipped-indicator shadow-sm text-white">
+                      <i class="bi bi-arrow-right"></i>
+                    </span>
+                    <span v-else-if="task.completion_status === 'saved'" class="status-indicator bg-warning shadow-sm text-dark">
+                      <i class="bi bi-bookmark-fill"></i>
+                    </span>
+                    <span v-else class="status-indicator bg-secondary-subtle border text-muted">
+                      {{ task.originalIndex + 1 }}
+                    </span>
                     </div>
                     
                     <div class="text-truncate">
@@ -79,23 +83,29 @@
                   </div>
                   
                   <span 
-                    v-if="task.completion_status === 'completed'" 
-                    class="badge bg-success-subtle text-success border border-success-subtle rounded-pill fs-9 py-1 px-2"
-                  >
-                    Done
-                  </span>
-                  <span 
-                    v-else-if="task.completion_status === 'skipped'" 
-                    class="badge bg-warning-subtle text-warning border border-warning-subtle rounded-pill fs-9 py-1 px-2"
-                  >
-                    Skipped
-                  </span>
-                  <span 
-                    v-else 
-                    class="badge bg-light text-muted border rounded-pill fs-9 py-1 px-2"
-                  >
-                    Open
-                  </span>
+                  v-if="task.completion_status === 'completed'" 
+                  class="badge bg-success-subtle text-success border border-success-subtle rounded-pill fs-9 py-1 px-2"
+                >
+                  Done
+                </span>
+                <span 
+                  v-else-if="task.completion_status === 'skipped'" 
+                  class="badge bg-skipped-badge text-skipped border border-skipped-border rounded-pill fs-9 py-1 px-2"
+                >
+                  Skipped
+                </span>
+                <span 
+                  v-else-if="task.completion_status === 'saved'" 
+                  class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle rounded-pill fs-9 py-1 px-2 fw-bold"
+                >
+                  Saved
+                </span>
+                <span 
+                  v-else 
+                  class="badge bg-light text-muted border rounded-pill fs-9 py-1 px-2"
+                >
+                  Open
+                </span>
                 </div>
                 
                 <div v-if="filteredTasks.length === 0" class="text-center text-muted py-5">
@@ -164,14 +174,10 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import HFR from '@/components/HFR.vue'
-import Mushra from '@/components/Mushra.vue'
-import MushraGranular from '@/components/MushraGranular.vue'
-import HFRGranular from '@/components/HFRGranular.vue'
 import { API_BASE_URL } from '@/config';
-import CMOS from '@/components/CMOS.vue'
-import MOS from '@/components/MOS.vue'
 import TranslationCorrection from '@/components/TranslationCorrection.vue'
+import SentenceCorrection from '@/components/SentenceCorrection.vue'
+import ConversationEvaluation from '@/components/ConversationEvaluation.vue'
 
 // Receive props from the router
 const props = defineProps({
@@ -228,13 +234,9 @@ const currentTestComponent = computed(() => {
   if (!data.value?.test_type) return null
 
   const testComponents = {
-    'hfr': HFR,
-    'mushra-granular': MushraGranular,
-    'hfr-granular': HFRGranular,
-    'cmos': CMOS,
-    'mushra': Mushra,
-    'mos': MOS,
     'translation-correction': TranslationCorrection,
+    'sentence-correction': SentenceCorrection,
+    'conversation-evaluation': ConversationEvaluation,
   }
 
   return testComponents[data.value.test_type]
@@ -264,12 +266,14 @@ const handleConsent = async () => {
 const jumpToTask = (index) => {
   if (index >= 0 && index < testData.value.length) {
     currentIndex.value = index
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 }
 
 const handlePrev = () => {
   if (currentIndex.value > 0) {
     currentIndex.value--
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 }
 
@@ -329,6 +333,7 @@ const handleNext = async () => {
     }
   } else {
     currentIndex.value++;
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 }
 
@@ -507,6 +512,50 @@ onMounted(async () => {
 .active-task.pending-task {
   background-color: #e0e7ff !important;
   color: #312e81;
+}
+
+.saved-task {
+  background-color: #fffbeb !important; /* Soft yellow/amber background */
+  border-color: #fde68a !important;
+  border-left: 5px solid #f59e0b !important;
+}
+
+.saved-task:hover {
+  background-color: #fef3c7 !important;
+}
+
+.active-task.saved-task {
+  background-color: #fef3c7 !important;
+}
+
+.skipped-task {
+  background-color: #faf5ff !important; /* Soft purple background */
+  border-color: #e9d5ff !important;
+  border-left: 5px solid #a855f7 !important;
+}
+
+.skipped-task:hover {
+  background-color: #f3e8ff !important;
+}
+
+.active-task.skipped-task {
+  background-color: #f3e8ff !important;
+}
+
+.bg-skipped-indicator {
+  background-color: #a855f7 !important;
+}
+
+.bg-skipped-badge {
+  background-color: #faf5ff !important;
+}
+
+.text-skipped {
+  color: #7e22ce !important;
+}
+
+.border-skipped-border {
+  border-color: #e9d5ff !important;
 }
 
 .fs-8 {

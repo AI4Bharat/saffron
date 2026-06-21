@@ -65,11 +65,8 @@
                 <label class="form-label mb-0 small text-uppercase font-bold tracking-wide text-primary">
                   Correct Pre-Scene Translation ({{ languageLabel }})
                 </label>
-                <div class="btn-group btn-group-sm" role="group">
-                  <button type="button" class="btn btn-outline-secondary" @click="copyText('pre_scene')">
-                    <i class="bi bi-copy me-1"></i> Copy English
-                  </button>
-                  <button type="button" class="btn btn-outline-secondary" :disabled="!isSceneModified('pre_scene')" @click="resetText('pre_scene')">
+                <div>
+                  <button type="button" class="btn btn-sm btn-outline-secondary" :disabled="!isSceneModified('pre_scene')" @click="resetText('pre_scene')">
                     <i class="bi bi-arrow-counterclockwise me-1"></i> Reset
                   </button>
                 </div>
@@ -153,6 +150,9 @@
                       <i :class="getSpeakerInfo(turn).designation === 'Teacher' ? 'bi bi-mortarboard-fill me-1' : 'bi bi-person-fill me-1'"></i>
                       {{ getSpeakerInfo(turn).designation }}
                     </span>
+                    <span class="badge bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle rounded-pill px-2.5 py-1 fs-9">
+                      {{ getTurnPairLabel(idx) }}
+                    </span>
                   </div>
 
                   <!-- English / Original Bubble -->
@@ -171,18 +171,10 @@
                       </label>
                       
                       <!-- Turn Utilities -->
-                      <div class="btn-group btn-group-sm" role="group">
+                      <div>
                         <button 
                           type="button" 
-                          class="btn btn-outline-secondary" 
-                          title="Copy English to Translation Box"
-                          @click="copyEnglish(idx)"
-                        >
-                          <i class="bi bi-copy me-1"></i> Copy English
-                        </button>
-                        <button 
-                          type="button" 
-                          class="btn btn-outline-secondary" 
+                          class="btn btn-sm btn-outline-secondary" 
                           title="Reset to Original Translation"
                           :disabled="!isModified(idx)"
                           @click="resetTranslation(idx)"
@@ -253,11 +245,8 @@
                 <label class="form-label mb-0 small text-uppercase font-bold tracking-wide text-primary">
                   Correct Post-Scene Translation ({{ languageLabel }})
                 </label>
-                <div class="btn-group btn-group-sm" role="group">
-                  <button type="button" class="btn btn-outline-secondary" @click="copyText('post_scene')">
-                    <i class="bi bi-copy me-1"></i> Copy English
-                  </button>
-                  <button type="button" class="btn btn-outline-secondary" :disabled="!isSceneModified('post_scene')" @click="resetText('post_scene')">
+                <div>
+                  <button type="button" class="btn btn-sm btn-outline-secondary" :disabled="!isSceneModified('post_scene')" @click="resetText('post_scene')">
                     <i class="bi bi-arrow-counterclockwise me-1"></i> Reset
                   </button>
                 </div>
@@ -314,10 +303,21 @@
             
             <!-- Center Actions (Skip / Submit) -->
             <div class="d-flex gap-3 w-100 w-sm-auto justify-content-center flex-wrap">
+              <!-- Save Draft Button -->
+              <button
+                class="btn btn-warning px-4 py-2.5 rounded-pill d-flex align-items-center gap-2 transition-all hover-translate text-dark fw-medium"
+                :disabled="isSubmitting || isSaving"
+                @click="handleSave"
+              >
+                <span v-if="isSaving" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                <i v-else class="bi bi-bookmark-fill"></i>
+                Save Draft
+              </button>
+
               <!-- Skip Button -->
               <button
                 class="btn btn-outline-warning px-4 py-2.5 rounded-pill d-flex align-items-center gap-2 transition-all hover-translate"
-                :disabled="isSubmitting"
+                :disabled="isSubmitting || isSaving"
                 @click="handleSkip"
               >
                 <i class="bi bi-skip-forward-circle-fill"></i>
@@ -327,7 +327,7 @@
               <!-- Submit & Next Button -->
               <button
                 class="btn btn-success btn-submit-correction px-5 py-2.5 rounded-pill d-flex align-items-center gap-2 shadow-sm transition-all hover-translate"
-                :disabled="isSubmitting || !isValid"
+                :disabled="isSubmitting || isSaving || !isValid"
                 @click="handleSubmit"
               >
                 <span v-if="isSubmitting" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
@@ -340,17 +340,35 @@
           
           <!-- Validation Warning -->
           <div v-if="!isValid" class="text-danger text-center small mt-3">
-            <i class="bi bi-exclamation-triangle-fill me-1"></i> 
+            <i class="bi bi-exclamation-triangle-fill me-1"></i>
             Please check that all translation fields are completed.
+          </div>
+          <div class="text-center text-muted mt-3" style="font-size: 0.78rem;">
+            Shortcuts: <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Enter</kbd> submit &amp; next ·
+            <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>S</kbd> save draft
           </div>
         </div>
       </div>
     </div>
   </div>
+
+  <!-- Floating Save Draft Button -->
+  <div class="position-fixed bottom-0 end-0 m-4 z-3 d-none d-md-block animate-fade-in">
+    <button
+      class="btn btn-warning shadow rounded-circle d-flex align-items-center justify-content-center floating-save-btn"
+      style="width: 56px; height: 56px;"
+      title="Save Progress (Draft)"
+      :disabled="isSaving || isSubmitting"
+      @click="handleSave"
+    >
+      <span v-if="isSaving" class="spinner-border spinner-border-sm text-dark" role="status" aria-hidden="true"></span>
+      <i v-else class="bi bi-bookmark-fill text-dark fs-4"></i>
+    </button>
+  </div>
 </template>
 
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { API_BASE_URL } from '@/config';
 
 // Custom directive to automatically grow textareas and hide scrollbars
@@ -405,6 +423,7 @@ const emit = defineEmits(['next', 'prev', 'submit-status'])
 
 // Reactive State
 const isSubmitting = ref(false)
+const isSaving = ref(false)
 const startTime = ref(Date.now())
 const conversationState = ref([])
 const activeTurnIndex = ref(null)
@@ -436,6 +455,9 @@ function setupState() {
     post_scene: props.currentTest.post_scene || props.currentTest.post_Scene || '',
     _orig_post_scene: props.currentTest.post_scene || props.currentTest.post_Scene || ''
   }
+
+  // Scroll viewport smoothly to top
+  window.scrollTo({ top: 0, behavior: 'smooth' })
 
   // 2. Setup turns
   const originalTurns = props.currentTest.conversation || props.currentTest.dialogue || props.currentTest.turns
@@ -513,6 +535,17 @@ function getSpeakerInfo(turn) {
     }
   }
   return { name, designation }
+}
+
+function getTurnPairLabel(idx) {
+  if (!conversationState.value || conversationState.value.length === 0) return '';
+  const firstTurn = conversationState.value[0];
+  const firstDesignation = getSpeakerInfo(firstTurn).designation; // 'Teacher' or 'Student'
+  const secondDesignation = firstDesignation === 'Teacher' ? 'Student' : 'Teacher';
+  
+  const pairName = `${firstDesignation}-${secondDesignation}`;
+  const pairNum = Math.floor(idx / 2) + 1;
+  return `${pairName} Pair ${pairNum} (Turn ${idx + 1})`;
 }
 
 const teacherName = computed(() => {
@@ -703,6 +736,77 @@ async function handleSkip() {
   }
 }
 
+// Draft Save
+async function handleSave() {
+  if (isSaving.value || isSubmitting.value) return
+  isSaving.value = true
+
+  const durationMs = Date.now() - startTime.value
+
+  const updatedTurns = conversationState.value.map(turn => {
+    const cleanTurn = { ...turn }
+    delete cleanTurn._translationKey
+    delete cleanTurn._originalTranslation
+    return cleanTurn
+  })
+
+  let dialogueKey = 'conversation'
+  if ('dialogue' in props.currentTest) {
+    dialogueKey = 'dialogue'
+  } else if ('turns' in props.currentTest) {
+    dialogueKey = 'turns'
+  }
+
+  const results_json = {
+    id: props.currentTest.id,
+    pre_scene: sceneState.value.pre_scene || preSceneText.value,
+    post_scene: sceneState.value.post_scene || postSceneText.value,
+    [dialogueKey]: updatedTurns
+  }
+
+  try {
+    const token = localStorage.getItem('authToken')
+    const response = await fetch(`${API_BASE_URL}/ratings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        test_id: props.test_id,
+        session_id: props.session_id,
+        results_json: results_json,
+        time_taken_to_submit: durationMs,
+        pageNo_progress: String(props.currentTest.id),
+        completion_status: 'saved'
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error('Failed to save draft')
+    }
+
+    emit('submit-status', { index: props.currentIndex, status: 'saved', results: results_json })
+    
+    // Display a gentle toast/notification rather than an annoying alert
+    const toast = document.createElement('div')
+    toast.className = 'position-fixed bottom-0 start-50 translate-middle-x mb-4 bg-dark text-white py-2.5 px-4 rounded-pill shadow-lg z-3 border border-secondary'
+    toast.style.transition = 'opacity 0.3s ease'
+    toast.innerHTML = '<i class="bi bi-check-circle-fill text-warning me-2"></i> Progress saved successfully!'
+    document.body.appendChild(toast)
+    setTimeout(() => {
+      toast.style.opacity = '0'
+      setTimeout(() => toast.remove(), 300)
+    }, 2500)
+    
+  } catch (error) {
+    console.error('Error saving draft:', error)
+    alert('Failed to save progress. Please check your connection and try again.')
+  } finally {
+    isSaving.value = false
+  }
+}
+
 // Submission
 async function handleSubmit() {
   if (isSubmitting.value || !isValid.value) return
@@ -764,9 +868,17 @@ async function handleSubmit() {
   }
 }
 
+// Keyboard shortcuts: Ctrl/Cmd+Enter = Submit & Next, Ctrl/Cmd+S = Save Draft.
+function onKeydown(e) {
+  if (!(e.ctrlKey || e.metaKey)) return
+  if (e.key === 'Enter') { e.preventDefault(); if (isValid.value) handleSubmit() }
+  else if (e.key.toLowerCase() === 's') { e.preventDefault(); handleSave() }
+}
 onMounted(() => {
   setupState()
+  window.addEventListener('keydown', onKeydown)
 })
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 </script>
 
 <style scoped>
@@ -926,5 +1038,15 @@ onMounted(() => {
 
 .animate-fade-in {
   animation: fadeIn 0.4s ease-out;
+}
+.floating-save-btn {
+  background-color: #ffc107 !important; /* Bootstrap warning yellow */
+  border-color: #ffc107 !important;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 14px rgba(255, 193, 7, 0.4) !important;
+}
+.floating-save-btn:hover {
+  background-color: #e0a800 !important;
+  transform: scale(1.1);
 }
 </style>

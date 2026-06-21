@@ -21,7 +21,7 @@ def export_ratings_to_jsonl(test_id: int, output_path: str):
         print(f"Found test: ID={test.id}, Type={test.test_type}, Description={test.description}")
         
         # 2. Fetch all ratings/annotations for this test
-        ratings = Rating.query.filter_by(test_id=test_id).all()
+        ratings = Rating.query.filter_by(test_id=test_id).filter(Rating.completion_status.in_(['completed', 'skipped'])).all()
         print(f"Found {len(ratings)} submissions in rating database.")
         
         # Group ratings by item/page ID, keeping the latest submission

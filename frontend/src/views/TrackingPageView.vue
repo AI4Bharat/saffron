@@ -188,7 +188,8 @@
                   <th style="width: 150px;">Language</th>
                   <th style="width: 150px;">Test Type</th>
                   <th style="width: 250px;">Unique Completed / Total</th>
-                  <th style="width: 180px;">Total Submissions</th>
+                  <th style="width: 140px;">Total Submissions</th>
+                  <th style="width: 140px;">Task Link</th>
                 </tr>
               </thead>
               <tbody>
@@ -220,9 +221,21 @@
                   <td>
                     <span class="fw-semibold text-dark">{{ test.total_submissions }}</span>
                   </td>
+                  <td>
+                    <div class="btn-group btn-group-sm" role="group">
+                      <a :href="`/${test.id}`" target="_blank" rel="noopener"
+                         class="btn btn-outline-primary" title="Open task in a new tab">
+                        <i class="bi bi-box-arrow-up-right"></i>
+                      </a>
+                      <button type="button" class="btn btn-outline-secondary"
+                              title="Copy task link" @click="copyTaskLink(test.id)">
+                        <i class="bi bi-clipboard"></i>
+                      </button>
+                    </div>
+                  </td>
                 </tr>
                 <tr v-if="filteredTests.length === 0">
-                  <td colspan="6" class="text-center text-muted py-5 bg-white">
+                  <td colspan="7" class="text-center text-muted py-5 bg-white">
                     No matching test batches found.
                   </td>
                 </tr>
@@ -237,22 +250,16 @@
         <div class="card shadow-sm border">
           <div class="card-header bg-white py-3 border-bottom-0">
             <div class="row g-3 align-items-center">
-              <div class="col-12 col-md-6">
-                <h3 class="fw-bold text-dark m-0">Raters & Registrations</h3>
+              <div class="col-12 col-md-8">
+                <h3 class="fw-bold text-dark m-0">Active Annotators</h3>
+                <small class="text-muted">Showing annotators with at least one completed task.</small>
               </div>
-              <div class="col-12 col-md-3">
-                <select v-model="raterStatusFilter" class="form-select">
-                  <option value="">All Statuses</option>
-                  <option value="Active">Active (>= 1 Task)</option>
-                  <option value="0 Tasks Completed">0 Tasks Completed</option>
-                </select>
-              </div>
-              <div class="col-12 col-md-3">
-                <input 
-                  v-model="raterSearchQuery" 
-                  type="text" 
-                  class="form-control" 
-                  placeholder="Search by name or email..." 
+              <div class="col-12 col-md-4">
+                <input
+                  v-model="raterSearchQuery"
+                  type="text"
+                  class="form-control"
+                  placeholder="Search by name or email..."
                 />
               </div>
             </div>
@@ -341,6 +348,25 @@ const batchSearchQuery = ref('')
 const batchLanguageFilter = ref('')
 const raterSearchQuery = ref('')
 const raterStatusFilter = ref('')
+
+// Copy a batch's rater-facing task URL to the clipboard.
+const copyTaskLink = async (id) => {
+  const url = `${window.location.origin}/${id}`
+  try {
+    await navigator.clipboard.writeText(url)
+  } catch (_) {
+    const ta = document.createElement('textarea')
+    ta.value = url; document.body.appendChild(ta); ta.select()
+    try { document.execCommand('copy') } catch (e) { /* ignore */ }
+    ta.remove()
+  }
+  const toast = document.createElement('div')
+  toast.className = 'position-fixed bottom-0 start-50 translate-middle-x mb-4 bg-dark text-white py-2 px-4 rounded-pill shadow-lg'
+  toast.style.zIndex = '1080'
+  toast.innerHTML = `<i class="bi bi-clipboard-check text-warning me-2"></i> Link copied: ${url}`
+  document.body.appendChild(toast)
+  setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300) }, 2200)
+}
 
 // Auto-Refresh
 const isAutoRefreshActive = ref(true)
@@ -476,21 +502,15 @@ const filteredTests = computed(() => {
 })
 
 const filteredRaters = computed(() => {
-  let list = raters.value
-  
-  if (raterStatusFilter.value) {
-    if (raterStatusFilter.value === 'Active') {
-      list = list.filter(r => r.completed_tasks_count >= 1)
-    } else if (raterStatusFilter.value === '0 Tasks Completed') {
-      list = list.filter(r => r.completed_tasks_count === 0)
-    }
-  }
-  
+  // Only annotators who have actually completed at least one task — the long tail
+  // of auto-created / never-started accounts ("0 Tasks Completed") is just noise.
+  let list = raters.value.filter(r => r.completed_tasks_count >= 1)
+
   if (raterSearchQuery.value) {
     const q = raterSearchQuery.value.toLowerCase()
     list = list.filter(r => r.name.toLowerCase().includes(q) || r.email.toLowerCase().includes(q))
   }
-  
+
   return list
 })
 

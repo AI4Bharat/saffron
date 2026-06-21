@@ -1,0 +1,737 @@
+<template>
+  <div class="conversation-eval-container animate-fade-in" v-if="currentTest">
+    
+    <!-- Meta Information Header -->
+    <div class="card border-0 shadow-sm rounded-4 mb-4 bg-white p-4">
+      <div class="d-flex flex-column gap-3">
+        
+        <!-- Pre-Scene Narrative -->
+        <div class="pre-scene-box p-3 rounded-3 mb-2">
+          <div class="d-flex align-items-start gap-2">
+            <i class="bi bi-info-circle-fill text-primary fs-5 mt-0.5"></i>
+            <div>
+              <span class="text-uppercase fw-bold text-secondary tracking-wider fs-9 d-block mb-1">Pre-Scene Narrative</span>
+              <p class="mb-0 fs-6 text-dark fw-medium leading-relaxed">{{ currentTest.pre_scene }}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Meta Details Grid -->
+        <div class="row g-3">
+          <div class="col-12 col-md-4">
+            <div class="meta-pill-card p-3 rounded-3 text-center border">
+              <span class="text-muted fs-8 text-uppercase d-block mb-1">Subject</span>
+              <span class="fw-bold text-dark fs-6">{{ cellData.subject || 'N/A' }}</span>
+            </div>
+          </div>
+          <div class="col-12 col-md-4">
+            <div class="meta-pill-card p-3 rounded-3 text-center border">
+              <span class="text-muted fs-8 text-uppercase d-block mb-1">Grade</span>
+              <span class="fw-bold text-dark fs-6">{{ formatGrade(cellData.grade_bucket) || 'N/A' }}</span>
+            </div>
+          </div>
+          <div class="col-12 col-md-4">
+            <div class="meta-pill-card p-3 rounded-3 text-center border">
+              <span class="text-muted fs-8 text-uppercase d-block mb-1">Persona</span>
+              <span class="fw-bold text-dark fs-6">{{ formatPersona(currentTest.teacher_persona) || 'N/A' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Persona Guidelines -->
+        <div v-if="personaGuidelines" class="persona-guidelines-box p-3 rounded-3 border-start-warning">
+          <div class="d-flex align-items-start gap-2">
+            <i class="bi bi-person-lines-fill text-warning fs-5 mt-0.5"></i>
+            <div>
+              <span class="text-uppercase fw-bold text-warning-emphasis tracking-wider fs-9 d-block mb-1">Persona Guidelines</span>
+              <p class="mb-0 fs-7 text-dark-emphasis">{{ personaGuidelines }}</p>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Dialogue Flow Section -->
+    <div class="card border-0 shadow-sm rounded-4 mb-4 bg-white p-4">
+      <h3 class="fw-bold text-dark mb-4 d-flex align-items-center gap-2">
+        <i class="bi bi-chat-left-dots-fill text-primary"></i>
+        Dialogue Evaluation
+      </h3>
+      
+      <div class="dialogue-turns-list">
+        <div 
+          v-for="(turn, idx) in dialogueTurns" 
+          :key="turn.turn_index"
+          class="dialogue-row row g-3 align-items-stretch mb-4"
+        >
+          <!-- Dialogue Speech Bubble -->
+          <div :class="turn.speaker === 'teacher' ? 'col-12 col-md-8' : 'col-12'">
+            <div 
+              class="speech-bubble p-3 rounded-4 shadow-xs transition-all h-100"
+              :class="turn.speaker === 'teacher' ? 'teacher-bubble' : 'student-bubble'"
+            >
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="fw-bold fs-7" :class="turn.speaker === 'teacher' ? 'text-primary' : 'text-success'">
+                  {{ getSpeakerName(turn) }} &mdash; {{ turn.speaker === 'teacher' ? 'Teacher' : 'Student' }}
+                </span>
+                <span class="badge bg-light text-muted border fs-9">Turn {{ turn.turn_index }}</span>
+              </div>
+              <p class="mb-0 fs-6 text-dark leading-relaxed">{{ turn.text }}</p>
+            </div>
+          </div>
+
+          <!-- Voice Direction Box for Teacher turns -->
+          <div v-if="turn.speaker === 'teacher'" class="col-12 col-md-4">
+            <div class="voice-direction-card p-3 rounded-4 border-dashed h-100 d-flex flex-column justify-content-center">
+              <div class="d-flex align-items-center gap-2 mb-2">
+                <div class="voice-icon-pulse">
+                  <i class="bi bi-mic-fill text-primary"></i>
+                </div>
+                <span class="text-uppercase fw-bold text-primary tracking-wider fs-9">
+                  Voice Direction {{ getTeacherTurnNumber(turn.turn_index) }}
+                </span>
+              </div>
+              <p class="mb-0 fs-7 italic-text text-secondary leading-relaxed">
+                {{ getVoiceDirection(turn.turn_index) }}
+              </p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Post-Scene Narrative Box -->
+    <div v-if="currentTest.post_scene" class="card border-0 shadow-sm rounded-4 mb-4 bg-white p-4">
+      <div class="post-scene-box p-3 rounded-3 border-start-secondary">
+        <div class="d-flex align-items-start gap-2">
+          <i class="bi bi-flag-fill text-secondary fs-5 mt-0.5"></i>
+          <div>
+            <span class="text-uppercase fw-bold text-secondary tracking-wider fs-9 d-block mb-1">Post-Scene Narrative</span>
+            <p class="mb-0 fs-6 text-dark fw-medium leading-relaxed">{{ currentTest.post_scene }}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Conversation Evaluation Block -->
+    <div class="card border-0 shadow-sm rounded-4 mb-4 bg-white p-4">
+      <h3 class="fw-bold text-dark mb-3 d-flex align-items-center gap-2">
+        <i class="bi bi-clipboard-check-fill text-success"></i>
+        Conversation Evaluation
+      </h3>
+      <p class="text-secondary fs-7 mb-4">Please label the entire dialogue below as a single Accept/Reject choice.</p>
+
+      <div class="row g-3 mb-4 justify-content-center">
+        <!-- Accept Button -->
+        <div class="col-12 col-sm-6 col-md-5">
+          <button 
+            type="button" 
+            class="btn evaluation-choice-btn w-100 py-3 rounded-4 border-2 transition-all d-flex align-items-center justify-content-center gap-2"
+            :class="evaluation === 'accept' ? 'btn-success-selected' : 'btn-outline-success'"
+            @click="selectEvaluation('accept')"
+          >
+            <i class="bi" :class="evaluation === 'accept' ? 'bi-check-circle-fill' : 'bi-check-circle'"></i>
+            <span class="fw-bold">Accept</span>
+            <span class="badge bg-success text-white rounded-pill fs-9 ms-1 font-monospace">1</span>
+          </button>
+        </div>
+
+        <!-- Reject Button -->
+        <div class="col-12 col-sm-6 col-md-5">
+          <button 
+            type="button" 
+            class="btn evaluation-choice-btn w-100 py-3 rounded-4 border-2 transition-all d-flex align-items-center justify-content-center gap-2"
+            :class="evaluation === 'reject' ? 'btn-danger-selected' : 'btn-outline-danger'"
+            @click="selectEvaluation('reject')"
+          >
+            <i class="bi" :class="evaluation === 'reject' ? 'bi-x-circle-fill' : 'bi-x-circle'"></i>
+            <span class="fw-bold">Reject</span>
+            <span class="badge bg-danger text-white rounded-pill fs-9 ms-1 font-monospace">2</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Annotation Reason / Comments -->
+      <div class="mb-3">
+        <label for="annotationReason" class="form-label fw-bold text-dark-emphasis mb-2 d-flex justify-content-between">
+          <span>Annotation Reason</span>
+          <span class="text-muted fs-8 font-normal">{{ comments?.length || 0 }} chars</span>
+        </label>
+        <textarea
+          id="annotationReason"
+          v-model="comments"
+          v-auto-grow
+          rows="3"
+          class="form-control annotation-textarea p-3 rounded-3 shadow-inner"
+          placeholder="Explain why you accepted or rejected this conversation (brief)..."
+        ></textarea>
+      </div>
+    </div>
+
+    <!-- Submit / Navigation Bar -->
+    <div class="card border-0 shadow-sm rounded-4 bg-white p-4 mb-5">
+      <div class="d-flex flex-column flex-sm-row justify-content-between align-items-center gap-3">
+        
+        <!-- Previous Button -->
+        <button
+          class="btn btn-outline-secondary px-4 py-2.5 rounded-pill d-flex align-items-center gap-2 transition-all hover-translate"
+          :disabled="currentIndex === 0 || isSubmitting || isSaving"
+          @click="$emit('prev')"
+        >
+          <i class="bi bi-arrow-left-circle-fill"></i>
+          Previous Task
+        </button>
+        
+        <!-- Center Actions -->
+        <div class="d-flex gap-3 w-100 w-sm-auto justify-content-center flex-wrap">
+          <!-- Save Draft Button -->
+          <button
+            class="btn btn-warning px-4 py-2.5 rounded-pill d-flex align-items-center gap-2 transition-all hover-translate text-dark fw-medium"
+            :disabled="isSubmitting || isSaving"
+            @click="handleSave"
+          >
+            <span v-if="isSaving" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+            <i v-else class="bi bi-bookmark-fill"></i>
+            Save Draft
+          </button>
+
+          <!-- Skip Button -->
+          <button
+            class="btn btn-outline-warning px-4 py-2.5 rounded-pill d-flex align-items-center gap-2 transition-all hover-translate"
+            :disabled="isSubmitting || isSaving"
+            @click="handleSkip"
+          >
+            <i class="bi bi-skip-forward-circle-fill"></i>
+            Skip Task
+          </button>
+          
+          <!-- Submit & Next Button -->
+          <button
+            class="btn btn-success btn-submit-eval px-5 py-2.5 rounded-pill d-flex align-items-center gap-2 shadow-sm transition-all hover-translate"
+            :disabled="isSubmitting || isSaving || !isValid"
+            @click="handleSubmit"
+          >
+            <span v-if="isSubmitting" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+            <i v-else class="bi bi-cloud-arrow-up-fill"></i>
+            {{ isSubmitting ? 'Saving...' : isLastTest ? 'Submit & Finish' : 'Submit & Next' }}
+          </button>
+        </div>
+        
+      </div>
+      
+      <!-- Validation Warning -->
+      <div v-if="!isValid" class="text-danger text-center small mt-3">
+        <i class="bi bi-exclamation-triangle-fill me-1"></i>
+        Please select Accept or Reject before submitting.
+      </div>
+      
+      <!-- Keyboard Shortcuts Info -->
+      <div class="text-center text-muted mt-3" style="font-size: 0.78rem;">
+        Shortcuts: <kbd>1</kbd> Accept · <kbd>2</kbd> Reject · 
+        <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Enter</kbd> submit &amp; next ·
+        <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>S</kbd> save draft
+      </div>
+    </div>
+
+  </div>
+</template>
+
+<script setup>
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { API_BASE_URL } from '@/config';
+
+// Auto-grow textarea directive
+const vAutoGrow = {
+  mounted(el) {
+    el.style.resize = 'none';
+    el.style.overflowY = 'hidden';
+    const resize = () => {
+      el.style.height = 'auto';
+      el.style.height = `${el.scrollHeight}px`;
+    };
+    el.addEventListener('input', resize);
+    setTimeout(resize, 0);
+    el._autoGrowResize = resize;
+  },
+  updated(el) {
+    if (el._autoGrowResize) {
+      setTimeout(el._autoGrowResize, 0);
+    }
+  },
+  unmounted(el) {
+    if (el._autoGrowResize) {
+      el.removeEventListener('input', el._autoGrowResize);
+    }
+  }
+}
+
+const props = defineProps({
+  currentTest: {
+    type: Object,
+    required: true
+  },
+  isLastTest: {
+    type: Boolean,
+    default: false
+  },
+  test_id: {
+    type: [Number, String],
+    required: true
+  },
+  session_id: {
+    type: String,
+    default: null
+  },
+  currentIndex: {
+    type: Number,
+    required: true
+  }
+})
+
+const emit = defineEmits(['next', 'prev', 'submit-status'])
+
+// Reactive State
+const evaluation = ref(null)
+const comments = ref('')
+const isSubmitting = ref(false)
+const isSaving = ref(false)
+const startTime = ref(Date.now())
+
+// Watch currentTest changes to setupState
+watch(() => props.currentTest, () => {
+  setupState()
+}, { immediate: true })
+
+function setupState() {
+  startTime.value = Date.now()
+  if (!props.currentTest) return
+
+  // Load existing values from response if they exist (drafts or loaded ratings)
+  evaluation.value = props.currentTest.evaluation || null
+  comments.value = props.currentTest.comments || ''
+
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+// Helpers
+const cellData = computed(() => {
+  return props.currentTest.cell || {}
+})
+
+const dialogueTurns = computed(() => {
+  return props.currentTest.dialogue || props.currentTest.conversation || props.currentTest.turns || []
+})
+
+const personaGuidelines = computed(() => {
+  // Guidelines based on persona
+  const guidelinesMap = {
+    'calm_explainer': 'Maintains a calm, composed tone, explaining the misconceptions step-by-step with logical clarity and steady pacing.',
+    'energetic_enthusiast': 'Very enthusiastic, encouraging, and uses dynamic language. Speaks with high energy and passion to engage the student.',
+    'reflective_mentor': 'Encourages the student to reflect on their own logic. Acts as a supportive guide rather than lecturing, prompting self-realization.',
+    'relatable_peer': 'Friendly and uses relatable language. Breaks down barriers to sound like a peer explaining things to a classmate.',
+    'socratic_challenger': 'Asks continuous probing questions to make the student realize their logical contradictions. Relies on the Socratic method.',
+    'storyteller': 'Weaves explanations into narrative, anecdotes, and stories to create context and memorable analogies.',
+    'strict_disciplinarian': 'Extremely direct, formal, and authoritative. Expects focus and checks for precise rules and definitions.',
+    'warm_encourager': 'Genuinely kind and supportive. Builds the student up before addressing the misconception. Uses phrases that affirm effort. Approaches errors as expected steps in learning, not failures.'
+  };
+  
+  const personaKey = (props.currentTest.teacher_persona || '').toLowerCase().trim();
+  return guidelinesMap[personaKey] || props.currentTest.persona_guidelines || '';
+})
+
+function formatGrade(grade) {
+  if (!grade) return '';
+  return grade.replace('_', ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+function formatPersona(persona) {
+  if (!persona) return '';
+  return persona.replace('_', ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+function getSpeakerName(turn) {
+  if (turn.speaker === 'teacher') {
+    return props.currentTest.teacher_name || 'Teacher';
+  } else {
+    return props.currentTest.student_name || 'Student';
+  }
+}
+
+function getTeacherTurnNumber(turnIndex) {
+  // Find which teacher turn this is (e.g. 1st, 2nd, etc.)
+  const teacherTurns = dialogueTurns.value
+    .filter(t => t.speaker === 'teacher')
+    .map(t => t.turn_index);
+  const position = teacherTurns.indexOf(turnIndex);
+  return position !== -1 ? position + 1 : 1;
+}
+
+function getVoiceDirection(turnIndex) {
+  const turnNum = getTeacherTurnNumber(turnIndex);
+  const key = `teacher_turn_${turnNum}_voice_direction`;
+  return props.currentTest[key] || 'No specific voice direction.';
+}
+
+function selectEvaluation(val) {
+  evaluation.value = val;
+}
+
+const isValid = computed(() => {
+  return evaluation.value === 'accept' || evaluation.value === 'reject';
+})
+
+// Skip Action
+async function handleSkip() {
+  if (isSubmitting.value) return
+  isSubmitting.value = true
+
+  const durationMs = Date.now() - startTime.value
+  const results_json = {
+    id: props.currentTest.id,
+    evaluation: evaluation.value,
+    comments: comments.value
+  }
+
+  try {
+    const token = localStorage.getItem('authToken')
+    const response = await fetch(`${API_BASE_URL}/ratings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        test_id: props.test_id,
+        session_id: props.session_id,
+        results_json: results_json,
+        time_taken_to_submit: durationMs,
+        pageNo_progress: String(props.currentTest.id),
+        completion_status: 'skipped'
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error('Failed to skip rating')
+    }
+
+    emit('submit-status', { index: props.currentIndex, status: 'skipped', results: results_json })
+    emit('next')
+  } catch (error) {
+    console.error('Error skipping rating:', error)
+    alert('Failed to skip. Please check your connection and try again.')
+  } finally {
+    isSubmitting.value = false
+  }
+}
+
+// Draft Save
+async function handleSave() {
+  if (isSaving.value || isSubmitting.value) return
+  isSaving.value = true
+
+  const durationMs = Date.now() - startTime.value
+  const results_json = {
+    id: props.currentTest.id,
+    evaluation: evaluation.value,
+    comments: comments.value
+  }
+
+  try {
+    const token = localStorage.getItem('authToken')
+    const response = await fetch(`${API_BASE_URL}/ratings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        test_id: props.test_id,
+        session_id: props.session_id,
+        results_json: results_json,
+        time_taken_to_submit: durationMs,
+        pageNo_progress: String(props.currentTest.id),
+        completion_status: 'saved'
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error('Failed to save draft')
+    }
+
+    emit('submit-status', { index: props.currentIndex, status: 'saved', results: results_json })
+    
+    // Display toast notification
+    const toast = document.createElement('div')
+    toast.className = 'position-fixed bottom-0 start-50 translate-middle-x mb-4 bg-dark text-white py-2.5 px-4 rounded-pill shadow-lg z-3 border border-secondary animate-fade-in'
+    toast.style.transition = 'opacity 0.3s ease'
+    toast.innerHTML = '<i class="bi bi-check-circle-fill text-warning me-2"></i> Progress saved successfully!'
+    document.body.appendChild(toast)
+    setTimeout(() => {
+      toast.style.opacity = '0'
+      setTimeout(() => toast.remove(), 300)
+    }, 2500)
+    
+  } catch (error) {
+    console.error('Error saving draft:', error)
+    alert('Failed to save progress. Please check your connection and try again.')
+  } finally {
+    isSaving.value = false
+  }
+}
+
+// Submission
+async function handleSubmit() {
+  if (isSubmitting.value || !isValid.value) return
+  isSubmitting.value = true
+
+  const durationMs = Date.now() - startTime.value
+  const results_json = {
+    id: props.currentTest.id,
+    evaluation: evaluation.value,
+    comments: comments.value
+  }
+
+  try {
+    const token = localStorage.getItem('authToken')
+    const response = await fetch(`${API_BASE_URL}/ratings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        test_id: props.test_id,
+        session_id: props.session_id,
+        results_json: results_json,
+        time_taken_to_submit: durationMs,
+        pageNo_progress: String(props.currentTest.id),
+        completion_status: 'completed'
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error('Failed to submit evaluation ratings')
+    }
+
+    emit('submit-status', { index: props.currentIndex, status: 'completed', results: results_json })
+    emit('next')
+  } catch (error) {
+    console.error('Error submitting ratings:', error)
+    alert('Failed to submit annotations. Please check your connection and try again.')
+  } finally {
+    isSubmitting.value = false
+  }
+}
+
+// Shortcuts listener
+function onKeydown(e) {
+  // Don't trigger if user is typing in a textarea or input field
+  if (document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') {
+    // Only intercept Ctrl+Enter or Ctrl+S
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault()
+      if (isValid.value) handleSubmit()
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault()
+      handleSave()
+    }
+    return
+  }
+
+  // Handle number shortcut selection
+  if (e.key === '1') {
+    e.preventDefault()
+    selectEvaluation('accept')
+  } else if (e.key === '2') {
+    e.preventDefault()
+    selectEvaluation('reject')
+  }
+
+  // Standard Ctrl combinations
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      if (isValid.value) handleSubmit()
+    } else if (e.key.toLowerCase() === 's') {
+      e.preventDefault()
+      handleSave()
+    }
+  }
+}
+
+onMounted(() => {
+  setupState()
+  window.addEventListener('keydown', onKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
+})
+</script>
+
+<style scoped>
+/* Gradient and visual card styles */
+.pre-scene-box {
+  background-color: #f0f7ff;
+  border-left: 4px solid #3b82f6;
+}
+
+.meta-pill-card {
+  background-color: #fafafa;
+  border-color: #eaeaea !important;
+  transition: all 0.2s ease;
+}
+
+.meta-pill-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.03);
+}
+
+.border-start-warning {
+  border-left: 4px solid #f59e0b;
+}
+.persona-guidelines-box {
+  background-color: #fffbeb;
+}
+
+/* Dialogue speech bubbles */
+.speech-bubble {
+  position: relative;
+  background-color: #fff;
+  transition: all 0.25s ease;
+}
+
+.teacher-bubble {
+  border-left: 4px solid #2563eb !important;
+  background-color: #f8fafc;
+}
+
+.student-bubble {
+  border-left: 4px solid #10b981 !important;
+  background-color: #f9fbf9;
+}
+
+.dialogue-row:hover .speech-bubble {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+}
+
+/* Voice Direction Box styling - elegant dashboard card */
+.voice-direction-card {
+  background-color: #fdfdfd;
+  border: 1px dashed #cbd5e1;
+  transition: all 0.25s ease;
+}
+
+.dialogue-row:hover .voice-direction-card {
+  border-color: #3b82f6;
+  background-color: #f8fafc;
+}
+
+.voice-icon-pulse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background-color: #eff6ff;
+  border-radius: 50%;
+}
+
+.italic-text {
+  font-style: italic;
+  font-family: Georgia, serif;
+}
+
+.border-start-secondary {
+  border-left: 4px solid #6b7280;
+}
+.post-scene-box {
+  background-color: #f9fafb;
+}
+
+/* Interactive Accept/Reject buttons */
+.evaluation-choice-btn {
+  font-size: 1.1rem;
+  transition: all 0.2s ease;
+}
+
+.btn-outline-success {
+  color: #198754;
+  border-color: #198754;
+}
+.btn-outline-success:hover {
+  background-color: #f4fbf7;
+  color: #198754;
+}
+
+.btn-success-selected {
+  background-color: #198754 !important;
+  color: #ffffff !important;
+  border-color: #198754 !important;
+  box-shadow: 0 4px 15px rgba(25, 135, 84, 0.3) !important;
+}
+
+.btn-outline-danger {
+  color: #dc3545;
+  border-color: #dc3545;
+}
+.btn-outline-danger:hover {
+  background-color: #fdf5f6;
+  color: #dc3545;
+}
+
+.btn-danger-selected {
+  background-color: #dc3545 !important;
+  color: #ffffff !important;
+  border-color: #dc3545 !important;
+  box-shadow: 0 4px 15px rgba(220, 53, 69, 0.3) !important;
+}
+
+.annotation-textarea {
+  font-size: 1.05rem;
+  line-height: 1.5;
+  border-radius: 12px;
+  border: 1px solid #ced4da;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  background-color: #fdfdfd;
+}
+
+.annotation-textarea:focus {
+  border-color: #198754;
+  box-shadow: 0 0 0 3px rgba(25, 135, 84, 0.15) !important;
+  background-color: #ffffff;
+  outline: none;
+}
+
+.btn-submit-eval {
+  font-weight: 500;
+}
+
+.hover-translate {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.hover-translate:hover:not(:disabled) {
+  transform: translateY(-2px);
+}
+
+.shadow-inner {
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.4s ease-out;
+}
+
+.leading-relaxed {
+  line-height: 1.625;
+}
+</style>
