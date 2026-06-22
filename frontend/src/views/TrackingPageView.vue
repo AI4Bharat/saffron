@@ -250,17 +250,24 @@
         <div class="card shadow-sm border">
           <div class="card-header bg-white py-3 border-bottom-0">
             <div class="row g-3 align-items-center">
-              <div class="col-12 col-md-8">
-                <h3 class="fw-bold text-dark m-0">Active Annotators</h3>
-                <small class="text-muted">Showing annotators with at least one completed task.</small>
+              <div class="col-12 col-md-6">
+                <h3 class="fw-bold text-dark m-0">Annotators &amp; Task Assignment</h3>
+                <small class="text-muted">Assign task batches to an annotator — assigned tasks get <strong>locked</strong> to them only.</small>
               </div>
-              <div class="col-12 col-md-4">
-                <input
-                  v-model="raterSearchQuery"
-                  type="text"
-                  class="form-control"
-                  placeholder="Search by name or email..."
-                />
+              <div class="col-12 col-md-6">
+                <div class="d-flex flex-wrap gap-2 justify-content-md-end align-items-center">
+                  <div class="form-check form-switch mb-0 me-1">
+                    <input class="form-check-input" type="checkbox" role="switch" id="showAllRaters" v-model="showAllRaters" />
+                    <label class="form-check-label text-xs text-secondary user-select-none" for="showAllRaters">Show all</label>
+                  </div>
+                  <input
+                    v-model="raterSearchQuery"
+                    type="text"
+                    class="form-control"
+                    style="max-width: 280px;"
+                    placeholder="Search by name or email..."
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -271,10 +278,12 @@
                 <tr>
                   <th class="ps-4">Name</th>
                   <th>Email</th>
-                  <th style="width: 120px;">Demographics</th>
-                  <th style="width: 180px;">Tasks Completed</th>
-                  <th style="width: 200px;">Last Active</th>
-                  <th style="width: 200px;">Status</th>
+                  <th style="width: 100px;">Demographics</th>
+                  <th style="width: 110px;">Completed</th>
+                  <th style="width: 230px;">Assigned Tasks</th>
+                  <th style="width: 160px;">Last Active</th>
+                  <th style="width: 140px;">Status</th>
+                  <th class="text-end pe-4" style="width: 120px;">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -297,21 +306,41 @@
                     <span class="badge bg-light text-dark border fs-6 px-3">{{ rater.completed_tasks_count }}</span>
                   </td>
                   <td>
+                    <div v-if="assignedIdList(rater).length" class="d-flex flex-wrap gap-1 assigned-chip-wrap">
+                      <span v-for="tid in assignedIdList(rater).slice(0, 6)" :key="tid"
+                            class="badge rounded-pill bg-primary-subtle text-primary border border-primary-subtle">#{{ tid }}</span>
+                      <span v-if="assignedIdList(rater).length > 6"
+                            class="badge rounded-pill bg-secondary-subtle text-secondary border">+{{ assignedIdList(rater).length - 6 }}</span>
+                    </div>
+                    <span v-else class="text-muted text-xs fst-italic">Unassigned</span>
+                  </td>
+                  <td>
                     <span v-if="rater.last_active" class="text-secondary text-xs">{{ formatDate(rater.last_active) }}</span>
                     <span v-else class="text-muted text-xs">—</span>
                   </td>
                   <td>
-                    <span 
-                      :class="['badge px-3 py-2 text-xs rounded-pill d-inline-flex align-items-center gap-1', 
+                    <span
+                      :class="['badge px-3 py-2 text-xs rounded-pill d-inline-flex align-items-center gap-1',
                         rater.completed_tasks_count >= 1 ? 'bg-success-subtle text-success' : 'bg-warning-subtle text-warning animate-pulse-border']"
                     >
                       <i :class="['bi', rater.completed_tasks_count >= 1 ? 'bi-check-circle-fill' : 'bi-exclamation-triangle-fill']"></i>
                       {{ rater.status }}
                     </span>
                   </td>
+                  <td class="text-end pe-4">
+                    <button
+                      class="btn btn-sm d-inline-flex align-items-center gap-1"
+                      :class="assignedIdList(rater).length ? 'btn-outline-primary' : 'btn-primary'"
+                      @click="openAssignModal(rater)"
+                      :title="assignedIdList(rater).length ? 'Edit assigned tasks' : 'Assign tasks'"
+                    >
+                      <i :class="['bi', assignedIdList(rater).length ? 'bi-pencil-square' : 'bi-plus-lg']"></i>
+                      <span>{{ assignedIdList(rater).length ? 'Edit' : 'Assign' }}</span>
+                    </button>
+                  </td>
                 </tr>
                 <tr v-if="filteredRaters.length === 0">
-                  <td colspan="6" class="text-center text-muted py-5 bg-white">
+                  <td colspan="8" class="text-center text-muted py-5 bg-white">
                     No matching raters found.
                   </td>
                 </tr>
@@ -329,6 +358,95 @@
       </div>
       <p class="text-muted mt-3">Fetching initial statistics, please wait...</p>
     </div>
+
+    <!-- ===================== ASSIGN TASKS MODAL ===================== -->
+    <transition name="modal-fade">
+      <div v-if="showAssignModal" class="assign-modal-backdrop" @click.self="closeAssignModal">
+        <div class="assign-modal-card shadow-lg">
+          <!-- Header -->
+          <div class="assign-modal-header d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-3">
+              <div class="avatar-circle-lg">{{ (currentRater && currentRater.name ? currentRater.name : '?').charAt(0).toUpperCase() }}</div>
+              <div>
+                <h5 class="fw-bold mb-0 text-dark">Assign Tasks</h5>
+                <small class="text-muted">{{ currentRater && currentRater.name }} · {{ currentRater && currentRater.email }}</small>
+              </div>
+            </div>
+            <button class="btn-close" @click="closeAssignModal"></button>
+          </div>
+
+          <!-- Body -->
+          <div class="assign-modal-body">
+            <!-- Lock notice -->
+            <div class="d-flex align-items-start gap-2 py-2 px-3 rounded-3 bg-info-subtle mb-3">
+              <i class="bi bi-lock-fill text-info mt-1"></i>
+              <small class="text-info-emphasis">Selected tasks are <strong>locked to this annotator</strong>. No one else will be able to open them. Removing a task unlocks it again.</small>
+            </div>
+
+            <!-- Selected summary -->
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <span class="fw-semibold text-dark">
+                Selected <span class="badge bg-primary rounded-pill ms-1">{{ assignSelected.length }}</span>
+              </span>
+              <button v-if="assignSelected.length" class="btn btn-sm btn-link text-danger p-0 text-decoration-none" @click="assignSelected = []">
+                <i class="bi bi-x-circle me-1"></i>Clear all
+              </button>
+            </div>
+            <div class="selected-chips mb-3" v-if="assignSelected.length">
+              <span v-for="tid in assignSelected" :key="tid" class="chip">
+                #{{ tid }}
+                <i class="bi bi-x-lg" role="button" title="Remove" @click="toggleTask(tid)"></i>
+              </span>
+            </div>
+
+            <!-- Search batches -->
+            <div class="input-group mb-2">
+              <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
+              <input v-model="assignSearch" type="text" class="form-control border-start-0 ps-0" placeholder="Search batches by ID, description or language..." />
+            </div>
+
+            <!-- Batch list -->
+            <div class="batch-picker border rounded-3">
+              <label
+                v-for="t in assignableTests"
+                :key="t.id"
+                :class="['batch-row d-flex align-items-center gap-3 px-3 py-2', assignSelected.includes(t.id) ? 'selected' : '']"
+              >
+                <input type="checkbox" class="form-check-input mt-0 flex-shrink-0" :checked="assignSelected.includes(t.id)" @change="toggleTask(t.id)" />
+                <span class="badge bg-light text-dark border flex-shrink-0 text-center" style="min-width: 52px;">#{{ t.id }}</span>
+                <span class="flex-grow-1 text-truncate text-dark small">{{ t.description }}</span>
+                <span v-if="taskOwnerMap[t.id]"
+                      class="badge rounded-pill bg-warning-subtle text-warning-emphasis flex-shrink-0 d-inline-flex align-items-center gap-1"
+                      :title="`Already locked to ${taskOwnerMap[t.id]}`">
+                  <i class="bi bi-lock-fill"></i>{{ taskOwnerMap[t.id] }}
+                </span>
+                <span class="badge rounded-pill bg-secondary-subtle text-secondary flex-shrink-0">{{ t.language }}</span>
+              </label>
+              <div v-if="assignableTests.length === 0" class="text-center text-muted py-4 small">
+                <i class="bi bi-inbox d-block fs-4 mb-1 opacity-50"></i>
+                No batches match your search.
+              </div>
+            </div>
+          </div>
+
+          <!-- Footer -->
+          <div class="assign-modal-footer d-flex justify-content-between align-items-center gap-3">
+            <small v-if="assignError" class="text-danger"><i class="bi bi-exclamation-circle me-1"></i>{{ assignError }}</small>
+            <small v-else class="text-muted">
+              {{ assignSelected.length }} task(s) will be locked to <strong>{{ currentRater && currentRater.name }}</strong>
+            </small>
+            <div class="d-flex gap-2 flex-shrink-0">
+              <button class="btn btn-light border" @click="closeAssignModal" :disabled="isSaving">Cancel</button>
+              <button class="btn btn-primary d-inline-flex align-items-center gap-2" @click="saveAssignments" :disabled="isSaving">
+                <span v-if="isSaving" class="spinner-border spinner-border-sm"></span>
+                <i v-else class="bi bi-check2-circle"></i>
+                <span>{{ isSaving ? 'Saving…' : 'Save Assignment' }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -348,6 +466,15 @@ const batchSearchQuery = ref('')
 const batchLanguageFilter = ref('')
 const raterSearchQuery = ref('')
 const raterStatusFilter = ref('')
+const showAllRaters = ref(true)
+
+// Task assignment modal state
+const showAssignModal = ref(false)
+const currentRater = ref(null)
+const assignSelected = ref([])   // numeric test ids selected for the current rater
+const assignSearch = ref('')
+const isSaving = ref(false)
+const assignError = ref(null)
 
 // Copy a batch's rater-facing task URL to the clipboard.
 const copyTaskLink = async (id) => {
@@ -501,18 +628,144 @@ const filteredTests = computed(() => {
   return list
 })
 
+// Parse a rater's assigned_tasks string ("1,2,3") into a numeric id array
+const assignedIdList = (rater) => {
+  if (!rater || !rater.assigned_tasks) return []
+  return rater.assigned_tasks
+    .split(',')
+    .map(s => s.trim())
+    .filter(s => /^\d+$/.test(s))
+    .map(Number)
+}
+
 const filteredRaters = computed(() => {
-  // Only annotators who have actually completed at least one task — the long tail
-  // of auto-created / never-started accounts ("0 Tasks Completed") is just noise.
-  let list = raters.value.filter(r => r.completed_tasks_count >= 1)
+  // "Show all" off hides the long tail of auto-created / never-started accounts.
+  // It defaults on so admins can assign tasks to brand-new annotators too.
+  let list = raters.value
+  if (!showAllRaters.value) {
+    list = list.filter(r => r.completed_tasks_count >= 1)
+  }
 
   if (raterSearchQuery.value) {
     const q = raterSearchQuery.value.toLowerCase()
     list = list.filter(r => r.name.toLowerCase().includes(q) || r.email.toLowerCase().includes(q))
   }
 
-  return list
+  // Annotators with assigned tasks float to the top, then alphabetical by name.
+  return [...list].sort((a, b) => {
+    const aHas = assignedIdList(a).length > 0 ? 0 : 1
+    const bHas = assignedIdList(b).length > 0 ? 0 : 1
+    if (aHas !== bHas) return aHas - bHas
+    return (a.name || '').localeCompare(b.name || '')
+  })
 })
+
+// ---- Task assignment helpers ----
+const assignableTests = computed(() => {
+  let list = tests.value
+  if (assignSearch.value) {
+    const q = assignSearch.value.toLowerCase()
+    list = list.filter(t =>
+      String(t.id).includes(q) ||
+      (t.description || '').toLowerCase().includes(q) ||
+      (t.language || '').toLowerCase().includes(q)
+    )
+  }
+  // Selected batches first, then by id ascending.
+  return [...list].sort((a, b) => {
+    const sa = assignSelected.value.includes(a.id) ? 0 : 1
+    const sb = assignSelected.value.includes(b.id) ? 0 : 1
+    if (sa !== sb) return sa - sb
+    return a.id - b.id
+  })
+})
+
+// Map of test id -> name of another annotator it is already locked to (excludes the rater
+// currently being edited). Lets the admin spot conflicts before double-assigning a task.
+const taskOwnerMap = computed(() => {
+  const map = {}
+  for (const r of raters.value) {
+    if (currentRater.value && r.id === currentRater.value.id) continue
+    for (const id of assignedIdList(r)) {
+      if (!map[id]) map[id] = r.name
+    }
+  }
+  return map
+})
+
+const toggleTask = (id) => {
+  const i = assignSelected.value.indexOf(id)
+  if (i === -1) assignSelected.value.push(id)
+  else assignSelected.value.splice(i, 1)
+}
+
+const openAssignModal = (rater) => {
+  currentRater.value = rater
+  assignSelected.value = assignedIdList(rater)
+  assignSearch.value = ''
+  assignError.value = null
+  showAssignModal.value = true
+  clearTimers()   // pause auto-refresh so the table doesn't shift under the admin
+}
+
+const closeAssignModal = () => {
+  showAssignModal.value = false
+  currentRater.value = null
+  if (isAutoRefreshActive.value) startTimers()
+}
+
+const showToast = (msg, icon = 'bi-check-circle-fill text-success') => {
+  const toast = document.createElement('div')
+  toast.className = 'position-fixed bottom-0 start-50 translate-middle-x mb-4 bg-dark text-white py-2 px-4 rounded-pill shadow-lg'
+  toast.style.zIndex = '1080'
+  toast.style.transition = 'opacity 0.3s ease'
+  toast.innerHTML = `<i class="bi ${icon} me-2"></i> ${msg}`
+  document.body.appendChild(toast)
+  setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300) }, 2400)
+}
+
+const saveAssignments = async () => {
+  if (!currentRater.value) return
+  isSaving.value = true
+  assignError.value = null
+  try {
+    const token = localStorage.getItem('authToken')
+    if (!token) {
+      router.push('/login')
+      return
+    }
+    const resp = await fetch(`${API_BASE_URL}/admin/rater/${currentRater.value.id}/assign_tasks`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ assigned_tasks: assignSelected.value.join(',') })
+    })
+
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}))
+      throw new Error(data.message || `Failed to save (HTTP ${resp.status}).`)
+    }
+
+    const data = await resp.json()
+    const raterName = currentRater.value.name
+    // Reflect the change immediately in the open table.
+    currentRater.value.assigned_tasks = data.assigned_tasks
+    const count = data.assigned_tasks ? data.assigned_tasks.split(',').filter(Boolean).length : 0
+
+    showAssignModal.value = false
+    currentRater.value = null
+    if (isAutoRefreshActive.value) startTimers()
+    showToast(`${count} task(s) locked to ${raterName}`)
+    fetchDashboardData(false)
+  } catch (err) {
+    console.error(err)
+    assignError.value = err.message || 'Failed to save assignment.'
+  } finally {
+    isSaving.value = false
+  }
+}
 
 // Lifecycle
 onMounted(() => {
@@ -668,5 +921,133 @@ onUnmounted(() => {
 }
 .status-dot.active {
   background-color: #22c55e;
+}
+
+/* Assigned task chips inside the table */
+.assigned-chip-wrap {
+  max-width: 220px;
+}
+
+/* ===================== Assign Tasks Modal ===================== */
+.assign-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1070;
+  padding: 1rem;
+}
+
+.assign-modal-card {
+  background: #fff;
+  width: 100%;
+  max-width: 620px;
+  max-height: 90vh;
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.assign-modal-header {
+  padding: 1.1rem 1.5rem;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.assign-modal-body {
+  padding: 1.25rem 1.5rem;
+  overflow-y: auto;
+}
+
+.assign-modal-footer {
+  padding: 1rem 1.5rem;
+  border-top: 1px solid #eef2f7;
+  background: #f8fafc;
+}
+
+.avatar-circle-lg {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #d8661b, #f4a93c);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1.2rem;
+  flex-shrink: 0;
+}
+
+/* Selected chips row */
+.selected-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  max-height: 110px;
+  overflow-y: auto;
+}
+.selected-chips .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: #e0edff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+  font-weight: 600;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+}
+.selected-chips .chip i {
+  cursor: pointer;
+  font-size: 0.65rem;
+  opacity: 0.7;
+  transition: opacity 0.15s ease;
+}
+.selected-chips .chip i:hover {
+  opacity: 1;
+}
+
+/* Scrollable batch picker */
+.batch-picker {
+  max-height: 300px;
+  overflow-y: auto;
+}
+.batch-row {
+  cursor: pointer;
+  border-bottom: 1px solid #f1f5f9;
+  margin: 0;
+  transition: background 0.12s ease;
+}
+.batch-row:last-child {
+  border-bottom: none;
+}
+.batch-row:hover {
+  background: #f8fafc;
+}
+.batch-row.selected {
+  background: #eff6ff;
+}
+
+/* Modal fade + scale transition */
+.modal-fade-enter-active,
+.modal-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.modal-fade-enter-from,
+.modal-fade-leave-to {
+  opacity: 0;
+}
+.modal-fade-enter-active .assign-modal-card,
+.modal-fade-leave-active .assign-modal-card {
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.modal-fade-enter-from .assign-modal-card,
+.modal-fade-leave-to .assign-modal-card {
+  transform: translateY(18px) scale(0.97);
 }
 </style>

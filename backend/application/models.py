@@ -11,6 +11,7 @@ class Rater(db.Model):
     name = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(100), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)  # Ensure you hash passwords
+    assigned_tasks = db.Column(db.String(1024), nullable=True, default='')
 
     ratings = db.relationship('Rating', backref='rater', lazy=True)
 

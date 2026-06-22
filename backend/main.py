@@ -48,6 +48,24 @@ with app.app_context():
             # Ignore error if it means the column already exists
             print("Database migration info: Column 'completion_status' may already exist.")
 
+    # Self-healing migration to add assigned_tasks column to rater table
+    try:
+        # PostgreSQL syntax first
+        db.session.execute(db.text("ALTER TABLE rater ADD COLUMN IF NOT EXISTS assigned_tasks VARCHAR(1024) DEFAULT ''"))
+        db.session.commit()
+        print("Database migration: Successfully verified/added assigned_tasks column (PostgreSQL)")
+    except Exception as e:
+        db.session.rollback()
+        try:
+            # SQLite / Standard fallback
+            db.session.execute(db.text("ALTER TABLE rater ADD COLUMN assigned_tasks VARCHAR(1024) DEFAULT ''"))
+            db.session.commit()
+            print("Database migration: Successfully added assigned_tasks column (SQLite)")
+        except Exception as ex:
+            db.session.rollback()
+            # Ignore error if it means the column already exists
+            print("Database migration info: Column 'assigned_tasks' may already exist.")
+
 # Routes
 from application.views import *
 

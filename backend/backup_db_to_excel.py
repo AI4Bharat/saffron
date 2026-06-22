@@ -22,7 +22,7 @@ def backup_to_excel(output_path):
     print(f"Starting database backup using app context...")
     with app.app_context():
         # Define exact columns for each sheet to handle empty states gracefully
-        RATER_COLS = ['id', 'name', 'email', 'age', 'gender', 'password']
+        RATER_COLS = ['id', 'name', 'email', 'age', 'gender','assigned_tasks' ,'password']
         TEST_COLS = ['id', 'test_type', 'description']
         TEST_ITEM_COLS = ['test_id', 'item_index', 'item_json']
         STUDY_COLS = ['id', 'study_id', 'test_id', 'completion_url']
@@ -40,6 +40,7 @@ def backup_to_excel(output_path):
                 'email': r.email,
                 'age': r.age,
                 'gender': r.gender,
+                'assigned_tasks': r.assigned_tasks,
                 'password': r.password
             })
         df_rater = pd.DataFrame(rater_data, columns=RATER_COLS)

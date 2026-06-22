@@ -182,6 +182,22 @@ def get_test(current_user, test_id):
     rater_id = rater.id
     test = Test.query.filter_by(id=test_id).first_or_404()
 
+    # Task assignment locking protection.
+    # A task assigned to THIS rater is always accessible to them; a task assigned to
+    # someone else is locked; a task assigned to nobody stays open (legacy behaviour).
+    if username != "admin":
+        my_assigned_ids = [int(x.strip()) for x in (rater.assigned_tasks or "").split(',') if x.strip().isdigit()]
+        if test_id not in my_assigned_ids:
+            other_raters = Rater.query.filter(
+                Rater.id != rater.id,
+                Rater.assigned_tasks.isnot(None),
+                Rater.assigned_tasks != ""
+            ).all()
+            for other in other_raters:
+                assigned_ids = [int(x.strip()) for x in other.assigned_tasks.split(',') if x.strip().isdigit()]
+                if test_id in assigned_ids:
+                    return jsonify({'message': 'This task is locked to another annotator.'}), 403
+
     # Get the page numbers and ratings that the rater has already done
     ratings = Rating.query.filter_by(rater_id=rater_id, test_id=test_id).all()
     latest_status = {}
@@ -281,6 +297,22 @@ def create_rating(current_user):
         required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
         rater = Rater.query.filter_by(name=required["username"]).first_or_404()
         data = request.get_json()
+
+        # Task assignment locking protection (a rater may always submit to their own assigned task)
+        username = required["username"]
+        test_id = data.get('test_id')
+        if test_id and username != "admin":
+            my_assigned_ids = [int(x.strip()) for x in (rater.assigned_tasks or "").split(',') if x.strip().isdigit()]
+            if test_id not in my_assigned_ids:
+                other_raters = Rater.query.filter(
+                    Rater.id != rater.id,
+                    Rater.assigned_tasks.isnot(None),
+                    Rater.assigned_tasks != ""
+                ).all()
+                for other in other_raters:
+                    assigned_ids = [int(x.strip()) for x in other.assigned_tasks.split(',') if x.strip().isdigit()]
+                    if test_id in assigned_ids:
+                        return jsonify({'message': 'This task is locked to another annotator.'}), 403
 
         if 'results_json' not in data or not isinstance(data['results_json'], dict):
             return jsonify({'message': 'Invalid results_json format'}), 400
@@ -798,6 +830,21 @@ def verify_test(test_id):
             return jsonify({'message': 'Rater not found'}), 404
     
     test = Test.query.filter_by(id=test_id).first_or_404()
+
+    # Task assignment locking protection (a rater may always access their own assigned task)
+    if username != "admin":
+        my_assigned_ids = [int(x.strip()) for x in (rater.assigned_tasks or "").split(',') if x.strip().isdigit()]
+        if test_id not in my_assigned_ids:
+            other_raters = Rater.query.filter(
+                Rater.id != rater.id,
+                Rater.assigned_tasks.isnot(None),
+                Rater.assigned_tasks != ""
+            ).all()
+            for other in other_raters:
+                assigned_ids = [int(x.strip()) for x in other.assigned_tasks.split(',') if x.strip().isdigit()]
+                if test_id in assigned_ids:
+                    return jsonify({'message': 'This task is locked to another annotator.'}), 403
+
     if not test:
         return jsonify({'message': 'Test not found'}), 404
 
@@ -906,7 +953,8 @@ def get_admin_dashboard(current_user):
                 'age': rater.age,
                 'completed_tasks_count': completed_tasks_count,
                 'last_active': last_active,
-                'status': status_text
+                'status': status_text,
+                'assigned_tasks': rater.assigned_tasks or ""
             })
             
         pending_registrations_count = total_registered_users - active_users_count
@@ -1008,3 +1056,96 @@ def get_admin_dashboard(current_user):
     except Exception as e:
         app.logger.error(f"Error in admin dashboard endpoint: {e}")
         return jsonify({'error': 'Failed to load admin dashboard statistics.'}), 500
+
+
+@app.route('/api/rater/tasks', methods=['GET'])
+@token_required
+def get_assigned_tasks(current_user):
+    try:
+        token = request.headers.get('Authorization').split()[1]
+        required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
+        username = required["username"]
+        rater = Rater.query.filter_by(name=username).first()
+        if not rater:
+            return jsonify({'message': 'Rater not found'}), 404
+        
+        assigned_ids = []
+        if rater.assigned_tasks:
+            assigned_ids = [int(x.strip()) for x in rater.assigned_tasks.split(',') if x.strip().isdigit()]
+        
+        if not assigned_ids:
+            return jsonify({'tasks': []}), 200
+            
+        assigned_tests = Test.query.filter(Test.id.in_(assigned_ids)).all()
+        
+        # Sort tests in the order they were assigned
+        assigned_tests_dict = {t.id: t for t in assigned_tests}
+        sorted_tests = [assigned_tests_dict[tid] for tid in assigned_ids if tid in assigned_tests_dict]
+        
+        languages_list = ["hindi", "bengali", "gujarati", "kannada", "malayalam", "marathi", "odia", "tamil", "telugu", "urdu", "english"]
+        
+        tasks_data = []
+        for test in sorted_tests:
+            desc = test.description or "No description"
+            lang = ""
+            desc_lower = desc.lower()
+            for l in languages_list:
+                if l in desc_lower:
+                    lang = l.capitalize()
+                    break
+            if not lang:
+                if test.json_entry and isinstance(test.json_entry, list) and len(test.json_entry) > 0:
+                    first_item = test.json_entry[0]
+                    lang = first_item.get('target_language') or first_item.get('language') or first_item.get('metadata', {}).get('language') or ""
+                    lang = lang.capitalize() if lang else "Unknown"
+                else:
+                    lang = "Unknown"
+            
+            # Progress calculation
+            ratings = Rating.query.filter_by(rater_id=rater.id, test_id=test.id).all()
+            completed_pages_raw = {rating.page_no_progress for rating in ratings if rating.page_no_progress and rating.completion_status in ['completed', 'skipped']}
+            
+            all_page_ids = [sample['id'] for sample in test.json_entry] if test.json_entry else []
+            completed_count = len([p for p in all_page_ids if str(p) in completed_pages_raw])
+            total_count = len(all_page_ids)
+            
+            tasks_data.append({
+                'id': test.id,
+                'description': desc,
+                'test_type': test.test_type,
+                'language': lang,
+                'completed_count': completed_count,
+                'total_count': total_count,
+                'status': 'Completed' if completed_count == total_count and total_count > 0 else 'In Progress' if completed_count > 0 else 'Not Started'
+            })
+            
+        return jsonify({'tasks': tasks_data}), 200
+    except Exception as e:
+        app.logger.error(f"Error in get_assigned_tasks: {e}")
+        return jsonify({'error': 'Failed to load assigned tasks.'}), 500
+
+
+@app.route('/api/admin/rater/<int:rater_id>/assign_tasks', methods=['POST', 'PUT'])
+@token_required
+def assign_tasks(current_user, rater_id):
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    try:
+        rater = Rater.query.get_or_404(rater_id)
+        data = request.get_json() or {}
+        assigned_tasks = data.get('assigned_tasks', '')
+        
+        # Clean and validate input: comma-separated digits, de-duplicated, order preserved
+        clean_ids = []
+        for x in assigned_tasks.split(','):
+            x_clean = x.strip()
+            if x_clean.isdigit() and x_clean not in clean_ids:
+                clean_ids.append(x_clean)
+
+        rater.assigned_tasks = ','.join(clean_ids)
+        db.session.commit()
+        return jsonify({'message': 'Tasks assigned successfully', 'assigned_tasks': rater.assigned_tasks}), 200
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error in assign_tasks: {e}")
+        return jsonify({'error': 'Failed to assign tasks.'}), 500
