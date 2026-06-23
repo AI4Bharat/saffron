@@ -1,7 +1,7 @@
 <template>
   <div class="container py-1 w-100 mt-2">
-    <!-- Instructions Section -->
-    <div class="alert alert-info shadow-sm animate-fade-in" role="alert">
+    <!-- How to use this page & keyboard shortcuts -->
+    <div class="usage-alert shadow-sm animate-fade-in">
       <div class="d-flex justify-content-center">
         <button
           class="btn btn-primary instruction-btn shadow-sm"
@@ -11,32 +11,30 @@
           aria-expanded="false"
           aria-controls="translationGuidelines"
         >
-          <i class="bi bi-info-circle me-2"></i>
-          Translation Correction Instructions (Click to Expand)
+          <i class="bi bi-keyboard me-2"></i>
+          How to Use &amp; Shortcuts (Click to Expand)
         </button>
       </div>
       <div class="collapse mt-3" id="translationGuidelines">
-        <div class="card card-body border-0 shadow-inner">
-          <h4 class="mb-3 text-primary">Task Description & Instructions</h4>
-          <p class="lead text-secondary fs-6">
-            You are performing a translation correction task. Your goal is to review and correct the translations of the conversation between the teacher (<strong>{{ teacherName }}</strong>) and the student (<strong>{{ studentName }}</strong>).
-          </p>
-          
-          <h5 class="mt-3 text-dark"><i class="bi bi-shield-check me-2 text-success"></i>Key Guidelines:</h5>
-          <ul class="lh-base">
-            <li>
-              <strong>Code-Mixed Sentences:</strong> The translations are supposed to be <strong>code-mixed</strong> (i.e., mixing the target language with English terms where natural/common in normal conversation). Ensure the code-mixing is natural and readable.
-            </li>
-            <li>
-              <strong>Grammar Verification:</strong> Check and correct the grammar, spelling, sentence structure, and flow in the target language to make sure it sounds natural and accurate.
-            </li>
-            <li>
-              <strong>Formulas & Equations:</strong> Check any mathematical formulas, variables, symbols, or equations. Make sure the <strong>exact same formula or equation</strong> is preserved identically in the translated output.
-            </li>
-            <li>
-              <strong>Reset & Helper Tools:</strong> Use the <i class="bi bi-arrow-counterclockwise text-secondary"></i> reset button to restore the original translation, or the <i class="bi bi-copy text-secondary"></i> copy button to copy the English text directly into the edit box.
-            </li>
-          </ul>
+        <div class="card card-body border-0 shadow-inner usage-panel">
+          <div class="row g-4">
+            <div class="col-md-6">
+              <h6 class="usage-heading"><i class="bi bi-keyboard me-2"></i>Keyboard shortcuts</h6>
+              <ul class="shortcut-list mb-2">
+                <li><span class="keys"><kbd>Ctrl</kbd><span class="plus">+</span><kbd>Enter</kbd></span><span class="desc">Submit &amp; go to the next task</span></li>
+                <li><span class="keys"><kbd>Ctrl</kbd><span class="plus">+</span><kbd>S</kbd></span><span class="desc">Save your progress</span></li>
+              </ul>
+              <p class="text-muted fs-9 mb-0">On macOS, use <kbd>⌘ Cmd</kbd> in place of <kbd>Ctrl</kbd>.</p>
+            </div>
+            <div class="col-md-6">
+              <h6 class="usage-heading"><i class="bi bi-mouse2 me-2"></i>Using the interface</h6>
+              <ul class="usage-list">
+                <li>Switch between tasks from the <strong>Task Explorer</strong> on the left — each row shows its <strong>number</strong> and <strong>ID</strong>.</li>
+                <li>Press <i class="bi bi-arrow-counterclockwise"></i> <strong>Reset</strong> to restore the original translation, or <i class="bi bi-copy"></i> <strong>Copy</strong> to pull the English text into the edit box.</li>
+                <li>The progress bar at the top tracks how many tasks you have completed.</li>
+              </ul>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -939,8 +937,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 }
 
 .focused-turn {
-  border-left-color: #4f46e5;
-  background-color: rgba(99, 102, 241, 0.02);
+  border-left-color: #d8661b;
+  background-color: rgba(216, 102, 27, 0.03);
   border-radius: 8px;
 }
 
@@ -987,8 +985,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 }
 
 .correction-textarea:focus {
-  border-color: #4f46e5;
-  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15) !important;
+  border-color: #d8661b;
+  box-shadow: 0 0 0 3px rgba(216, 102, 27, 0.15) !important;
 }
 
 .scene-card {

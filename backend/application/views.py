@@ -295,7 +295,12 @@ def create_rating(current_user):
     try:
         token = request.headers.get('Authorization').split()[1]
         required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
-        rater = Rater.query.filter_by(name=required["username"]).first_or_404()
+        rater = Rater.query.filter_by(name=required["username"]).first()
+        if not rater:
+            if required["username"] == "admin":
+                rater = Rater.query.first()
+            if not rater:
+                return jsonify({'message': 'Rater not found'}), 404
         data = request.get_json()
 
         # Task assignment locking protection (a rater may always submit to their own assigned task)
@@ -904,6 +909,240 @@ def get_tracking():
     except Exception as e:
         app.logger.error(f"Error in tracking endpoint: {e}")
         return jsonify({'error': 'Failed to fetch tracking data.'}), 500
+
+
+@app.route('/api/admin/export_csv/<int:test_id>', methods=['GET'])
+@token_required
+def export_csv(current_user, test_id):
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    try:
+        from application.models import Rating, Test, Rater
+        from flask import make_response
+        import io
+        import csv
+
+        test = Test.query.get(test_id)
+        if not test:
+            return jsonify({'message': 'Test not found'}), 404
+            
+        from flask import request
+        rater_id = request.args.get('rater_id', type=int)
+        
+        ratings_query = Rating.query.filter_by(test_id=test_id)
+        if rater_id:
+            ratings_query = ratings_query.filter_by(rater_id=rater_id)
+        ratings = ratings_query.all()
+        
+        # Pre-fetch all raters once to avoid N+1 queries
+        raters_map = {rater.id: rater for rater in Rater.query.all()}
+        
+        # Map original items by their ID
+        original_items_map = {}
+        if isinstance(test.json_entry, list):
+            for item in test.json_entry:
+                if isinstance(item, dict) and 'id' in item:
+                    original_items_map[str(item['id'])] = item
+                    
+        # Base metadata headers common to all exports
+        headers = [
+            'Test ID',
+            'Test Type',
+            'Rater ID',
+            'Rater Name',
+            'Rater Email',
+            'Item ID',
+            'Completion Status',
+            'Time of Submission',
+            'Time Taken (seconds)'
+        ]
+        
+        # Add task-type specific headers
+        if test.test_type == 'sentence-correction':
+            headers += [
+                'Original English Text',
+                'Original Translated Text',
+                'Corrected Text',
+                'Subject',
+                'Level',
+                'Language'
+            ]
+        elif test.test_type == 'conversation-evaluation':
+            headers += [
+                'Dialogue (Readable)',
+                'Evaluation Decision',
+                'Comments'
+            ]
+        elif test.test_type == 'translation-correction':
+            headers += [
+                'Original Pre-scene',
+                'Corrected Pre-scene',
+                'Original Post-scene',
+                'Corrected Post-scene',
+                'Dialogue Annotations (Readable)'
+            ]
+        else:
+            headers += [
+                'Original Text',
+                'Corrected Text',
+                'Original Pre-scene',
+                'Corrected Pre-scene',
+                'Original Post-scene',
+                'Corrected Post-scene',
+                'Evaluation Decision',
+                'Comments',
+                'Dialogue Annotations (Readable)'
+            ]
+        
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(headers)
+        
+        for r in ratings:
+            rater = raters_map.get(r.rater_id)
+            res_json = r.results_json if isinstance(r.results_json, dict) else {}
+            
+            item_id = r.page_no_progress or res_json.get('data_id') or res_json.get('id')
+            item_id_str = str(item_id) if item_id is not None else ""
+            orig_item = original_items_map.get(item_id_str, {})
+            
+            # Base metadata row values
+            row = [
+                test.id,
+                test.test_type,
+                r.rater_id,
+                rater.name if rater else "",
+                rater.email if rater else "",
+                item_id_str,
+                r.completion_status or 'completed',
+                r.time_of_submission.isoformat() if r.time_of_submission else "",
+                r.time_taken_to_submit
+            ]
+            
+            if test.test_type == 'sentence-correction':
+                # Original English
+                orig_en = orig_item.get('text_en') or orig_item.get('english') or orig_item.get('original') or ""
+                # Original translation in config
+                orig_trans = orig_item.get('text') or orig_item.get('translation') or ""
+                # Corrected translation from rating
+                corr_text = res_json.get('text') or ""
+                
+                row += [
+                    orig_en,
+                    orig_trans,
+                    corr_text,
+                    orig_item.get('subject') or res_json.get('subject') or "",
+                    orig_item.get('level') or res_json.get('level') or "",
+                    orig_item.get('target_language') or res_json.get('target_language') or ""
+                ]
+            elif test.test_type == 'conversation-evaluation':
+                # Build readable dialogue turns for context
+                dialogue_turns_list = []
+                orig_dialogue_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in orig_item and isinstance(orig_item[k], list)), None)
+                if orig_dialogue_key:
+                    for idx, orig_turn in enumerate(orig_item[orig_dialogue_key]):
+                        speaker = orig_turn.get('speaker') or orig_turn.get('role') or f"Speaker {idx+1}"
+                        turn_text = orig_turn.get('text') or orig_turn.get('english') or orig_turn.get('original') or ""
+                        dialogue_turns_list.append(f"Turn {idx+1} [{speaker}]: {turn_text}")
+                dialogue_readable = "\n".join(dialogue_turns_list)
+                
+                row += [
+                    dialogue_readable,
+                    res_json.get('evaluation', ''),
+                    res_json.get('comments', '')
+                ]
+            elif test.test_type == 'translation-correction':
+                orig_pre = orig_item.get('pre_scene_en') or orig_item.get('pre_scene') or ""
+                annotated_pre = res_json.get('pre_scene') or ""
+                orig_post = orig_item.get('post_scene_en') or orig_item.get('post_scene') or ""
+                annotated_post = res_json.get('post_scene') or ""
+                
+                # Dialogue formatting
+                dialogue_turns_list = []
+                orig_dialogue_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in orig_item and isinstance(orig_item[k], list)), None)
+                rated_dialogue_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in res_json and isinstance(res_json[k], list)), None)
+                
+                if orig_dialogue_key and rated_dialogue_key:
+                    orig_turns = orig_item[orig_dialogue_key]
+                    rated_turns = res_json[rated_dialogue_key]
+                    for idx, orig_turn in enumerate(orig_turns):
+                        speaker = orig_turn.get('speaker') or orig_turn.get('role') or f"Speaker {idx+1}"
+                        turn_orig = orig_turn.get('text') or orig_turn.get('english') or orig_turn.get('original') or ""
+                        turn_rated = ""
+                        if idx < len(rated_turns):
+                            rated_turn = rated_turns[idx]
+                            trans_key = next((k for k in ['translated', 'translation', 'translated_text', 'translated_sentence', 'text_translated', 'target', 'target_text', 'text'] if k in rated_turn), None)
+                            if trans_key:
+                                turn_rated = rated_turn[trans_key]
+                        dialogue_turns_list.append(f"Turn {idx+1} [{speaker}]:\n  Original: {turn_orig}\n  Corrected: {turn_rated}")
+                elif orig_dialogue_key:
+                    for idx, orig_turn in enumerate(orig_item[orig_dialogue_key]):
+                        speaker = orig_turn.get('speaker') or orig_turn.get('role') or f"Speaker {idx+1}"
+                        turn_orig = orig_turn.get('text') or orig_turn.get('english') or orig_turn.get('original') or ""
+                        dialogue_turns_list.append(f"Turn {idx+1} [{speaker}]:\n  Original: {turn_orig}")
+                        
+                dialogue_readable = "\n\n".join(dialogue_turns_list)
+                
+                row += [
+                    orig_pre,
+                    annotated_pre,
+                    orig_post,
+                    annotated_post,
+                    dialogue_readable
+                ]
+            else:
+                orig_text = orig_item.get('english') or orig_item.get('original') or orig_item.get('text_en') or orig_item.get('text') or ""
+                annotated_text = res_json.get('text') or ""
+                orig_pre = orig_item.get('pre_scene_en') or orig_item.get('pre_scene') or ""
+                annotated_pre = res_json.get('pre_scene') or ""
+                orig_post = orig_item.get('post_scene_en') or orig_item.get('post_scene') or ""
+                annotated_post = res_json.get('post_scene') or ""
+                
+                dialogue_turns_list = []
+                orig_dialogue_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in orig_item and isinstance(orig_item[k], list)), None)
+                rated_dialogue_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in res_json and isinstance(res_json[k], list)), None)
+                if orig_dialogue_key and rated_dialogue_key:
+                    orig_turns = orig_item[orig_dialogue_key]
+                    rated_turns = res_json[rated_dialogue_key]
+                    for idx, orig_turn in enumerate(orig_turns):
+                        speaker = orig_turn.get('speaker') or orig_turn.get('role') or f"Speaker {idx+1}"
+                        turn_orig = orig_turn.get('text') or orig_turn.get('english') or orig_turn.get('original') or ""
+                        turn_rated = ""
+                        if idx < len(rated_turns):
+                            rated_turn = rated_turns[idx]
+                            trans_key = next((k for k in ['translated', 'translation', 'translated_text', 'translated_sentence', 'text_translated', 'target', 'target_text', 'text'] if k in rated_turn), None)
+                            if trans_key:
+                                turn_rated = rated_turn[trans_key]
+                        dialogue_turns_list.append(f"Turn {idx+1} [{speaker}]:\n  Original: {turn_orig}\n  Corrected: {turn_rated}")
+                dialogue_readable = "\n\n".join(dialogue_turns_list)
+                
+                row += [
+                    orig_text,
+                    annotated_text,
+                    orig_pre,
+                    annotated_pre,
+                    orig_post,
+                    annotated_post,
+                    res_json.get('evaluation', ''),
+                    res_json.get('comments', ''),
+                    dialogue_readable
+                ]
+            writer.writerow(row)
+            
+        filename = f"annotations_task_{test_id}"
+        if rater_id and ratings:
+            rater_obj = raters_map.get(rater_id)
+            if rater_obj:
+                filename += f"_rater_{rater_obj.name.replace(' ', '_')}"
+        filename += ".csv"
+        
+        response = make_response("\ufeff" + output.getvalue())
+        response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+        response.headers["Content-type"] = "text/csv; charset=utf-8"
+        return response
+    except Exception as e:
+        app.logger.error(f"Error in export_csv endpoint: {e}")
+        return jsonify({'error': 'Failed to export CSV.'}), 500
 
 
 @app.route('/api/admin/dashboard', methods=['GET'])

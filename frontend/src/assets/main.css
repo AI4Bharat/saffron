@@ -61,45 +61,378 @@ body {
   margin-bottom: 1.5rem;
 }
 
-.login-container {
-  max-width: 400px;
-  margin: 0 auto;
-  padding: 2rem;
-  background-color: #fff;
-  border-radius: 4px;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+/* ===========================================================================
+   Brand design tokens (shared across the app — saffron identity)
+   =========================================================================== */
+:root {
+  --brand: #d8661b;
+  --brand-light: #f4a93c;
+  --brand-dark: #b4530f;
+  --brand-gradient: linear-gradient(135deg, #d8661b 0%, #f4a93c 100%);
+  --ink: #1e293b;
+  --surface: #f8fafc;
+  --field-border: #e2e8f0;
 }
 
-.login-form {
+/* ===========================================================================
+   Brand consistency: remap Bootstrap's "primary" to Saffron app-wide.
+   Recolors every .btn-primary / .text-primary / .bg-primary / .border-primary,
+   progress bars, spinners and links across all pages and components at once.
+   (main.css loads after Bootstrap, so these win.)
+   =========================================================================== */
+:root {
+  --bs-primary: #d8661b;
+  --bs-primary-rgb: 216, 102, 27;
+  --bs-primary-text-emphasis: #8a3f0d;
+  --bs-primary-bg-subtle: #fceee3;
+  --bs-primary-border-subtle: #f3cdaa;
+
+  --bs-link-color: #d8661b;
+  --bs-link-color-rgb: 216, 102, 27;
+  --bs-link-hover-color: #b4530f;
+  --bs-link-hover-color-rgb: 180, 83, 15;
+}
+
+.btn-primary {
+  --bs-btn-bg: #d8661b;
+  --bs-btn-border-color: #d8661b;
+  --bs-btn-hover-bg: #b4530f;
+  --bs-btn-hover-border-color: #a84d0e;
+  --bs-btn-active-bg: #a84d0e;
+  --bs-btn-active-border-color: #9a460d;
+  --bs-btn-disabled-bg: #d8661b;
+  --bs-btn-disabled-border-color: #d8661b;
+  --bs-btn-focus-shadow-rgb: 216, 102, 27;
+}
+
+.btn-outline-primary {
+  --bs-btn-color: #d8661b;
+  --bs-btn-border-color: #d8661b;
+  --bs-btn-hover-bg: #d8661b;
+  --bs-btn-hover-border-color: #d8661b;
+  --bs-btn-active-bg: #d8661b;
+  --bs-btn-active-border-color: #d8661b;
+  --bs-btn-focus-shadow-rgb: 216, 102, 27;
+}
+
+.link-primary {
+  color: #d8661b !important;
+}
+.link-primary:hover {
+  color: #b4530f !important;
+}
+
+/* Brand-colored focus + checks for every form in the app */
+.form-control:focus,
+.form-select:focus,
+.form-check-input:focus {
+  border-color: #e9a86a;
+  box-shadow: 0 0 0 0.25rem rgba(216, 102, 27, 0.2);
+}
+.form-check-input:checked {
+  background-color: #d8661b;
+  border-color: #d8661b;
+}
+
+/* ===========================================================================
+   Auth pages — shared layout for Login + Signup (keeps them aligned)
+   =========================================================================== */
+.auth-page {
+  min-height: calc(100vh - 40px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2.5rem 1rem;
+  background:
+    radial-gradient(900px circle at 0% 0%, rgba(244, 169, 60, 0.12), transparent 45%),
+    radial-gradient(900px circle at 100% 100%, rgba(216, 102, 27, 0.12), transparent 45%),
+    var(--surface);
+}
+
+.auth-card {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr;
+  width: 100%;
+  max-width: 940px;
+  background: #fff;
+  border-radius: 24px;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.14);
+  border: 1px solid rgba(15, 23, 42, 0.05);
+}
+
+/* Brand / hero panel (left) */
+.auth-brand {
+  position: relative;
+  background: var(--brand-gradient);
+  color: #fff;
+  padding: 3rem 2.75rem;
   display: flex;
   flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+}
+.auth-brand::after {
+  content: "";
+  position: absolute;
+  width: 360px;
+  height: 360px;
+  right: -130px;
+  bottom: -130px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 50%;
+}
+.auth-brand > * {
+  position: relative;
+  z-index: 1;
+}
+.auth-brand-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px;
+  height: 58px;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 16px;
+  margin-bottom: 1.6rem;
+  backdrop-filter: blur(6px);
+}
+.auth-brand h1 {
+  font-size: 1.9rem;
+  font-weight: 700;
+  line-height: 1.2;
+  margin-bottom: 0.4rem;
+}
+.auth-brand-sub {
+  font-size: 0.95rem;
+  opacity: 0.9;
+  margin-bottom: 2.2rem;
+  max-width: 320px;
+}
+.auth-feature {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  font-size: 0.92rem;
+  opacity: 0.96;
+  margin-bottom: 0.9rem;
+}
+.auth-feature i {
+  font-size: 1.05rem;
+  flex-shrink: 0;
 }
 
-.login-form label {
-  margin-bottom: 0.5rem;
-  font-weight: bold;
+/* Form panel (right) */
+.auth-form-panel {
+  padding: 3rem 2.75rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.auth-form-mark {
+  display: none; /* only shown on small screens when hero is hidden */
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 1.5rem;
+  color: var(--brand);
+  font-weight: 700;
+  font-size: 1.15rem;
+}
+.auth-title {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 0.3rem;
+}
+.auth-subtitle {
+  color: #64748b;
+  font-size: 0.95rem;
+  margin-bottom: 1.75rem;
 }
 
-.login-form input[type="text"],
-.login-form input[type="password"] {
-  padding: 0.75rem;
-  margin-bottom: 1rem;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  font-size: 1rem;
+.auth-form .form-label {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #334155;
+  margin-bottom: 0.35rem;
+}
+.auth-form .form-control,
+.auth-form .form-select {
+  border-radius: 12px;
+  border: 1px solid var(--field-border);
+  padding: 0.65rem 0.9rem;
+  font-size: 0.95rem;
+  background: #fff;
+}
+.auth-form .form-control:focus,
+.auth-form .form-select:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 0.2rem rgba(216, 102, 27, 0.15);
+}
+.auth-form .input-group .form-control {
+  border-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.auth-form .btn-reveal {
+  border: 1px solid var(--field-border);
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-top-right-radius: 12px;
+  border-bottom-right-radius: 12px;
+  background: #fff;
+  color: #94a3b8;
+  z-index: 0;
+}
+.auth-form .btn-reveal:hover {
+  color: var(--brand);
+}
+.auth-form .form-check-input:checked {
+  background-color: var(--brand);
+  border-color: var(--brand);
+}
+.auth-form .form-check-input:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 0.2rem rgba(216, 102, 27, 0.15);
 }
 
-.login-form input[type="submit"] {
-  background-color: #007bff;
-  color: #fff;
-  padding: 0.75rem;
+/* Saffron primary button (shared) */
+.btn-saffron {
+  background: var(--brand-gradient);
   border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 1rem;
-  transition: background-color 0.3s ease;
+  color: #fff;
+  font-weight: 600;
+  border-radius: 12px;
+  padding: 0.7rem 1rem;
+  box-shadow: 0 8px 18px rgba(216, 102, 27, 0.28);
+  transition: filter 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+.btn-saffron:hover:not(:disabled) {
+  color: #fff;
+  filter: brightness(1.05);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(216, 102, 27, 0.35);
+}
+.btn-saffron:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
-.login-form input[type="submit"]:hover {
-  background-color: #0056b3; /* Darker shade on hover */
+.auth-switch {
+  text-align: center;
+  margin-top: 1.6rem;
+  font-size: 0.9rem;
+  color: #64748b;
+}
+.auth-switch a {
+  color: var(--brand);
+  font-weight: 600;
+  text-decoration: none;
+}
+.auth-switch a:hover {
+  text-decoration: underline;
+}
+
+/* Responsive: drop the hero, surface a compact wordmark above the form */
+@media (max-width: 768px) {
+  .auth-card {
+    grid-template-columns: 1fr;
+    max-width: 460px;
+  }
+  .auth-brand {
+    display: none;
+  }
+  .auth-form-panel {
+    padding: 2.25rem 1.75rem;
+  }
+  .auth-form-mark {
+    display: inline-flex;
+  }
+}
+
+/* ===========================================================================
+   Usage / keyboard-shortcut panels — shared by all task components
+   =========================================================================== */
+.usage-alert {
+  background: #fff;
+  border: 1px solid #eef2f7;
+  border-radius: 14px;
+  padding: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.usage-panel {
+  background: #f8fafc !important;
+  border-radius: 12px;
+}
+
+.instruction-btn {
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.usage-heading {
+  font-weight: 700;
+  color: var(--brand);
+  margin-bottom: 0.85rem;
+}
+
+.shortcut-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.shortcut-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.3rem 0;
+}
+
+.shortcut-list .keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 132px;
+  flex-shrink: 0;
+}
+
+.shortcut-list .plus {
+  color: #94a3b8;
+  font-weight: 700;
+}
+
+.shortcut-list .desc {
+  color: #334155;
+  font-size: 0.9rem;
+}
+
+.usage-list {
+  padding-left: 1.1rem;
+  margin: 0;
+}
+
+.usage-list li {
+  font-size: 0.88rem;
+  line-height: 1.5;
+  margin-bottom: 0.45rem;
+  color: #334155;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 24px;
+  text-align: center;
+  background: #1e293b;
+  color: #fff;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-family: 'Inter', -apple-system, sans-serif;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.3;
+  box-shadow: 0 2px 0 rgba(15, 23, 42, 0.35);
 }

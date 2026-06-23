@@ -152,6 +152,41 @@
             No languages stats found.
           </div>
         </div>
+
+        <!-- Needs Attention: actionable batch health (click a card to jump) -->
+        <h3 class="fw-bold text-dark mb-3"><i class="bi bi-clipboard2-pulse-fill text-primary me-2"></i>Needs Attention</h3>
+        <div class="row g-4 mb-4">
+          <div class="col-12 col-md-4">
+            <button type="button" class="attention-card w-100 text-start bg-white p-4 rounded shadow-sm border border-start border-4 border-danger" @click="focusBatches('unassigned')">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="text-muted fw-medium text-uppercase text-xs">Unassigned Batches</span>
+                <div class="kpi-icon-wrapper bg-danger-subtle text-danger"><i class="bi bi-folder-x fs-5"></i></div>
+              </div>
+              <h2 class="fw-bold text-dark mb-1">{{ unassignedBatches.length }}</h2>
+              <p class="text-xs text-muted mb-0"><i class="bi bi-arrow-right-short"></i> Not locked to any annotator — assign them.</p>
+            </button>
+          </div>
+          <div class="col-12 col-md-4">
+            <button type="button" class="attention-card w-100 text-start bg-white p-4 rounded shadow-sm border border-start border-4 border-warning" @click="focusBatches('stalled')">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="text-muted fw-medium text-uppercase text-xs">Stalled Batches</span>
+                <div class="kpi-icon-wrapper bg-warning-subtle text-warning"><i class="bi bi-hourglass-bottom fs-5"></i></div>
+              </div>
+              <h2 class="fw-bold text-dark mb-1">{{ stalledBatches.length }}</h2>
+              <p class="text-xs text-muted mb-0"><i class="bi bi-arrow-right-short"></i> No submissions yet (0% complete).</p>
+            </button>
+          </div>
+          <div class="col-12 col-md-4">
+            <button type="button" class="attention-card w-100 text-start bg-white p-4 rounded shadow-sm border border-start border-4 border-success" @click="focusBatches('almostdone')">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="text-muted fw-medium text-uppercase text-xs">Almost Done</span>
+                <div class="kpi-icon-wrapper bg-success-subtle text-success"><i class="bi bi-flag-fill fs-5"></i></div>
+              </div>
+              <h2 class="fw-bold text-dark mb-1">{{ almostDoneBatches.length }}</h2>
+              <p class="text-xs text-muted mb-0"><i class="bi bi-arrow-right-short"></i> &ge;80% done — a final push finishes them.</p>
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- 2. TEST BATCHES TAB -->
@@ -159,22 +194,42 @@
         <div class="card shadow-sm border mb-4">
           <div class="card-header bg-white py-3 border-bottom-0">
             <div class="row g-3 align-items-center">
-              <div class="col-12 col-md-6">
-                <h3 class="fw-bold text-dark m-0">Test Batches Progress</h3>
+              <div class="col-12 col-lg-4">
+                <h3 class="fw-bold text-dark m-0 d-inline-flex align-items-center flex-wrap gap-2">
+                  Test Batches Progress
+                  <span v-if="batchAttentionFilter" class="badge attention-chip rounded-pill">
+                    {{ batchAttentionFilter === 'unassigned' ? 'Unassigned' : batchAttentionFilter === 'stalled' ? 'Stalled · 0%' : 'Almost done · ≥80%' }}
+                    <i class="bi bi-x-lg ms-1" role="button" title="Clear filter" @click="batchAttentionFilter = ''"></i>
+                  </span>
+                </h3>
               </div>
-              <div class="col-12 col-md-3">
+              <div class="col-12 col-sm-4 col-lg-3">
                 <select v-model="batchLanguageFilter" class="form-select">
                   <option value="">All Languages</option>
                   <option v-for="lang in uniqueLanguages" :key="lang" :value="lang">{{ lang }}</option>
                 </select>
               </div>
-              <div class="col-12 col-md-3">
+              <div class="col-12 col-sm-4 col-lg-2">
                 <input 
                   v-model="batchSearchQuery" 
                   type="text" 
                   class="form-control" 
-                  placeholder="Search batches by desc..." 
+                  placeholder="Search batches..." 
                 />
+              </div>
+              <div class="col-12 col-sm-4 col-lg-3">
+                <div class="input-group">
+                  <input 
+                    type="number" 
+                    class="form-control" 
+                    placeholder="Export ID..." 
+                    v-model.number="exportTaskId"
+                    @keyup.enter="exportCSV(exportTaskId)"
+                  />
+                  <button class="btn btn-success" @click="exportCSV(exportTaskId)" :disabled="!exportTaskId">
+                    <i class="bi bi-download"></i> Export
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -183,12 +238,12 @@
             <table class="table table-hover align-middle mb-0">
               <thead class="table-light">
                 <tr>
-                  <th class="ps-4" style="width: 80px;">ID</th>
-                  <th>Description</th>
-                  <th style="width: 150px;">Language</th>
+                  <th class="ps-4 sortable-th" style="width: 80px;" @click="sortBatches('id')">ID <i :class="['bi', sortIcon(batchSort, 'id')]"></i></th>
+                  <th class="sortable-th" @click="sortBatches('description')">Description <i :class="['bi', sortIcon(batchSort, 'description')]"></i></th>
+                  <th class="sortable-th" style="width: 150px;" @click="sortBatches('language')">Language <i :class="['bi', sortIcon(batchSort, 'language')]"></i></th>
                   <th style="width: 150px;">Test Type</th>
-                  <th style="width: 250px;">Unique Completed / Total</th>
-                  <th style="width: 140px;">Total Submissions</th>
+                  <th class="sortable-th" style="width: 250px;" @click="sortBatches('completion')">Unique Completed / Total <i :class="['bi', sortIcon(batchSort, 'completion')]"></i></th>
+                  <th class="sortable-th" style="width: 140px;" @click="sortBatches('submissions')">Total Submissions <i :class="['bi', sortIcon(batchSort, 'submissions')]"></i></th>
                   <th style="width: 140px;">Task Link</th>
                 </tr>
               </thead>
@@ -231,6 +286,10 @@
                               title="Copy task link" @click="copyTaskLink(test.id)">
                         <i class="bi bi-clipboard"></i>
                       </button>
+                      <button type="button" class="btn btn-outline-success"
+                              title="Export annotations to CSV" @click="exportCSV(test.id)">
+                        <i class="bi bi-download"></i>
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -247,6 +306,18 @@
 
       <!-- 3. RATERS DIRECTORY TAB -->
       <div v-if="activeTab === 'raters'">
+        <!-- Stale-annotator alert -->
+        <div v-if="staleRaters.length" class="alert stale-alert d-flex align-items-center gap-2 shadow-sm mb-3" role="alert">
+          <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+          <div class="flex-grow-1">
+            <strong>{{ staleRaters.length }}</strong>
+            annotator{{ staleRaters.length > 1 ? 's have' : ' has' }} tasks assigned but no activity in {{ STALE_DAYS }}+ days.
+          </div>
+          <button class="btn btn-sm btn-outline-dark flex-shrink-0" @click="showStaleOnly = !showStaleOnly">
+            <i :class="['bi me-1', showStaleOnly ? 'bi-list-ul' : 'bi-funnel-fill']"></i>
+            {{ showStaleOnly ? 'Show all' : 'Show only these' }}
+          </button>
+        </div>
         <div class="card shadow-sm border">
           <div class="card-header bg-white py-3 border-bottom-0">
             <div class="row g-3 align-items-center">
@@ -276,18 +347,18 @@
             <table class="table table-hover align-middle mb-0">
               <thead class="table-light">
                 <tr>
-                  <th class="ps-4">Name</th>
-                  <th>Email</th>
+                  <th class="ps-4 sortable-th" @click="sortRaters('name')">Name <i :class="['bi', sortIcon(raterSort, 'name')]"></i></th>
+                  <th class="sortable-th" @click="sortRaters('email')">Email <i :class="['bi', sortIcon(raterSort, 'email')]"></i></th>
                   <th style="width: 100px;">Demographics</th>
-                  <th style="width: 110px;">Completed</th>
-                  <th style="width: 230px;">Assigned Tasks</th>
-                  <th style="width: 160px;">Last Active</th>
+                  <th class="sortable-th" style="width: 110px;" @click="sortRaters('completed')">Completed <i :class="['bi', sortIcon(raterSort, 'completed')]"></i></th>
+                  <th class="sortable-th" style="width: 230px;" @click="sortRaters('assigned')">Assigned Tasks <i :class="['bi', sortIcon(raterSort, 'assigned')]"></i></th>
+                  <th class="sortable-th" style="width: 160px;" @click="sortRaters('lastactive')">Last Active <i :class="['bi', sortIcon(raterSort, 'lastactive')]"></i></th>
                   <th style="width: 140px;">Status</th>
                   <th class="text-end pe-4" style="width: 120px;">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="rater in filteredRaters" :key="rater.id">
+                <tr v-for="rater in filteredRaters" :key="rater.id" :class="{ 'stale-row': isStale(rater) }">
                   <td class="ps-4">
                     <div class="d-flex align-items-center gap-2">
                       <div class="avatar-circle">{{ rater.name.charAt(0).toUpperCase() }}</div>
@@ -317,6 +388,9 @@
                   <td>
                     <span v-if="rater.last_active" class="text-secondary text-xs">{{ formatDate(rater.last_active) }}</span>
                     <span v-else class="text-muted text-xs">—</span>
+                    <span v-if="isStale(rater)" class="badge stale-badge rounded-pill ms-1" title="Assigned tasks but inactive">
+                      <i class="bi bi-exclamation-triangle-fill me-1"></i>Stale
+                    </span>
                   </td>
                   <td>
                     <span
@@ -328,15 +402,26 @@
                     </span>
                   </td>
                   <td class="text-end pe-4">
-                    <button
-                      class="btn btn-sm d-inline-flex align-items-center gap-1"
-                      :class="assignedIdList(rater).length ? 'btn-outline-primary' : 'btn-primary'"
-                      @click="openAssignModal(rater)"
-                      :title="assignedIdList(rater).length ? 'Edit assigned tasks' : 'Assign tasks'"
-                    >
-                      <i :class="['bi', assignedIdList(rater).length ? 'bi-pencil-square' : 'bi-plus-lg']"></i>
-                      <span>{{ assignedIdList(rater).length ? 'Edit' : 'Assign' }}</span>
-                    </button>
+                    <div class="d-flex gap-2 justify-content-end">
+                      <button
+                        class="btn btn-sm btn-outline-success d-inline-flex align-items-center gap-1"
+                        @click="openExportModal(rater)"
+                        title="Export annotator annotations to CSV"
+                        :disabled="!assignedIdList(rater).length"
+                      >
+                        <i class="bi bi-download"></i>
+                        <span>Export</span>
+                      </button>
+                      <button
+                        class="btn btn-sm d-inline-flex align-items-center gap-1"
+                        :class="assignedIdList(rater).length ? 'btn-outline-primary' : 'btn-primary'"
+                        @click="openAssignModal(rater)"
+                        :title="assignedIdList(rater).length ? 'Edit assigned tasks' : 'Assign tasks'"
+                      >
+                        <i :class="['bi', assignedIdList(rater).length ? 'bi-pencil-square' : 'bi-plus-lg']"></i>
+                        <span>{{ assignedIdList(rater).length ? 'Edit' : 'Assign' }}</span>
+                      </button>
+                    </div>
                   </td>
                 </tr>
                 <tr v-if="filteredRaters.length === 0">
@@ -447,6 +532,52 @@
         </div>
       </div>
     </transition>
+
+    <!-- ===================== EXPORT TASK MODAL ===================== -->
+    <transition name="modal-fade">
+      <div v-if="showExportModal" class="assign-modal-backdrop" @click.self="closeExportModal">
+        <div class="assign-modal-card shadow-lg" style="max-width: 480px;">
+          <!-- Header -->
+          <div class="assign-modal-header d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-2">
+              <i class="bi bi-download text-success fs-4"></i>
+              <h5 class="fw-bold mb-0 text-dark">Export Annotations</h5>
+            </div>
+            <button class="btn-close" @click="closeExportModal"></button>
+          </div>
+
+          <!-- Body -->
+          <div class="assign-modal-body">
+            <p class="text-xs text-muted mb-3">
+              Export annotations done by <strong>{{ currentRaterForExport?.name }}</strong> as a CSV spreadsheet.
+            </p>
+            <div class="form-group mb-2">
+              <label class="form-label text-xs fw-bold text-secondary">Choose Assigned Task ID</label>
+              <select v-model="selectedExportTaskId" class="form-select">
+                <option value="" disabled>-- Select a Task ID --</option>
+                <option v-for="tid in exportableTaskIds" :key="tid" :value="tid">
+                  Task #{{ tid }} - {{ getTaskDescription(tid) }}
+                </option>
+              </select>
+            </div>
+            <div v-if="exportableTaskIds.length === 0" class="text-danger small mt-2">
+              <i class="bi bi-exclamation-circle-fill me-1"></i> This annotator has no assigned tasks.
+            </div>
+          </div>
+
+          <!-- Footer -->
+          <div class="assign-modal-footer d-flex justify-content-end gap-2">
+            <button class="btn btn-light border btn-sm" @click="closeExportModal">Cancel</button>
+            <button class="btn btn-success btn-sm d-inline-flex align-items-center gap-1.5" 
+                    :disabled="!selectedExportTaskId" 
+                    @click="confirmExport">
+              <i class="bi bi-download"></i>
+              <span>Export CSV</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -468,6 +599,13 @@ const raterSearchQuery = ref('')
 const raterStatusFilter = ref('')
 const showAllRaters = ref(true)
 
+// Sorting + Needs-Attention + stale-annotator state
+const batchSort = ref({ key: 'id', dir: 'asc' })
+const raterSort = ref({ key: 'default', dir: 'asc' })
+const batchAttentionFilter = ref('')   // '' | 'unassigned' | 'stalled' | 'almostdone'
+const showStaleOnly = ref(false)
+const STALE_DAYS = 7
+
 // Task assignment modal state
 const showAssignModal = ref(false)
 const currentRater = ref(null)
@@ -475,6 +613,10 @@ const assignSelected = ref([])   // numeric test ids selected for the current ra
 const assignSearch = ref('')
 const isSaving = ref(false)
 const assignError = ref(null)
+const exportTaskId = ref('')
+const showExportModal = ref(false)
+const currentRaterForExport = ref(null)
+const selectedExportTaskId = ref('')
 
 // Copy a batch's rater-facing task URL to the clipboard.
 const copyTaskLink = async (id) => {
@@ -488,11 +630,98 @@ const copyTaskLink = async (id) => {
     ta.remove()
   }
   const toast = document.createElement('div')
-  toast.className = 'position-fixed bottom-0 start-50 translate-middle-x mb-4 bg-dark text-white py-2 px-4 rounded-pill shadow-lg'
+  toast.className = 'position-fixed bottom-0 start-50 translate-middle-x mb-4 bg-dark text-white py-2.5 px-4 rounded-pill shadow-lg'
   toast.style.zIndex = '1080'
   toast.innerHTML = `<i class="bi bi-clipboard-check text-warning me-2"></i> Link copied: ${url}`
   document.body.appendChild(toast)
   setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300) }, 2200)
+}
+
+const exportCSV = async (id, raterId = null, raterName = '') => {
+  if (!id) return
+  try {
+    const token = localStorage.getItem('authToken')
+    if (!token) {
+      router.push('/login')
+      return
+    }
+    
+    let url = `${API_BASE_URL}/admin/export_csv/${id}`
+    if (raterId) {
+      url += `?rater_id=${raterId}`
+    }
+    
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+    
+    if (response.status === 401) {
+      localStorage.removeItem('authToken')
+      router.push('/login')
+      return
+    }
+    
+    if (response.status === 404) {
+      showToast('Task ID not found in database', 'bi-exclamation-triangle-fill text-danger')
+      return
+    }
+    
+    if (!response.ok) {
+      throw new Error('Failed to export annotations.')
+    }
+    
+    const blob = await response.blob()
+    const downloadUrl = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = downloadUrl
+    
+    let filename = `annotations_task_${id}`
+    if (raterName) {
+      filename += `_rater_${raterName.replace(/\s+/g, '_')}`
+    }
+    filename += '.csv'
+    
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    window.URL.revokeObjectURL(downloadUrl)
+    
+    showToast('Annotations exported successfully!', 'bi-check-circle-fill text-success')
+  } catch (err) {
+    console.error(err)
+    showToast('Failed to export CSV. Please try again.', 'bi-exclamation-triangle-fill text-danger')
+  }
+}
+
+const exportableTaskIds = computed(() => {
+  return assignedIdList(currentRaterForExport.value)
+})
+
+const getTaskDescription = (tid) => {
+  const t = tests.value.find(x => x.id === tid)
+  return t ? t.description : 'No description'
+}
+
+const openExportModal = (rater) => {
+  currentRaterForExport.value = rater
+  selectedExportTaskId.value = ''
+  showExportModal.value = true
+  clearTimers()
+}
+
+const closeExportModal = () => {
+  showExportModal.value = false
+  currentRaterForExport.value = null
+  if (isAutoRefreshActive.value) startTimers()
+}
+
+const confirmExport = () => {
+  if (!currentRaterForExport.value || !selectedExportTaskId.value) return
+  exportCSV(selectedExportTaskId.value, currentRaterForExport.value.id, currentRaterForExport.value.name)
+  closeExportModal()
 }
 
 // Auto-Refresh
@@ -560,6 +789,48 @@ const formatDate = (isoString) => {
   })
 }
 
+// ---- Admin tools: Needs Attention, stale annotators, table sorting ----
+const daysSince = (iso) => {
+  if (!iso) return Infinity
+  const t = new Date(iso).getTime()
+  if (isNaN(t)) return Infinity
+  return Math.floor((Date.now() - t) / 86400000)
+}
+
+// A rater with assigned work, not yet finished, and no activity for STALE_DAYS+.
+const isStale = (rater) => {
+  const assigned = assignedIdList(rater).length
+  if (!assigned) return false
+  if ((rater.completed_tasks_count || 0) >= assigned) return false
+  return daysSince(rater.last_active) >= STALE_DAYS
+}
+
+const focusBatches = (filter) => {
+  batchAttentionFilter.value = batchAttentionFilter.value === filter ? '' : filter
+  activeTab.value = 'batches'
+}
+
+const sortBatches = (key) => {
+  if (batchSort.value.key === key) {
+    batchSort.value = { key, dir: batchSort.value.dir === 'asc' ? 'desc' : 'asc' }
+  } else {
+    batchSort.value = { key, dir: key === 'id' ? 'asc' : 'desc' }
+  }
+}
+
+const sortRaters = (key) => {
+  if (raterSort.value.key === key) {
+    raterSort.value = { key, dir: raterSort.value.dir === 'asc' ? 'desc' : 'asc' }
+  } else {
+    raterSort.value = { key, dir: (key === 'name' || key === 'email') ? 'asc' : 'desc' }
+  }
+}
+
+const sortIcon = (state, key) => {
+  if (state.key !== key) return 'bi-chevron-expand'
+  return state.dir === 'asc' ? 'bi-caret-up-fill' : 'bi-caret-down-fill'
+}
+
 // Auto Refresh control
 const toggleAutoRefresh = () => {
   isAutoRefreshActive.value = !isAutoRefreshActive.value
@@ -612,20 +883,56 @@ const uniqueLanguages = computed(() => {
   return [...new Set(langs)].sort()
 })
 
+// Needs-Attention groupings (Overview)
+const unassignedBatches = computed(() => tests.value.filter(t => !taskOwnerMap.value[t.id]))
+const stalledBatches = computed(() => tests.value.filter(t => (t.unique_completed_tasks || 0) === 0))
+const almostDoneBatches = computed(() => tests.value.filter(t => {
+  const p = getPercent(t.unique_completed_tasks, t.total_tasks)
+  return p >= 80 && p < 100
+}))
+
 // Filtered lists
 const filteredTests = computed(() => {
   let list = tests.value
-  
+
   if (batchLanguageFilter.value) {
     list = list.filter(t => t.language === batchLanguageFilter.value)
   }
-  
+
   if (batchSearchQuery.value) {
     const q = batchSearchQuery.value.toLowerCase()
     list = list.filter(t => t.description.toLowerCase().includes(q) || String(t.id).includes(q))
   }
-  
-  return list
+
+  // Needs-Attention quick filter (set by the Overview cards)
+  if (batchAttentionFilter.value === 'unassigned') {
+    list = list.filter(t => !taskOwnerMap.value[t.id])
+  } else if (batchAttentionFilter.value === 'stalled') {
+    list = list.filter(t => (t.unique_completed_tasks || 0) === 0)
+  } else if (batchAttentionFilter.value === 'almostdone') {
+    list = list.filter(t => {
+      const p = getPercent(t.unique_completed_tasks, t.total_tasks)
+      return p >= 80 && p < 100
+    })
+  }
+
+  // Column sorting
+  const { key, dir } = batchSort.value
+  const mul = dir === 'asc' ? 1 : -1
+  return [...list].sort((a, b) => {
+    switch (key) {
+      case 'description':
+        return mul * (a.description || '').localeCompare(b.description || '')
+      case 'language':
+        return mul * (a.language || '').localeCompare(b.language || '')
+      case 'completion':
+        return mul * (getPercent(a.unique_completed_tasks, a.total_tasks) - getPercent(b.unique_completed_tasks, b.total_tasks))
+      case 'submissions':
+        return mul * ((a.total_submissions || 0) - (b.total_submissions || 0))
+      default:
+        return mul * ((a.id || 0) - (b.id || 0))
+    }
+  })
 })
 
 // Parse a rater's assigned_tasks string ("1,2,3") into a numeric id array
@@ -638,6 +945,8 @@ const assignedIdList = (rater) => {
     .map(Number)
 }
 
+const staleRaters = computed(() => raters.value.filter(isStale))
+
 const filteredRaters = computed(() => {
   // "Show all" off hides the long tail of auto-created / never-started accounts.
   // It defaults on so admins can assign tasks to brand-new annotators too.
@@ -646,17 +955,44 @@ const filteredRaters = computed(() => {
     list = list.filter(r => r.completed_tasks_count >= 1)
   }
 
+  if (showStaleOnly.value) {
+    list = list.filter(isStale)
+  }
+
   if (raterSearchQuery.value) {
     const q = raterSearchQuery.value.toLowerCase()
     list = list.filter(r => r.name.toLowerCase().includes(q) || r.email.toLowerCase().includes(q))
   }
 
-  // Annotators with assigned tasks float to the top, then alphabetical by name.
+  const { key, dir } = raterSort.value
+
+  // Default view: annotators with assigned tasks float to the top, then by name.
+  if (key === 'default') {
+    return [...list].sort((a, b) => {
+      const aHas = assignedIdList(a).length > 0 ? 0 : 1
+      const bHas = assignedIdList(b).length > 0 ? 0 : 1
+      if (aHas !== bHas) return aHas - bHas
+      return (a.name || '').localeCompare(b.name || '')
+    })
+  }
+
+  // Column sorting
+  const mul = dir === 'asc' ? 1 : -1
   return [...list].sort((a, b) => {
-    const aHas = assignedIdList(a).length > 0 ? 0 : 1
-    const bHas = assignedIdList(b).length > 0 ? 0 : 1
-    if (aHas !== bHas) return aHas - bHas
-    return (a.name || '').localeCompare(b.name || '')
+    switch (key) {
+      case 'name':
+        return mul * (a.name || '').localeCompare(b.name || '')
+      case 'email':
+        return mul * (a.email || '').localeCompare(b.email || '')
+      case 'completed':
+        return mul * ((a.completed_tasks_count || 0) - (b.completed_tasks_count || 0))
+      case 'assigned':
+        return mul * (assignedIdList(a).length - assignedIdList(b).length)
+      case 'lastactive':
+        return mul * ((new Date(a.last_active || 0).getTime()) - (new Date(b.last_active || 0).getTime()))
+      default:
+        return 0
+    }
   })
 })
 
@@ -994,9 +1330,9 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  background: #e0edff;
-  color: #1d4ed8;
-  border: 1px solid #bfdbfe;
+  background: #fceee3;
+  color: #b4530f;
+  border: 1px solid #f3cdaa;
   font-weight: 600;
   font-size: 0.8rem;
   padding: 0.25rem 0.65rem;
@@ -1030,7 +1366,7 @@ onUnmounted(() => {
   background: #f8fafc;
 }
 .batch-row.selected {
-  background: #eff6ff;
+  background: #fceee3;
 }
 
 /* Modal fade + scale transition */
@@ -1049,5 +1385,59 @@ onUnmounted(() => {
 .modal-fade-enter-from .assign-modal-card,
 .modal-fade-leave-to .assign-modal-card {
   transform: translateY(18px) scale(0.97);
+}
+
+/* Sortable table headers */
+.sortable-th {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+.sortable-th:hover {
+  color: var(--brand, #d8661b);
+}
+.sortable-th .bi {
+  font-size: 0.75rem;
+  opacity: 0.6;
+}
+
+/* Needs Attention cards */
+.attention-card {
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.attention-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08) !important;
+}
+.attention-chip {
+  background: #fceee3;
+  color: #b4530f;
+  border: 1px solid #f3cdaa;
+  font-size: 0.72rem;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+/* Stale-annotator alert + rows */
+.stale-alert {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #9a3412;
+  border-radius: 12px;
+}
+.stale-badge {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+.stale-row {
+  background: #fffbeb !important;
+}
+.stale-row:hover {
+  background: #fef3c7 !important;
 }
 </style>

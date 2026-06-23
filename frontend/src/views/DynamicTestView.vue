@@ -7,7 +7,7 @@
     <template v-else>
       <div class="row">
         <!-- Tasks Sidebar -->
-        <div class="col-lg-3 col-md-4 mb-4">
+        <div class="col-lg-4 col-md-5 mb-4">
           <div class="card border-0 shadow-sm sidebar-card">
             <div class="card-header bg-dark text-white py-3 border-0 rounded-top-4">
               <h5 class="mb-0 d-flex align-items-center justify-content-between">
@@ -72,12 +72,15 @@
                     </span>
                     </div>
                     
-                    <div class="text-truncate">
-                      <div class="task-title font-semibold text-truncate text-dark small">
-                        {{ task.slug || task.id }}
+                    <div class="text-truncate flex-grow-1">
+                      <div class="task-title fw-semibold text-truncate text-dark">
+                        Task #{{ task.originalIndex + 1 }}
                       </div>
-                      <span class="fs-9 text-muted d-block text-truncate">
-                        {{ task.pre_scene || task.description || 'No description' }}
+                      <div class="task-id-line text-truncate">
+                        <i class="bi bi-hash"></i>ID: {{ task.id }}
+                      </div>
+                      <span class="task-desc text-muted d-block text-truncate">
+                        {{ task.slug || task.pre_scene || task.description || 'No description' }}
                       </span>
                     </div>
                   </div>
@@ -118,7 +121,7 @@
         </div>
 
         <!-- Main Workspace -->
-        <div class="col-lg-9 col-md-8">
+        <div class="col-lg-8 col-md-7">
           <!-- Progress Card -->
           <div class="card border-0 shadow-sm mb-4 rounded-4">
             <div class="card-body p-3">
@@ -137,6 +140,20 @@
                 ></div>
               </div>
             </div>
+          </div>
+
+          <!-- All Completed Info Banner for Prolific -->
+          <div v-if="progress === 100" class="alert alert-success shadow-sm mb-4 rounded-4 d-flex align-items-center justify-content-between p-3" role="alert">
+            <div class="d-flex align-items-center">
+              <i class="bi bi-check-circle-fill me-2 fs-4 text-success"></i>
+              <div>
+                <strong class="d-block text-success-emphasis">All tasks completed!</strong>
+                <span class="fs-8 text-secondary">You can review and edit any task. Click the submit button to complete the study.</span>
+              </div>
+            </div>
+            <a :href="completionurl" class="btn btn-sm btn-success rounded-pill px-3 py-1.5 fw-semibold flex-shrink-0 text-decoration-none">
+              <i class="bi bi-cloud-arrow-up-fill me-1"></i> Submit Study
+            </a>
           </div>
 
           <!-- Error Message -->
@@ -315,7 +332,7 @@ const handleNext = async () => {
       });
 
       if (response.status === 200) {
-        window.location.href = completionurl.value;
+        showCompletionToast();
       } else {
         // Find next incomplete task and jump to it
         const nextIncompleteIdx = testData.value.findIndex((t, idx) => 
@@ -324,7 +341,7 @@ const handleNext = async () => {
         if (nextIncompleteIdx !== -1) {
           currentIndex.value = nextIncompleteIdx
         } else {
-          window.location.href = completionurl.value;
+          showCompletionToast();
         }
       }
     } catch (err) {
@@ -335,6 +352,18 @@ const handleNext = async () => {
     currentIndex.value++;
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
+}
+
+const showCompletionToast = () => {
+  const toast = document.createElement('div')
+  toast.className = 'position-fixed bottom-0 start-50 translate-middle-x mb-4 bg-dark text-white py-2.5 px-4 rounded-pill shadow-lg z-3 border border-success'
+  toast.style.transition = 'opacity 0.3s ease'
+  toast.innerHTML = '<i class="bi bi-check-circle-fill text-success me-2"></i> All tasks completed successfully! You can now submit the study.'
+  document.body.appendChild(toast)
+  setTimeout(() => {
+    toast.style.opacity = '0'
+    setTimeout(() => toast.remove(), 300)
+  }, 4000)
 }
 
 // Lifecycle hooks
@@ -390,7 +419,7 @@ onMounted(async () => {
       if (nextIncompleteIdx !== -1) {
         currentIndex.value = nextIncompleteIdx
       } else {
-        window.location.href = completionurl.value;
+        currentIndex.value = testData.value.length - 1
       }
     }
   } catch (err) {
@@ -409,6 +438,8 @@ onMounted(async () => {
 .sidebar-card {
   border-radius: 16px;
   background-color: #ffffff;
+  position: sticky;
+  top: 12px;
 }
 
 .search-box {
@@ -422,7 +453,7 @@ onMounted(async () => {
 }
 
 .task-list-wrapper {
-  max-height: calc(100vh - 140px);
+  max-height: calc(100vh - 96px);
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -460,18 +491,44 @@ onMounted(async () => {
 }
 
 .status-indicator {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.8rem;
-  font-weight: bold;
+  font-size: 0.95rem;
+  font-weight: 700;
+  flex-shrink: 0;
 }
 
 .status-indicator i {
-  font-size: 1rem;
+  font-size: 1.15rem;
+}
+
+/* Task item text — bigger & always shows number + ID */
+.task-title {
+  font-size: 0.98rem;
+  line-height: 1.3;
+}
+
+.task-id-line {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #d8661b;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin-top: 1px;
+}
+
+.task-id-line i {
+  font-size: 0.9rem;
+}
+
+.task-desc {
+  font-size: 0.8rem;
+  margin-top: 2px;
 }
 
 /* Task Status Highlighting */
@@ -496,8 +553,8 @@ onMounted(async () => {
 }
 
 .active-task {
-  border-color: #4f46e5 !important;
-  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.12) !important;
+  border-color: #d8661b !important;
+  box-shadow: 0 4px 12px rgba(216, 102, 27, 0.15) !important;
   transform: scale(1.02) translateX(4px) !important;
 }
 
@@ -510,8 +567,8 @@ onMounted(async () => {
 }
 
 .active-task.pending-task {
-  background-color: #e0e7ff !important;
-  color: #312e81;
+  background-color: #fceee3 !important;
+  color: #8a3f0d;
 }
 
 .saved-task {

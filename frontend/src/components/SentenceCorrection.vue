@@ -1,7 +1,7 @@
 <template>
   <div class="container py-1 w-100 mt-2">
-    <!-- Instructions -->
-    <div class="alert alert-info shadow-sm animate-fade-in" role="alert">
+    <!-- How to use this page & keyboard shortcuts -->
+    <div class="usage-alert shadow-sm animate-fade-in">
       <div class="d-flex justify-content-center">
         <button
           class="btn btn-primary instruction-btn shadow-sm"
@@ -11,24 +11,30 @@
           aria-expanded="false"
           aria-controls="sentenceGuidelines"
         >
-          <i class="bi bi-info-circle me-2"></i>
-          Sentence Correction Instructions (Click to Expand)
+          <i class="bi bi-keyboard me-2"></i>
+          How to Use &amp; Shortcuts (Click to Expand)
         </button>
       </div>
       <div class="collapse mt-3" id="sentenceGuidelines">
-        <div class="card card-body border-0 shadow-inner">
-          <h4 class="mb-3 text-primary">Task Description &amp; Instructions</h4>
-          <p class="lead text-secondary fs-6">
-            Review and correct the <strong>{{ languageLabel }}</strong> translation of a single
-            benchmark sentence so it reads naturally and preserves the meaning of the English source.
-          </p>
-          <h5 class="mt-2 text-dark"><i class="bi bi-shield-check me-2 text-success"></i>Key Guidelines:</h5>
-          <ul class="lh-base">
-            <li><strong>Code-Mixed:</strong> Keep technical/scientific terms and jargon in English; render the connective language naturally in {{ languageLabel }}.</li>
-            <li><strong>Grammar &amp; Fluency:</strong> Fix grammar, spelling, structure and flow so it sounds like a real bilingual speaker.</li>
-            <li><strong>Formulas &amp; Equations:</strong> Preserve every mathematical formula, variable and symbol <strong>exactly</strong> as in the source.</li>
-            <li><strong>Reset:</strong> Use the <i class="bi bi-arrow-counterclockwise text-secondary"></i> reset button to restore the original translation.</li>
-          </ul>
+        <div class="card card-body border-0 shadow-inner usage-panel">
+          <div class="row g-4">
+            <div class="col-md-6">
+              <h6 class="usage-heading"><i class="bi bi-keyboard me-2"></i>Keyboard shortcuts</h6>
+              <ul class="shortcut-list mb-2">
+                <li><span class="keys"><kbd>Ctrl</kbd><span class="plus">+</span><kbd>Enter</kbd></span><span class="desc">Submit &amp; go to the next task</span></li>
+                <li><span class="keys"><kbd>Ctrl</kbd><span class="plus">+</span><kbd>S</kbd></span><span class="desc">Save your progress</span></li>
+              </ul>
+              <p class="text-muted fs-9 mb-0">On macOS, use <kbd>⌘ Cmd</kbd> in place of <kbd>Ctrl</kbd>.</p>
+            </div>
+            <div class="col-md-6">
+              <h6 class="usage-heading"><i class="bi bi-mouse2 me-2"></i>Using the interface</h6>
+              <ul class="usage-list">
+                <li>Switch between tasks from the <strong>Task Explorer</strong> on the left — each row shows its <strong>number</strong> and <strong>ID</strong>.</li>
+                <li>Press <i class="bi bi-arrow-counterclockwise"></i> <strong>Reset</strong> to restore the original translation.</li>
+                <li>The progress bar at the top tracks how many tasks you have completed.</li>
+              </ul>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -280,7 +286,7 @@ async function handleSkip() {
 .tracking-wide { letter-spacing: 0.06em; }
 .translation-edit-wrapper { background-color: #fcfdfe; border-color: rgba(0,0,0,0.06) !important; }
 .correction-textarea { font-size: 1.1rem; line-height: 1.6; border-radius: 12px; padding: 14px 16px; resize: none; overflow-y: hidden; background-color: #fff; transition: border-color .2s ease, box-shadow .2s ease; min-height: 90px; }
-.correction-textarea:focus { border-color: #4f46e5; box-shadow: 0 0 0 3px rgba(79,70,229,0.15) !important; }
+.correction-textarea:focus { border-color: #d8661b; box-shadow: 0 0 0 3px rgba(216,102,27,0.15) !important; }
 .shadow-inner { box-shadow: inset 0 2px 4px rgba(0,0,0,0.06); }
 .leading-relaxed { line-height: 1.7; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }

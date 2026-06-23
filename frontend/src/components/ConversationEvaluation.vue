@@ -1,6 +1,47 @@
 <template>
   <div class="conversation-eval-container animate-fade-in" v-if="currentTest">
-    
+
+    <!-- How to use this page & keyboard shortcuts -->
+    <div class="usage-alert shadow-sm">
+      <div class="d-flex justify-content-center">
+        <button
+          class="btn btn-primary instruction-btn shadow-sm"
+          type="button"
+          data-bs-toggle="collapse"
+          data-bs-target="#conversationGuidelines"
+          aria-expanded="false"
+          aria-controls="conversationGuidelines"
+        >
+          <i class="bi bi-keyboard me-2"></i>
+          How to Use &amp; Shortcuts (Click to Expand)
+        </button>
+      </div>
+      <div class="collapse mt-3" id="conversationGuidelines">
+        <div class="card card-body border-0 shadow-inner usage-panel">
+          <div class="row g-4">
+            <div class="col-md-6">
+              <h6 class="usage-heading"><i class="bi bi-keyboard me-2"></i>Keyboard shortcuts</h6>
+              <ul class="shortcut-list mb-2">
+                <li><span class="keys"><kbd>1</kbd></span><span class="desc">Accept the current turn</span></li>
+                <li><span class="keys"><kbd>2</kbd></span><span class="desc">Reject the current turn</span></li>
+                <li><span class="keys"><kbd>Ctrl</kbd><span class="plus">+</span><kbd>Enter</kbd></span><span class="desc">Submit &amp; go to the next task</span></li>
+                <li><span class="keys"><kbd>Ctrl</kbd><span class="plus">+</span><kbd>S</kbd></span><span class="desc">Save your progress</span></li>
+              </ul>
+              <p class="text-muted fs-9 mb-0">On macOS, use <kbd>⌘ Cmd</kbd> in place of <kbd>Ctrl</kbd>.</p>
+            </div>
+            <div class="col-md-6">
+              <h6 class="usage-heading"><i class="bi bi-mouse2 me-2"></i>Using the interface</h6>
+              <ul class="usage-list">
+                <li>Switch between tasks from the <strong>Task Explorer</strong> on the left — each row shows its <strong>number</strong> and <strong>ID</strong>.</li>
+                <li>Rate every dialogue turn as <strong>Accept</strong> or <strong>Reject</strong> before submitting.</li>
+                <li>The progress bar at the top tracks how many tasks you have completed.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Meta Information Header -->
     <div class="card border-0 shadow-sm rounded-4 mb-4 bg-white p-4">
       <div class="d-flex flex-column gap-3">

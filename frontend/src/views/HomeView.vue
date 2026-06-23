@@ -22,6 +22,40 @@
             </div>
           </div>
         </div>
+
+        <!-- Quick actions: overall progress + resume next task -->
+        <div v-if="!isAdmin && tasks.length" class="banner-progress mt-4 pt-4 position-relative z-index-1">
+          <div class="d-flex flex-column flex-md-row align-items-md-center gap-3">
+            <router-link
+              v-if="nextTask"
+              :to="`/${nextTask.id}`"
+              class="btn btn-continue fw-semibold px-4 py-2 rounded-pill shadow-sm d-inline-flex align-items-center gap-2 flex-shrink-0"
+            >
+              <i class="bi bi-play-circle-fill"></i>
+              {{ nextTask.status === 'In Progress' ? 'Resume' : 'Start' }} Task #{{ nextTask.id }}
+            </router-link>
+            <span v-else class="all-done-pill fw-semibold px-4 py-2 rounded-pill d-inline-flex align-items-center gap-2 flex-shrink-0">
+              <i class="bi bi-check2-circle"></i> All tasks completed
+            </span>
+
+            <div class="flex-grow-1 w-100">
+              <div class="d-flex justify-content-between small fw-semibold mb-1">
+                <span><i class="bi bi-graph-up-arrow me-1"></i>Overall progress</span>
+                <span>{{ overallDone }} / {{ overallTotal }} items · {{ overallProgress }}%</span>
+              </div>
+              <div class="progress banner-progress-bar rounded-pill" style="height: 9px;">
+                <div
+                  class="progress-bar bg-white rounded-pill"
+                  role="progressbar"
+                  :style="{ width: overallProgress + '%' }"
+                  :aria-valuenow="overallProgress"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                ></div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Admin Control Panel inside Home (for manual Test ID bypass & quick link) -->
@@ -370,6 +404,18 @@ const statsCards = computed(() => {
   ]
 })
 
+// Overall progress + resume-next-task (dashboard quick actions)
+const overallTotal = computed(() => tasks.value.reduce((s, t) => s + (t.total_count || 0), 0))
+const overallDone = computed(() => tasks.value.reduce((s, t) => s + (t.completed_count || 0), 0))
+const overallProgress = computed(() =>
+  overallTotal.value ? Math.round((overallDone.value / overallTotal.value) * 100) : 0
+)
+const nextTask = computed(() =>
+  tasks.value.find(t => t.status === 'In Progress') ||
+  tasks.value.find(t => t.status === 'Not Started') ||
+  null
+)
+
 // Visual formatting helpers
 const getProgressPercent = (task) => {
   if (!task.total_count) return 0
@@ -478,6 +524,33 @@ onMounted(() => {
   backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.2);
   color: white;
+}
+
+.banner-progress {
+  border-top: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.banner-progress-bar {
+  background-color: rgba(255, 255, 255, 0.25) !important;
+}
+
+.btn-continue {
+  background-color: #fff;
+  color: #b4530f;
+  border: none;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.btn-continue:hover {
+  color: #8a3f0d;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+}
+
+.all-done-pill {
+  background-color: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  color: #fff;
 }
 
 .tracking-wider {
