@@ -43,11 +43,11 @@ def main():
             
             print(f"\n--- Exporting Test ID={test.id} (Type: {test.test_type}) ---")
             
-            if test.test_type == "conversation-evaluation":
+            if test.test_type in ["conversation-evaluation", "conversation-editable"]:
                 try:
                     export_conversation_ratings(test.id, output_path, args.only_accepted)
                 except Exception as e:
-                    print(f"Error exporting Test {test.id} (conversation-evaluation): {e}")
+                    print(f"Error exporting Test {test.id} ({test.test_type}): {e}")
             else:
                 # Handle existing test types using original exporter
                 try:

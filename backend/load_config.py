@@ -14,6 +14,7 @@ class TestType(Enum):
     MOS = "mos"
     TRANSLATION_CORRECTION = "translation-correction"
     SENTENCE_CORRECTION = "sentence-correction"
+    CONVERSATION_EDITABLE = "conversation-editable"
 
 def load_json_config(config_path: str):
     with open(config_path, 'r') as f:

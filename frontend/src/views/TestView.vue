@@ -166,6 +166,7 @@
             :can-proceed="true"
             :is-last-test="isLast"
             :test_id="test_id"
+            :test-type="data?.test_type"
             :currentIndex="currentIndex"
             @next="handleNext"
             @prev="handlePrev"
@@ -240,6 +241,7 @@ const currentTestComponent = computed(() => {
     'translation-correction': TranslationCorrection,
     'sentence-correction': SentenceCorrection,
     'conversation-evaluation': ConversationEvaluation,
+    'conversation-editable': ConversationEvaluation,
   }
 
   return testComponents[data.value.test_type]

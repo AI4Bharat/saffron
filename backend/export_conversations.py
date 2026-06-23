@@ -79,6 +79,27 @@ def export_conversation_ratings(test_id: int, output_path: str, only_accepted: b
                     
                 item_copy['evaluation'] = evaluation
                 item_copy['comments'] = comments
+                
+                # Merge corrected pre_scene & post_scene if present in the rating
+                if 'pre_scene' in rating_data:
+                    item_copy['pre_scene'] = rating_data['pre_scene']
+                if 'post_scene' in rating_data:
+                    item_copy['post_scene'] = rating_data['post_scene']
+                
+                # Merge conversation turn corrections
+                orig_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in item_copy and isinstance(item_copy[k], list)), None)
+                rated_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in rating_data and isinstance(rating_data[k], list)), None)
+                
+                if orig_conv_key and rated_conv_key:
+                    orig_list = item_copy[orig_conv_key]
+                    rated_list = rating_data[rated_conv_key]
+                    for i, orig_turn in enumerate(orig_list):
+                        if i < len(rated_list):
+                            rated_turn = rated_list[i]
+                            # Copy over any non-source/non-role keys (the dialogue text corrections)
+                            for k, v in rated_turn.items():
+                                if k not in ['role', 'english', 'english_text', 'original', 'original_text', 'en', 'text_en', 'speaker', 'user']:
+                                    orig_turn[k] = v
             else:
                 # No rating found. If we want only accepted ones, skip it.
                 if only_accepted:
@@ -86,6 +107,18 @@ def export_conversation_ratings(test_id: int, output_path: str, only_accepted: b
                 item_copy['evaluation'] = None
                 item_copy['comments'] = None
                 
+            # Clean up temporary English keys injected during loading
+            item_copy.pop('pre_scene_en', None)
+            item_copy.pop('post_scene_en', None)
+            item_copy.pop('misconception_text_en', None)
+            
+            # Clean up dialogue turns
+            for dialogue_key in ['dialogue', 'conversation', 'turns']:
+                if dialogue_key in item_copy and isinstance(item_copy[dialogue_key], list):
+                    for turn in item_copy[dialogue_key]:
+                        turn.pop('english', None)
+                        turn.pop('text_en', None)
+                        
             output_items.append(item_copy)
             
         # 4. Write to JSONL

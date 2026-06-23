@@ -50,9 +50,17 @@
         <div class="pre-scene-box p-3 rounded-3 mb-2">
           <div class="d-flex align-items-start gap-2">
             <i class="bi bi-info-circle-fill text-primary fs-5 mt-0.5"></i>
-            <div>
+            <div class="w-100">
               <span class="text-uppercase fw-bold text-secondary tracking-wider fs-9 d-block mb-1">Pre-Scene Narrative</span>
-              <p class="mb-0 fs-6 text-dark fw-medium leading-relaxed">{{ currentTest.pre_scene }}</p>
+              <textarea
+                v-if="isEditable"
+                v-model="sceneState.pre_scene"
+                v-auto-grow
+                class="form-control correction-textarea shadow-inner border-2 w-100"
+                rows="2"
+                placeholder="Edit pre-scene narrative..."
+              ></textarea>
+              <p v-else class="mb-0 fs-6 text-dark fw-medium leading-relaxed">{{ currentTest.pre_scene }}</p>
             </div>
           </div>
         </div>
@@ -118,7 +126,15 @@
                 </span>
                 <span class="badge bg-light text-muted border fs-9">Turn {{ turn.turn_index }}</span>
               </div>
-              <p class="mb-0 fs-6 text-dark leading-relaxed">{{ turn.text }}</p>
+              <textarea
+                v-if="isEditable"
+                v-model="turn.text"
+                v-auto-grow
+                class="form-control correction-textarea shadow-inner border-2 w-100"
+                rows="2"
+                placeholder="Edit dialogue text..."
+              ></textarea>
+              <p v-else class="mb-0 fs-6 text-dark leading-relaxed">{{ turn.text }}</p>
             </div>
           </div>
 
@@ -144,13 +160,21 @@
     </div>
 
     <!-- Post-Scene Narrative Box -->
-    <div v-if="currentTest.post_scene" class="card border-0 shadow-sm rounded-4 mb-4 bg-white p-4">
+    <div v-if="currentTest.post_scene || isEditable" class="card border-0 shadow-sm rounded-4 mb-4 bg-white p-4">
       <div class="post-scene-box p-3 rounded-3 border-start-secondary">
         <div class="d-flex align-items-start gap-2">
           <i class="bi bi-flag-fill text-secondary fs-5 mt-0.5"></i>
-          <div>
+          <div class="w-100">
             <span class="text-uppercase fw-bold text-secondary tracking-wider fs-9 d-block mb-1">Post-Scene Narrative</span>
-            <p class="mb-0 fs-6 text-dark fw-medium leading-relaxed">{{ currentTest.post_scene }}</p>
+            <textarea
+              v-if="isEditable"
+              v-model="sceneState.post_scene"
+              v-auto-grow
+              class="form-control correction-textarea shadow-inner border-2 w-100"
+              rows="2"
+              placeholder="Edit post-scene narrative..."
+            ></textarea>
+            <p v-else class="mb-0 fs-6 text-dark fw-medium leading-relaxed">{{ currentTest.post_scene }}</p>
           </div>
         </div>
       </div>
@@ -328,6 +352,10 @@ const props = defineProps({
   currentIndex: {
     type: Number,
     required: true
+  },
+  testType: {
+    type: String,
+    default: 'conversation-evaluation'
   }
 })
 
@@ -339,6 +367,15 @@ const comments = ref('')
 const isSubmitting = ref(false)
 const isSaving = ref(false)
 const startTime = ref(Date.now())
+const conversationState = ref([])
+const sceneState = ref({
+  pre_scene: '',
+  post_scene: ''
+})
+
+const isEditable = computed(() => {
+  return props.testType === 'conversation-editable'
+})
 
 // Watch currentTest changes to setupState
 watch(() => props.currentTest, () => {
@@ -353,6 +390,15 @@ function setupState() {
   evaluation.value = props.currentTest.evaluation || null
   comments.value = props.currentTest.comments || ''
 
+  // Initialize editable pre_scene and post_scene states
+  sceneState.value = {
+    pre_scene: props.currentTest.pre_scene || '',
+    post_scene: props.currentTest.post_scene || ''
+  }
+
+  const originalTurns = props.currentTest.dialogue || props.currentTest.conversation || props.currentTest.turns || []
+  conversationState.value = originalTurns.map(turn => ({ ...turn }))
+
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
@@ -362,7 +408,7 @@ const cellData = computed(() => {
 })
 
 const dialogueTurns = computed(() => {
-  return props.currentTest.dialogue || props.currentTest.conversation || props.currentTest.turns || []
+  return conversationState.value
 })
 
 const personaGuidelines = computed(() => {
@@ -402,7 +448,7 @@ function getSpeakerName(turn) {
 
 function getTeacherTurnNumber(turnIndex) {
   // Find which teacher turn this is (e.g. 1st, 2nd, etc.)
-  const teacherTurns = dialogueTurns.value
+  const teacherTurns = conversationState.value
     .filter(t => t.speaker === 'teacher')
     .map(t => t.turn_index);
   const position = teacherTurns.indexOf(turnIndex);
@@ -420,7 +466,16 @@ function selectEvaluation(val) {
 }
 
 const isValid = computed(() => {
-  return evaluation.value === 'accept' || evaluation.value === 'reject';
+  const isEvalValid = evaluation.value === 'accept' || evaluation.value === 'reject';
+  if (!isEvalValid) return false;
+  
+  if (isEditable.value) {
+    if (!sceneState.value.pre_scene.trim()) return false;
+    if (props.currentTest.post_scene && !sceneState.value.post_scene.trim()) return false;
+    return conversationState.value.every(turn => (turn.text || '').trim().length > 0);
+  }
+  
+  return true;
 })
 
 // Skip Action
@@ -429,11 +484,7 @@ async function handleSkip() {
   isSubmitting.value = true
 
   const durationMs = Date.now() - startTime.value
-  const results_json = {
-    id: props.currentTest.id,
-    evaluation: evaluation.value,
-    comments: comments.value
-  }
+  const results_json = buildResultsJson()
 
   try {
     const token = localStorage.getItem('authToken')
@@ -467,17 +518,35 @@ async function handleSkip() {
   }
 }
 
+function buildResultsJson() {
+  const cleanTurns = conversationState.value.map(turn => ({ ...turn }))
+  
+  let dialogueKey = 'conversation'
+  if ('dialogue' in props.currentTest) {
+    dialogueKey = 'dialogue'
+  } else if ('turns' in props.currentTest) {
+    dialogueKey = 'turns'
+  }
+
+  return {
+    id: props.currentTest.id,
+    evaluation: evaluation.value,
+    comments: comments.value,
+    ...(isEditable.value ? {
+      pre_scene: sceneState.value.pre_scene,
+      post_scene: sceneState.value.post_scene,
+      [dialogueKey]: cleanTurns
+    } : {})
+  }
+}
+
 // Draft Save
 async function handleSave() {
   if (isSaving.value || isSubmitting.value) return
   isSaving.value = true
 
   const durationMs = Date.now() - startTime.value
-  const results_json = {
-    id: props.currentTest.id,
-    evaluation: evaluation.value,
-    comments: comments.value
-  }
+  const results_json = buildResultsJson()
 
   try {
     const token = localStorage.getItem('authToken')
@@ -528,11 +597,7 @@ async function handleSubmit() {
   isSubmitting.value = true
 
   const durationMs = Date.now() - startTime.value
-  const results_json = {
-    id: props.currentTest.id,
-    evaluation: evaluation.value,
-    comments: comments.value
-  }
+  const results_json = buildResultsJson()
 
   try {
     const token = localStorage.getItem('authToken')

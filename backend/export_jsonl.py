@@ -75,6 +75,12 @@ def export_ratings_to_jsonl(test_id: int, output_path: str):
                 if 'post_scene' in rating_data:
                     item_copy['post_scene'] = rating_data['post_scene']
                 
+                # Merge evaluation and comments if present
+                if 'evaluation' in rating_data:
+                    item_copy['evaluation'] = rating_data['evaluation']
+                if 'comments' in rating_data:
+                    item_copy['comments'] = rating_data['comments']
+                
                 # Case A: Dialog/conversation structure
                 # Find dialogue keys in original and rating data (even if they differ, e.g. dialogue vs conversation)
                 orig_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in item_copy and isinstance(item_copy[k], list)), None)
