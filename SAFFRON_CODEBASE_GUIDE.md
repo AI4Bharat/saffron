@@ -1,6 +1,6 @@
 # Saffron Codebase & Tech Stack Guide (Expanded)
 
-This document provides a comprehensive technical walkthrough of the **Saffron** project architecture, detailing the technology stack, database schemas, REST API endpoints, user authentication, Prolific integration, data merge operations, and the implementation details of the new `conversation-editable` task type.
+This document provides a comprehensive technical walkthrough of the **Saffron** project architecture, detailing the technology stack, database schemas, REST API endpoints, user authentication, Prolific integration, data merge operations, the implementation details of the new `conversation-editable` task type, and the step-by-step execution flow across both backend and frontend.
 
 ---
 
@@ -196,3 +196,66 @@ The `conversation-editable` task combines dialogue quality evaluation with trans
   - Preserves evaluation metrics (`"evaluation"`, `"comments"`) in exported lines if they were supplied, making sure no rating metadata is discarded during other task exports.
 - **`export_all_results.py`** (Bulk Exporter):
   - Maps `conversation-editable` type tests to run the updated dialogue exporter.
+
+---
+
+## 7. Step-by-Step Code Flow: Backend & Frontend
+
+This section traces the execution path from the moment an annotator begins a task to the final JSONL results file export.
+
+### Flow A: Registered User Authentication
+1. **Frontend Request**: Rater inputs username/password on the login page. The browser triggers `POST /api/login`.
+2. **Backend Authenticates**: The Flask backend captures the parameters in `views.py:login()` and matches them against the database `Rater` table. On match, it encodes username details into a JWT token using `generate_token(username)` with a 24-hour expiration.
+3. **Frontend Token Storage**: The frontend captures the JSON response, stores the token as `'authToken'` in `localStorage`, and redirects the route to the task listing panel.
+
+### Flow B: Prolific Anonymous User Onboarding
+1. **Initial Access**: The Prolific platform redirects participants to the saffron frontend with query parameters, e.g. `/?PROLIFIC_PID=P123&STUDY_ID=S456&SESSION_ID=SE789`.
+2. **Dynamic Route Load**: The Vue Router maps these arguments and loads `DynamicTestView.vue`.
+3. **Fetch Config**: During the `onMounted` lifecycle hook, the component dispatches a `GET` request to `GET /api/prolific/study?PROLIFIC_PID=P123&STUDY_ID=S456&SESSION_ID=SE789`.
+4. **Backend Auto-Registration**:
+   - `views.py:get_test_for_prolific_user()` checks if a `Rater` with `email=PROLIFIC_PID` exists. If not, it creates a new row with a hashed random password.
+   - It fetches the linked study record, checks the session status, and reads the linked test data.
+   - Merges existing ratings (see **Flow C** below).
+   - Randomizes the list of remaining unrated tasks using a deterministic seed `f"saffron_{rater_id}_{test_id}"`. This guarantees the rater experiences a stable, shuffled page order across refreshes.
+   - Returns a response payload consisting of the test sequence, JWT token, and prolific redirection details.
+5. **Consent Interceptor**: The browser intercepts the response, saves the token to local storage, and prompts the user with `ConsentForm.vue` before displaying the tasks.
+
+### Flow C: Task Loading and Rating Merging
+1. **Routing to Task**: The rater selects a task. The frontend requests `GET /api/test/<test_id>` (or uses the already fetched data from the Prolific endpoint).
+2. **Database Querying**: The backend queries the `Test` record by ID, fetching the array of task dicts stored under `Test.json_entry`. It also queries the `Rating` table for all ratings belonging to the current `(rater_id, test_id)`.
+3. **Merging Loop**:
+   - Flask loops through each dict inside the `json_entry` list.
+   - It references the task item ID (`entry['id']`).
+   - If an existing rating is found, the server sets `completion_status = rating.completion_status` and merges any corrected text (like pre_scene, post_scene, and dialogue modifications) from `results_json` into the task object.
+   - If no rating is found, it initializes the status as `'uncompleted'`.
+4. **Component Initialization**: The frontend receives the list. It determines the active component using `<component :is="currentTestComponent">` matching on `test_type`.
+5. **Component setupState**:
+   - The active component (e.g. `ConversationEvaluation.vue`) runs `setupState()`, storing initial fields in reactive variables (`sceneState`, `conversationState`).
+   - If `testType === 'conversation-editable'`, fields bind to textareas, giving the annotator the ability to edit.
+
+### Flow D: Annotation Saving & Submission
+1. **User Interaction**: The rater updates dialogue turns or scene narrative inputs. They make the Accept/Reject evaluation choice and enter reasoning comments.
+2. **Constructing Payload**: Clicking "Save Draft" or "Submit & Next" starts the submission flow. The component constructs the payload:
+   - Calculates the elapsed time on page (`Date.now() - startTime`).
+   - Runs `buildResultsJson()` to construct a clean JSON state.
+3. **Sending POST**: The component dispatches a `POST` request to `/api/ratings`.
+4. **Backend Transaction**:
+   - `views.py:create_rating()` checks that the test isn't locked by another annotator.
+   - It checks the database to see if a rating already exists for the key combination `(rater_id, test_id, page_no_progress)`.
+   - **Update Case**: If a record exists, it updates the `results_json`, `time_taken_to_submit`, and sets the completion status to `'completed'`, `'skipped'`, or `'saved'`.
+   - **Insert Case**: If no record exists, it inserts a new `Rating` row.
+   - The transaction commits, returning success to the client.
+5. **UI Transition**: The frontend catches the success signal, updates the sidebar status color (Green for Done, Yellow for Saved, etc.), and shifts the active index to the next task.
+
+### Flow E: Campaign Exporting
+1. **Command Line Initiation**: The administrator initiates the export: `python export_all_results.py`.
+2. **Script Execution**:
+   - The script pulls all `Test` records.
+   - Depending on the `test_type`, it selects the corresponding exporter script (`export_conversations.py` or `export_jsonl.py`).
+3. **Export Filtering and Processing**:
+   - The exporter script fetches the original configuration items list from `Test.json_entry`.
+   - It queries the `Rating` table, grabbing all ratings marked as `completed` or `skipped`.
+   - It groups ratings in memory by task ID (`page_no_progress`), keeping the latest record based on `time_of_submission`.
+   - For each original configuration item, it matches the latest annotation and overwrites corrected scenes, corrected dialogue turns, evaluations, and comments.
+   - It sanitizes the output dictionary, dropping temporary helper keys (such as `english` context lines).
+4. **File Output**: The script encodes the sanitized dict array to standard JSON lines (one JSON per line) and saves the export file to `/root/saffron/backend/exports/`.
