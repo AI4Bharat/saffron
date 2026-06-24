@@ -14,7 +14,7 @@ CONVERSATIONS_DIRS = [
     "/root/saffron/backend/conversation_editable_tasks"
 ]
 
-def format_description(filename):
+def format_description(filename, subfolder=None):
     # Strip extension
     base = os.path.splitext(filename)[0]
     if base.startswith("conversations_"):
@@ -45,7 +45,11 @@ def format_description(filename):
     grade = " ".join(grade_tokens).title()
     
     suffix = "Editable"
-    return f"Conversation {suffix} - {lang} - {persona} - {grade}"
+    desc = f"Conversation {suffix} - {lang} - {persona} - {grade}"
+    if subfolder:
+        clean_subfolder = subfolder.replace("_", " ").replace("-", " ").replace("/", " / ").title()
+        desc += f" - {clean_subfolder}"
+    return desc
 
 def load_jsonl(path):
     data = []
@@ -77,8 +81,21 @@ def main():
         print(f"Error: Neither of editable conversation directories exists: {CONVERSATIONS_DIRS}")
         sys.exit(1)
         
-    files = sorted([f for f in os.listdir(conversations_dir) if f.endswith(".jsonl")])
-    print(f"Found {len(files)} JSONL files in {conversations_dir}.")
+    # Walk recursively to find all jsonl files
+    files_to_load = []
+    for root, dirs, files in os.walk(conversations_dir):
+        # Sort files to guarantee consistent order
+        for file in sorted(files):
+            if file.endswith(".jsonl"):
+                rel_dir = os.path.relpath(root, conversations_dir)
+                subfolder = None if rel_dir == "." else rel_dir
+                file_path = os.path.join(root, file)
+                files_to_load.append((file_path, file, subfolder))
+                
+    # Sort files_to_load by subfolder and filename for predictability
+    files_to_load.sort(key=lambda x: (x[2] or "", x[1]))
+    
+    print(f"Found {len(files_to_load)} JSONL files in {conversations_dir} (including subdirectories).")
     
     with app.app_context():
         # Get existing descriptions to prevent duplicates
@@ -88,9 +105,8 @@ def main():
         created_count = 0
         skipped_count = 0
         
-        for file in files:
-            file_path = os.path.join(conversations_dir, file)
-            description = format_description(file)
+        for file_path, file, subfolder in files_to_load:
+            description = format_description(file, subfolder)
             
             if description in existing_descriptions:
                 print(f"[SKIP] Test '{description}' already exists.")
