@@ -194,7 +194,7 @@
         <div class="card shadow-sm border mb-4">
           <div class="card-header bg-white py-3 border-bottom-0">
             <div class="row g-3 align-items-center">
-              <div class="col-12 col-lg-4">
+              <div class="col-12 col-lg-3">
                 <h3 class="fw-bold text-dark m-0 d-inline-flex align-items-center flex-wrap gap-2">
                   Test Batches Progress
                   <span v-if="batchAttentionFilter" class="badge attention-chip rounded-pill">
@@ -203,13 +203,19 @@
                   </span>
                 </h3>
               </div>
-              <div class="col-12 col-sm-4 col-lg-3">
+              <div class="col-12 col-sm-6 col-md-3 col-lg-2">
                 <select v-model="batchLanguageFilter" class="form-select">
                   <option value="">All Languages</option>
                   <option v-for="lang in uniqueLanguages" :key="lang" :value="lang">{{ lang }}</option>
                 </select>
               </div>
-              <div class="col-12 col-sm-4 col-lg-2">
+              <div class="col-12 col-sm-6 col-md-3 col-lg-2">
+                <select v-model="batchTestTypeFilter" class="form-select">
+                  <option value="">All Test Types</option>
+                  <option v-for="type in uniqueTestTypes" :key="type" :value="type">{{ formatTestType(type) }}</option>
+                </select>
+              </div>
+              <div class="col-12 col-sm-6 col-md-3 col-lg-2">
                 <input 
                   v-model="batchSearchQuery" 
                   type="text" 
@@ -217,7 +223,7 @@
                   placeholder="Search batches..." 
                 />
               </div>
-              <div class="col-12 col-sm-4 col-lg-3">
+              <div class="col-12 col-sm-6 col-md-3 col-lg-3">
                 <div class="input-group">
                   <input 
                     type="number" 
@@ -257,7 +263,7 @@
                     <span class="badge rounded-pill bg-light text-dark border">{{ test.language }}</span>
                   </td>
                   <td>
-                    <span class="text-secondary text-xs">{{ test.test_type }}</span>
+                    <span class="text-secondary text-xs text-capitalize">{{ formatTestType(test.test_type) }}</span>
                   </td>
                   <td>
                     <div class="d-flex align-items-center gap-2">
@@ -487,7 +493,7 @@
             <!-- Search batches -->
             <div class="input-group mb-2">
               <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
-              <input v-model="assignSearch" type="text" class="form-control border-start-0 ps-0" placeholder="Search batches by ID, description or language..." />
+              <input v-model="assignSearch" type="text" class="form-control border-start-0 ps-0" placeholder="Search batches by ID, description, language or test type..." />
             </div>
 
             <!-- Batch list -->
@@ -595,6 +601,7 @@ const error = ref(null)
 // Filters & Search
 const batchSearchQuery = ref('')
 const batchLanguageFilter = ref('')
+const batchTestTypeFilter = ref('')
 const raterSearchQuery = ref('')
 const raterStatusFilter = ref('')
 const showAllRaters = ref(true)
@@ -883,6 +890,17 @@ const uniqueLanguages = computed(() => {
   return [...new Set(langs)].sort()
 })
 
+// Test Types filter list
+const uniqueTestTypes = computed(() => {
+  const types = tests.value.map(t => t.test_type).filter(Boolean)
+  return [...new Set(types)].sort()
+})
+
+const formatTestType = (type) => {
+  if (!type) return ''
+  return type.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
+}
+
 // Needs-Attention groupings (Overview)
 const unassignedBatches = computed(() => tests.value.filter(t => !taskOwnerMap.value[t.id]))
 const stalledBatches = computed(() => tests.value.filter(t => (t.unique_completed_tasks || 0) === 0))
@@ -897,6 +915,10 @@ const filteredTests = computed(() => {
 
   if (batchLanguageFilter.value) {
     list = list.filter(t => t.language === batchLanguageFilter.value)
+  }
+
+  if (batchTestTypeFilter.value) {
+    list = list.filter(t => t.test_type === batchTestTypeFilter.value)
   }
 
   if (batchSearchQuery.value) {
@@ -1004,7 +1026,8 @@ const assignableTests = computed(() => {
     list = list.filter(t =>
       String(t.id).includes(q) ||
       (t.description || '').toLowerCase().includes(q) ||
-      (t.language || '').toLowerCase().includes(q)
+      (t.language || '').toLowerCase().includes(q) ||
+      (t.test_type || '').toLowerCase().includes(q)
     )
   }
   // Selected batches first, then by id ascending.

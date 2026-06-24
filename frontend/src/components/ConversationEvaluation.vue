@@ -51,15 +51,37 @@
           <div class="d-flex align-items-start gap-2">
             <i class="bi bi-info-circle-fill text-primary fs-5 mt-0.5"></i>
             <div class="w-100">
-              <span class="text-uppercase fw-bold text-secondary tracking-wider fs-9 d-block mb-1">Pre-Scene Narrative</span>
-              <textarea
-                v-if="isEditable"
-                v-model="sceneState.pre_scene"
-                v-auto-grow
-                class="form-control correction-textarea shadow-inner border-2 w-100"
-                rows="2"
-                placeholder="Edit pre-scene narrative..."
-              ></textarea>
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="text-uppercase fw-bold text-secondary tracking-wider fs-9">Pre-Scene Narrative</span>
+                <button
+                  v-if="isEditable"
+                  type="button"
+                  class="btn btn-sm btn-outline-secondary py-0.5 px-2 fs-9"
+                  title="Reset to original pre-scene narrative"
+                  :disabled="!isSceneModified('pre_scene')"
+                  @click="resetText('pre_scene')"
+                >
+                  <i class="bi bi-arrow-counterclockwise me-1"></i> Reset
+                </button>
+              </div>
+              <div v-if="isEditable">
+                <textarea
+                  v-model="sceneState.pre_scene"
+                  v-auto-grow
+                  class="form-control correction-textarea shadow-inner border-2 w-100"
+                  rows="2"
+                  placeholder="Edit pre-scene narrative..."
+                ></textarea>
+                <div class="d-flex justify-content-between align-items-center mt-2 fs-7">
+                  <span v-if="isSceneModified('pre_scene')" class="text-warning">
+                    <i class="bi bi-pencil-fill me-1"></i> Modified
+                  </span>
+                  <span v-else class="text-success-emphasis">
+                    <i class="bi bi-check-circle-fill me-1"></i> Original
+                  </span>
+                  <span class="text-muted">{{ sceneState.pre_scene?.length || 0 }} chars</span>
+                </div>
+              </div>
               <p v-else class="mb-0 fs-6 text-dark fw-medium leading-relaxed">{{ currentTest.pre_scene }}</p>
             </div>
           </div>
@@ -124,16 +146,38 @@
                 <span class="fw-bold fs-7" :class="turn.speaker === 'teacher' ? 'text-primary' : 'text-success'">
                   {{ getSpeakerName(turn) }} &mdash; {{ turn.speaker === 'teacher' ? 'Teacher' : 'Student' }}
                 </span>
-                <span class="badge bg-light text-muted border fs-9">Turn {{ turn.turn_index }}</span>
+                <div class="d-flex align-items-center gap-2">
+                  <button
+                    v-if="isEditable"
+                    type="button"
+                    class="btn btn-sm btn-outline-secondary py-0.5 px-2 fs-9"
+                    title="Reset to original text"
+                    :disabled="!isTurnModified(idx)"
+                    @click="resetTurn(idx)"
+                  >
+                    <i class="bi bi-arrow-counterclockwise me-1"></i> Reset
+                  </button>
+                  <span class="badge bg-light text-muted border fs-9">Turn {{ turn.turn_index }}</span>
+                </div>
               </div>
-              <textarea
-                v-if="isEditable"
-                v-model="turn.text"
-                v-auto-grow
-                class="form-control correction-textarea shadow-inner border-2 w-100"
-                rows="2"
-                placeholder="Edit dialogue text..."
-              ></textarea>
+              <div v-if="isEditable">
+                <textarea
+                  v-model="turn.text"
+                  v-auto-grow
+                  class="form-control correction-textarea shadow-inner border-2 w-100"
+                  rows="2"
+                  placeholder="Edit dialogue text..."
+                ></textarea>
+                <div class="d-flex justify-content-between align-items-center mt-2 fs-7">
+                  <span v-if="isTurnModified(idx)" class="text-warning">
+                    <i class="bi bi-pencil-fill me-1"></i> Modified
+                  </span>
+                  <span v-else class="text-success-emphasis">
+                    <i class="bi bi-check-circle-fill me-1"></i> Original
+                  </span>
+                  <span class="text-muted">{{ turn.text?.length || 0 }} chars</span>
+                </div>
+              </div>
               <p v-else class="mb-0 fs-6 text-dark leading-relaxed">{{ turn.text }}</p>
             </div>
           </div>
@@ -165,15 +209,37 @@
         <div class="d-flex align-items-start gap-2">
           <i class="bi bi-flag-fill text-secondary fs-5 mt-0.5"></i>
           <div class="w-100">
-            <span class="text-uppercase fw-bold text-secondary tracking-wider fs-9 d-block mb-1">Post-Scene Narrative</span>
-            <textarea
-              v-if="isEditable"
-              v-model="sceneState.post_scene"
-              v-auto-grow
-              class="form-control correction-textarea shadow-inner border-2 w-100"
-              rows="2"
-              placeholder="Edit post-scene narrative..."
-            ></textarea>
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <span class="text-uppercase fw-bold text-secondary tracking-wider fs-9">Post-Scene Narrative</span>
+              <button
+                v-if="isEditable"
+                type="button"
+                class="btn btn-sm btn-outline-secondary py-0.5 px-2 fs-9"
+                title="Reset to original post-scene narrative"
+                :disabled="!isSceneModified('post_scene')"
+                @click="resetText('post_scene')"
+              >
+                <i class="bi bi-arrow-counterclockwise me-1"></i> Reset
+              </button>
+            </div>
+            <div v-if="isEditable">
+              <textarea
+                v-model="sceneState.post_scene"
+                v-auto-grow
+                class="form-control correction-textarea shadow-inner border-2 w-100"
+                rows="2"
+                placeholder="Edit post-scene narrative..."
+              ></textarea>
+              <div class="d-flex justify-content-between align-items-center mt-2 fs-7">
+                <span v-if="isSceneModified('post_scene')" class="text-warning">
+                  <i class="bi bi-pencil-fill me-1"></i> Modified
+                </span>
+                <span v-else class="text-success-emphasis">
+                  <i class="bi bi-check-circle-fill me-1"></i> Original
+                </span>
+                <span class="text-muted">{{ sceneState.post_scene?.length || 0 }} chars</span>
+              </div>
+            </div>
             <p v-else class="mb-0 fs-6 text-dark fw-medium leading-relaxed">{{ currentTest.post_scene }}</p>
           </div>
         </div>
@@ -393,11 +459,16 @@ function setupState() {
   // Initialize editable pre_scene and post_scene states
   sceneState.value = {
     pre_scene: props.currentTest.pre_scene || '',
-    post_scene: props.currentTest.post_scene || ''
+    _orig_pre_scene: props.currentTest.pre_scene || '',
+    post_scene: props.currentTest.post_scene || '',
+    _orig_post_scene: props.currentTest.post_scene || ''
   }
 
   const originalTurns = props.currentTest.dialogue || props.currentTest.conversation || props.currentTest.turns || []
-  conversationState.value = originalTurns.map(turn => ({ ...turn }))
+  conversationState.value = originalTurns.map(turn => ({
+    ...turn,
+    _originalText: turn.text || ''
+  }))
 
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
@@ -461,6 +532,36 @@ function getVoiceDirection(turnIndex) {
   return props.currentTest[key] || 'No specific voice direction.';
 }
 
+function resetText(field) {
+  if (field === 'pre_scene') {
+    sceneState.value.pre_scene = sceneState.value._orig_pre_scene
+  } else if (field === 'post_scene') {
+    sceneState.value.post_scene = sceneState.value._orig_post_scene
+  }
+}
+
+function isSceneModified(field) {
+  if (field === 'pre_scene') {
+    return sceneState.value.pre_scene !== sceneState.value._orig_pre_scene
+  } else if (field === 'post_scene') {
+    return sceneState.value.post_scene !== sceneState.value._orig_post_scene
+  }
+  return false
+}
+
+function resetTurn(index) {
+  const turn = conversationState.value[index]
+  if (turn) {
+    turn.text = turn._originalText
+  }
+}
+
+function isTurnModified(index) {
+  const turn = conversationState.value[index]
+  if (!turn) return false
+  return turn.text !== turn._originalText
+}
+
 function selectEvaluation(val) {
   evaluation.value = val;
 }
@@ -519,7 +620,11 @@ async function handleSkip() {
 }
 
 function buildResultsJson() {
-  const cleanTurns = conversationState.value.map(turn => ({ ...turn }))
+  const cleanTurns = conversationState.value.map(turn => {
+    const cleanTurn = { ...turn }
+    delete cleanTurn._originalText
+    return cleanTurn
+  })
   
   let dialogueKey = 'conversation'
   if ('dialogue' in props.currentTest) {
