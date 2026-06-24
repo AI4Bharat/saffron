@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import argparse
+import re
 
 # Add backend directory to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -10,16 +11,30 @@ from application.database import db
 from application.models import Test, Rating
 from main import app
 
-def export_conversation_ratings(test_id: int, output_path: str, only_accepted: bool = False):
+# ----------------------------------------------------
+# CONFIGURATION (Edit these variables directly in code)
+# ----------------------------------------------------
+TEST_IDS = [20146]  # List of Test IDs to export
+OUTPUT_DIR = "/root/saffron/backend/exports"  # Directory where JSONL files will be saved
+# ----------------------------------------------------
+
+def slugify(text):
+    text = text.lower()
+    text = re.sub(r'[^a-z0-9_ -]', '', text)
+    text = re.sub(r'\s+', '_', text)
+    text = re.sub(r'-+', '_', text)
+    return text.strip('_')
+
+def export_conversation_ratings(test_id: int, output_path: str, only_accepted: bool = False, comments_filter: str = 'all'):
     with app.app_context():
         # 1. Fetch the original test
         test = Test.query.get(test_id)
         if not test:
             print(f"Error: Test ID {test_id} not found.")
-            sys.exit(1)
+            return
             
-        if test.test_type != "conversation-evaluation":
-            print(f"Warning: Test ID {test_id} has type '{test.test_type}', not 'conversation-evaluation'.")
+        if test.test_type not in ["conversation-evaluation", "conversation-editable"]:
+            print(f"Warning: Test ID {test_id} has type '{test.test_type}', not a conversation type.")
             
         original_items = test.json_entry
         if not isinstance(original_items, list):
@@ -73,8 +88,15 @@ def export_conversation_ratings(test_id: int, output_path: str, only_accepted: b
                 evaluation = rating_data.get('evaluation')
                 comments = rating_data.get('comments')
                 
-                # Check for filtering
+                # Check for evaluation filtering
                 if only_accepted and evaluation != 'accept':
+                    continue
+                    
+                # Check for comments filtering
+                has_comments = bool(comments and str(comments).strip())
+                if comments_filter == 'with' and not has_comments:
+                    continue
+                if comments_filter == 'without' and has_comments:
                     continue
                     
                 item_copy['evaluation'] = evaluation
@@ -101,8 +123,9 @@ def export_conversation_ratings(test_id: int, output_path: str, only_accepted: b
                                 if k not in ['role', 'english', 'english_text', 'original', 'original_text', 'en', 'text_en', 'speaker', 'user']:
                                     orig_turn[k] = v
             else:
-                # No rating found. If we want only accepted ones, skip it.
-                if only_accepted:
+                # No rating found.
+                # If we filter only accepted or only with comments, skip this item.
+                if only_accepted or comments_filter == 'with':
                     continue
                 item_copy['evaluation'] = None
                 item_copy['comments'] = None
@@ -130,16 +153,36 @@ def export_conversation_ratings(test_id: int, output_path: str, only_accepted: b
             for line_item in output_items:
                 out_f.write(json.dumps(line_item, ensure_ascii=False) + '\n')
                 
-        print(f"Successfully exported {len(output_items)} clean annotations to {output_path} (only_accepted={only_accepted})")
+        print(f"Successfully exported {len(output_items)} clean annotations to {output_path} (only_accepted={only_accepted}, comments={comments_filter})")
 
 def main():
-    parser = argparse.ArgumentParser(description="Export conversation evaluation ratings to a JSONL file")
-    parser.add_argument("test_id", type=int, help="The database test ID to export")
-    parser.add_argument("output_path", help="Output path for the JSONL file")
+    parser = argparse.ArgumentParser(description="Export conversation evaluation/editable ratings to JSONL files")
     parser.add_argument("--only-accepted", action="store_true", help="Only output conversations marked as accepted")
+    parser.add_argument("--with-comments", action="store_true", help="Only output conversations that have comments")
+    parser.add_argument("--without-comments", action="store_true", help="Only output conversations that do NOT have comments")
     
     args = parser.parse_args()
-    export_conversation_ratings(args.test_id, args.output_path, args.only_accepted)
+    
+    comments_filter = 'all'
+    if args.with_comments:
+        comments_filter = 'with'
+    elif args.without_comments:
+        comments_filter = 'without'
+        
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    
+    for test_id in TEST_IDS:
+        print(f"\n--- Processing Test ID={test_id} ---")
+        with app.app_context():
+            test = Test.query.get(test_id)
+            if not test:
+                print(f"Error: Test ID {test_id} not found in database. Skipping.")
+                continue
+            desc_slug = slugify(test.description or f"test_{test_id}")
+            filename = f"{test_id}_{test.test_type}_{desc_slug}.jsonl"
+            output_path = os.path.join(OUTPUT_DIR, filename)
+            
+        export_conversation_ratings(test_id, output_path, args.only_accepted, comments_filter)
 
 if __name__ == "__main__":
     main()
