@@ -81,7 +81,7 @@ done
 ```
 
 This compiles files to `/root/saffron/backend/exports/docx/` following the naming convention:
-`<language>_secondary_senior_<persona>.docx` (e.g. `hindi_secondary_senior_calm_explainer.docx`).
+`<language>_<grade_bucket(s)>_<persona>.docx` (e.g. `hindi_elementary_calm_explainer.docx` or `hindi_secondary_reflective_mentor.docx`).
 
 ---
 
