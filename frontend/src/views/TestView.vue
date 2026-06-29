@@ -190,6 +190,7 @@ import { API_BASE_URL } from '@/config';
 import TranslationCorrection from '@/components/TranslationCorrection.vue'
 import SentenceCorrection from '@/components/SentenceCorrection.vue'
 import ConversationEvaluation from '@/components/ConversationEvaluation.vue'
+import AudioSegmentation from '@/components/AudioSegmentation.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -242,6 +243,7 @@ const currentTestComponent = computed(() => {
     'sentence-correction': SentenceCorrection,
     'conversation-evaluation': ConversationEvaluation,
     'conversation-editable': ConversationEvaluation,
+    'audio-segmentation': AudioSegmentation,
   }
 
   return testComponents[data.value.test_type]

@@ -81,6 +81,15 @@ def get_remaining_time(rater_id, study_id):
 def index():
     return "API is running"
 
+
+@app.route('/api/audio/<path:filename>', methods=['GET'])
+def serve_audio(filename):
+    import os
+    from flask import send_from_directory
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    audio_dir = os.path.join(base_dir, 'audio_segmentation')
+    return send_from_directory(audio_dir, filename)
+
 # =====================
 # CRUD Rater 
 # =====================
@@ -258,6 +267,12 @@ def get_test(current_user, test_id):
                     sample_copy['evaluation'] = rating_data['evaluation']
                 if 'comments' in rating_data:
                     sample_copy['comments'] = rating_data['comments']
+                if 'transcript' in rating_data:
+                    sample_copy['transcript'] = rating_data['transcript']
+                if 'rejection_reasons' in rating_data:
+                    sample_copy['rejection_reasons'] = rating_data['rejection_reasons']
+                if 'custom_rejection_reason' in rating_data:
+                    sample_copy['custom_rejection_reason'] = rating_data['custom_rejection_reason']
 
                 orig_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in sample_copy and isinstance(sample_copy[k], list)), None)
                 rated_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in rating_data and isinstance(rating_data[k], list)), None)
@@ -603,6 +618,12 @@ def get_test_for_prolific_user():
                     sample_copy['evaluation'] = rating_data['evaluation']
                 if 'comments' in rating_data:
                     sample_copy['comments'] = rating_data['comments']
+                if 'transcript' in rating_data:
+                    sample_copy['transcript'] = rating_data['transcript']
+                if 'rejection_reasons' in rating_data:
+                    sample_copy['rejection_reasons'] = rating_data['rejection_reasons']
+                if 'custom_rejection_reason' in rating_data:
+                    sample_copy['custom_rejection_reason'] = rating_data['custom_rejection_reason']
 
                 orig_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in sample_copy and isinstance(sample_copy[k], list)), None)
                 rated_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in rating_data and isinstance(rating_data[k], list)), None)

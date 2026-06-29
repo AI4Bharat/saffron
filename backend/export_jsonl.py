@@ -80,6 +80,14 @@ def export_ratings_to_jsonl(test_id: int, output_path: str):
                     item_copy['evaluation'] = rating_data['evaluation']
                 if 'comments' in rating_data:
                     item_copy['comments'] = rating_data['comments']
+
+                # Merge audio-segmentation tasks if present
+                if 'transcript' in rating_data:
+                    item_copy['transcript'] = rating_data['transcript']
+                if 'rejection_reasons' in rating_data:
+                    item_copy['rejection_reasons'] = rating_data['rejection_reasons']
+                if 'custom_rejection_reason' in rating_data:
+                    item_copy['custom_rejection_reason'] = rating_data['custom_rejection_reason']
                 
                 # Case A: Dialog/conversation structure
                 # Find dialogue keys in original and rating data (even if they differ, e.g. dialogue vs conversation)
