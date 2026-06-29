@@ -26,7 +26,6 @@
                 <li><span class="keys"><kbd>2</kbd></span><span class="desc">Select Reject (opens reasons popup)</span></li>
                 <li><span class="keys"><kbd>Space</kbd></span><span class="desc">Play / Pause Audio (when not typing)</span></li>
                 <li><span class="keys"><kbd>Ctrl</kbd><span class="plus">+</span><kbd>Enter</kbd></span><span class="desc">Submit &amp; next task</span></li>
-                <li><span class="keys"><kbd>Ctrl</kbd><span class="plus">+</span><kbd>S</kbd></span><span class="desc">Save progress draft</span></li>
               </ul>
               <p class="text-muted fs-9 mb-0">On macOS, use <kbd>⌘ Cmd</kbd> in place of <kbd>Ctrl</kbd>.</p>
             </div>
@@ -311,17 +310,6 @@
         
         <!-- Center Actions -->
         <div class="d-flex gap-3 w-100 w-sm-auto justify-content-center flex-wrap">
-          <!-- Save Draft -->
-          <button
-            class="btn btn-warning px-4 py-2.5 rounded-pill d-flex align-items-center gap-2 transition-all hover-translate text-dark fw-medium"
-            :disabled="isSubmitting || isSaving"
-            @click="handleSave"
-          >
-            <span v-if="isSaving" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-            <i v-else class="bi bi-bookmark-fill"></i>
-            Save Draft
-          </button>
-
           <!-- Skip Task -->
           <button
             class="btn btn-outline-warning px-4 py-2.5 rounded-pill d-flex align-items-center gap-2 transition-all hover-translate"
@@ -348,11 +336,9 @@
       <!-- Validation warning alerts -->
       <div v-if="!isValid" class="text-danger text-center small mt-3">
         <i class="bi bi-exclamation-triangle-fill me-1"></i>
-        Please evaluate this item (Accept or Reject) before submitting.
-      </div>
-      <div v-if="evaluation === 'reject' && rejectionReasons.length === 0" class="text-danger text-center small mt-1">
-        <i class="bi bi-exclamation-triangle-fill me-1"></i>
-        Please check at least one rejection reason.
+        <span v-if="!evaluation">Please evaluate this item (Accept or Reject) before submitting.</span>
+        <span v-else-if="evaluation === 'reject' && rejectionReasons.length === 0">Please check at least one rejection reason.</span>
+        <span v-else-if="evaluation === 'reject' && (!comments || !comments.trim())">Please enter an evaluation comment explaining why you rejected (compulsory).</span>
       </div>
     </div>
 
@@ -547,7 +533,10 @@ const isTranscriptModified = computed(() => {
 const isValid = computed(() => {
   const hasSelectedEval = evaluation.value === 'accept' || evaluation.value === 'reject'
   if (!hasSelectedEval) return false
-  if (evaluation.value === 'reject' && rejectionReasons.value.length === 0) return false
+  if (evaluation.value === 'reject') {
+    if (rejectionReasons.value.length === 0) return false
+    if (!comments.value || !comments.value.trim()) return false
+  }
   return true
 })
 
@@ -856,13 +845,10 @@ async function handleSubmit() {
 function onKeydown(e) {
   // Ignore shortcuts when editing text inputs
   if (document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') {
-    // Standard submit combinations: Ctrl/Cmd + Enter or Ctrl/Cmd + S
+    // Standard submit combinations: Ctrl/Cmd + Enter
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault()
       if (isValid.value) handleSubmit()
-    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-      e.preventDefault()
-      handleSave()
     }
     return
   }
@@ -884,9 +870,6 @@ function onKeydown(e) {
     if (e.key === 'Enter') {
       e.preventDefault()
       if (isValid.value) handleSubmit()
-    } else if (e.key.toLowerCase() === 's') {
-      e.preventDefault()
-      handleSave()
     }
   }
 }
