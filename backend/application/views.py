@@ -85,10 +85,62 @@ def index():
 @app.route('/api/audio/<path:filename>', methods=['GET'])
 def serve_audio(filename):
     import os
-    from flask import send_from_directory
+    import re
+    from flask import request, Response
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     audio_dir = os.path.join(base_dir, 'audio_segmentation')
-    return send_from_directory(audio_dir, filename)
+    filepath = os.path.join(audio_dir, filename)
+    
+    if not os.path.exists(filepath):
+        return "File not found", 404
+        
+    file_size = os.path.getsize(filepath)
+    range_header = request.headers.get('Range', None)
+    
+    if not range_header:
+        def stream_full():
+            with open(filepath, 'rb') as f:
+                while True:
+                    chunk = f.read(81920)
+                    if not chunk:
+                        break
+                    yield chunk
+        rv = Response(stream_full(), 200, mimetype='audio/wav', direct_passthrough=True)
+        rv.headers.add('Content-Length', str(file_size))
+        rv.headers.add('Accept-Ranges', 'bytes')
+        return rv
+
+    match = re.match(r'bytes=(\d+)-(\d*)', range_header)
+    if not match:
+        return "Invalid Range", 400
+        
+    start = int(match.group(1))
+    end = match.group(2)
+    end = int(end) if end else file_size - 1
+    
+    if start >= file_size:
+        return "Range Not Satisfiable", 416
+        
+    length = end - start + 1
+    
+    def stream_range(start_byte, length_bytes):
+        with open(filepath, 'rb') as f:
+            f.seek(start_byte)
+            remaining = length_bytes
+            while remaining > 0:
+                chunk_size = min(81920, remaining)
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+                
+    rv = Response(stream_range(start, length), 206, mimetype='audio/wav', direct_passthrough=True)
+    rv.headers.add('Content-Range', f'bytes {start}-{end}/{file_size}')
+    rv.headers.add('Content-Length', str(length))
+    rv.headers.add('Accept-Ranges', 'bytes')
+    return rv
+
 
 # =====================
 # CRUD Rater 
