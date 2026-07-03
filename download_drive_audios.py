@@ -12,11 +12,11 @@ Uses direct curl downloads for fast and reliable downloads, bypassing gdown page
 # ==============================================================================
 # 1. Define the destination directory where files will be saved.
 #    You can specify an absolute or relative path.
-DOWNLOAD_DIR = "/root/saffron/backend/audio_segmentation/set1"
+DOWNLOAD_DIR = "/root/saffron/backend/audio_segmentation/set3"
 
 # 2. Paste your Google Drive folder or file link here.
 #    Ensure the link sharing is set to "Anyone with the link".
-DRIVE_LINK = "https://drive.google.com/drive/folders/1N8OPTK4GZAWDWhSBIZnG19fdyBi_4Q9K?usp=drive_link"
+DRIVE_LINK = "https://drive.google.com/drive/folders/1BKkmR7jCWbIO-CjaaK24uZ0vL5GoDxV7?usp=sharing"
 # ==============================================================================
 
 import os

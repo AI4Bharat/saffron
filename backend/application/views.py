@@ -1046,6 +1046,20 @@ def export_csv(current_user, test_id):
                 'Evaluation Decision',
                 'Comments'
             ]
+        elif test.test_type == 'audio-segmentation':
+            headers += [
+                'Speaker',
+                'Role',
+                'Language',
+                'Persona',
+                'Audio Filename',
+                'Original Transcript',
+                'Corrected Transcript',
+                'Evaluation Decision',
+                'Rejection Reasons',
+                'Custom Rejection Reason',
+                'Comments'
+            ]
         elif test.test_type == 'translation-correction':
             headers += [
                 'Original Pre-scene',
@@ -1123,6 +1137,23 @@ def export_csv(current_user, test_id):
                     dialogue_readable,
                     res_json.get('evaluation', ''),
                     res_json.get('comments', '')
+                ]
+            elif test.test_type == 'audio-segmentation':
+                rejection_reasons_str = ""
+                if isinstance(res_json.get('rejection_reasons'), list):
+                    rejection_reasons_str = ", ".join(res_json.get('rejection_reasons'))
+                row += [
+                    orig_item.get('speaker') or "",
+                    orig_item.get('role') or "",
+                    orig_item.get('language') or "",
+                    orig_item.get('persona') or "",
+                    orig_item.get('audio_filename') or "",
+                    orig_item.get('transcript') or "",
+                    res_json.get('transcript') or "",
+                    res_json.get('evaluation') or "",
+                    rejection_reasons_str,
+                    res_json.get('custom_rejection_reason') or "",
+                    res_json.get('comments') or ""
                 ]
             elif test.test_type == 'translation-correction':
                 orig_pre = orig_item.get('pre_scene_en') or orig_item.get('pre_scene') or ""

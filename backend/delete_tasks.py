@@ -18,7 +18,7 @@ from application.models import Test, Study, Session, Rating, Consent
 #   For multiple tasks:   TASK_IDS = [1, 2, 3]
 # 
 # Leave it empty to prevent any action.
-TASK_IDS = [20503]
+TASK_IDS = [20500,20502,20501]
 
 # DRY RUN MODE (Safe Mode):
 # If True, the script will only scan and list what records would be deleted.

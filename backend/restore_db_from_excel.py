@@ -86,6 +86,7 @@ def restore_from_excel(input_path):
                     email=row['email'],
                     age=int(row['age']),
                     gender=row['gender'],
+                    assigned_tasks=row.get('assigned_tasks') if ('assigned_tasks' in row and not pd.isna(row.get('assigned_tasks'))) else '',
                     password=row['password']
                 )
                 db.session.add(rater)
