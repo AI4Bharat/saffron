@@ -1316,11 +1316,22 @@ def get_admin_dashboard(current_user):
             unique_completed = len({r.page_no_progress for r in test_ratings if r.page_no_progress and r.completion_status in ['completed', 'skipped']})
             total_submissions = len([r for r in test_ratings if r.completion_status in ['completed', 'skipped']])
             
+            # Parse version from description
+            version = ""
+            version_match = re.search(r"version\s*([0-9a-zA-Z_-]+)", desc, re.IGNORECASE)
+            if version_match:
+                version = f"Version {version_match.group(1)}"
+            elif "new version" in desc_lower:
+                version = "New Version"
+            else:
+                version = "V1 / Default"
+
             tests_data.append({
                 'id': test.id,
                 'description': desc,
                 'test_type': test.test_type,
                 'language': lang,
+                'version': version,
                 'total_tasks': total_tasks,
                 'unique_completed_tasks': unique_completed,
                 'total_submissions': total_submissions

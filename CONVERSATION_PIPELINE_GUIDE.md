@@ -66,22 +66,66 @@ Depending on your data filtering needs, run the exporter using any of the option
 
 You can compile exported JSONL lines into structured Word documents split by persona (e.g. `calm_explainer`, `warm_encourager`, etc.) with cleaned inline LaTeX formulas.
 
-### Command Format
-To generate DOCX reports for a single JSONL file:
-```bash
-/root/saffron/backend/venv/bin/python /root/saffron/backend/generate_docs.py <path_to_jsonl> <output_docx_dir>
+### Configuration
+Open [generate_docs.py](file:///root/saffron/backend/generate_docs.py) and configure your default set number at the top of the script:
+```python
+SET_NUMBER = 1  # Enter the set number here (e.g., 1 for Set1)
 ```
 
-### Bulk Generate Command
-To generate DOCX documents for all JSONL files inside the `exports/` folder:
+### Command Format
+To generate DOCX reports for a single JSONL file or directory:
 ```bash
-for f in /root/saffron/backend/exports/*.jsonl; do
-  /root/saffron/backend/venv/bin/python /root/saffron/backend/generate_docs.py "$f" /root/saffron/backend/exports/docx
+/root/saffron/backend/venv/bin/python /root/saffron/backend/generate_docs.py <path_to_jsonl_or_dir> <output_docx_dir> [options]
+```
+
+### Options
+- `--version` / `-v`: Filter input conversation files by version (e.g. `--version 3` or `--version new_version`).
+- `--set` / `-s`: Override the set number appended to the filename (e.g. `--set 2` or `-s 2`).
+- `--language` / `-l`: Target language to filter conversations (e.g. `--language telugu`).
+- `--start-id`: Starting task ID to filter files (inclusive).
+- `--end-id`: Ending task ID to filter files (inclusive).
+- `--task-ids` / `-t`: Comma-separated list or range of task IDs (e.g. `20179-20186` or `20179,20180`).
+
+### Examples
+
+**Example A: Process a directory with version filtering**
+```bash
+/root/saffron/backend/venv/bin/python /root/saffron/backend/generate_docs.py /root/saffron/backend/conversation_editable_tasks /root/saffron/backend/exports/docx --version 3 --language telugu
+```
+
+**Example B: Override set number via command line**
+```bash
+/root/saffron/backend/venv/bin/python /root/saffron/backend/generate_docs.py /root/saffron/backend/conversation_tasks/conversations_telugu_warm_encourager_elementary.jsonl /root/saffron/backend/exports/docx --set 2 --language telugu
+```
+
+**Example C: Process all Odia files inside a directory at once**
+You can compile all files for a specific language (e.g. Odia) in the directory at once by passing the input folder and filtering by language:
+```bash
+/root/saffron/backend/venv/bin/python /root/saffron/backend/generate_docs.py /root/saffron/backend/conversation_editable_tasks /root/saffron/backend/exports/docx --language odia
+```
+
+**Example D: Bulk generate Odia files using a `for` loop command**
+To loop over and process files containing `odia` inside the `exports/` folder individually:
+```bash
+for f in /root/saffron/backend/exports/*odia*.jsonl; do
+  /root/saffron/backend/venv/bin/python /root/saffron/backend/generate_docs.py "$f" /root/saffron/backend/exports/docx --language odia
 done
 ```
 
-This compiles files to `/root/saffron/backend/exports/docx/` following the naming convention:
-`<language>_<grade_bucket(s)>_<persona>.docx` (e.g. `hindi_elementary_calm_explainer.docx` or `hindi_secondary_reflective_mentor.docx`).
+**Example E: Process Odia Set 1 using Task ID range filtering**
+Extract and compile all exported Odia files belonging to the first set (IDs 20179 to 20186) as Set 1:
+```bash
+/root/saffron/backend/venv/bin/python /root/saffron/backend/generate_docs.py /root/saffron/backend/exports /root/saffron/backend/exports/docx --start-id 20179 --end-id 20186 --set 1 --language odia
+```
+
+**Example F: Process Odia Set 2 using Task ID range filtering**
+Extract and compile all exported Odia files belonging to the second set (IDs 20227 to 20234) as Set 2:
+```bash
+/root/saffron/backend/venv/bin/python /root/saffron/backend/generate_docs.py /root/saffron/backend/exports /root/saffron/backend/exports/docx --start-id 20227 --end-id 20234 --set 2 --language odia
+```
+
+This compiles files following the naming convention:
+`Language_Persona_Set{n}.docx` (e.g. `Telugu_Warm_Encourager_Set1.docx` or `Odia_Calm_Explainer_Set2.docx`).
 
 ---
 

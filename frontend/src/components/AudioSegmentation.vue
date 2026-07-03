@@ -281,7 +281,7 @@
       <!-- General Comments / Rationale textarea -->
       <div class="mt-4">
         <label for="evalComments" class="form-label fw-bold text-dark-emphasis mb-2 d-flex justify-content-between">
-          <span>General Evaluation Comments (Optional)</span>
+          <span>General Evaluation Comments</span>
           <span class="text-muted fs-9">{{ comments?.length || 0 }} chars</span>
         </label>
         <textarea

@@ -172,3 +172,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Saffron temporary backups/tests
+.ui_backup_*
+frontend/.ui_backup_*
+test_direct_download.wav
+test_download

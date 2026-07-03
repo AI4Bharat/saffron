@@ -14,6 +14,80 @@ ILLEGAL_CHARACTERS_RE = re.compile(r'[\000-\010\013\014\016-\037]')
 DEFAULT_LANGUAGE = 'english'
 
 ALLOWED_GRADES = {"secondary", "senior_secondary", "elementary","middle"}
+
+# ---------------------------------------------------------------------------
+# CONFIGURATION
+# ---------------------------------------------------------------------------
+SET_NUMBER = 1
+
+
+def matches_version(file_path, version_query):
+    if not version_query:
+        return True
+    
+    path_lower = file_path.lower()
+    query_lower = str(version_query).strip().lower()
+    
+    if query_lower.isdigit():
+        patterns = [
+            f"version_{query_lower}",
+            f"version{query_lower}",
+            f"/v{query_lower}/",
+            f"_v{query_lower}_",
+            f"v_{query_lower}"
+        ]
+        parts = re.split(r'[/\\_.-]', path_lower)
+        if query_lower in parts or any(p in path_lower for p in patterns):
+            return True
+        return False
+    else:
+        return query_lower in path_lower or query_lower.replace('_', '') in path_lower.replace('_', '')
+
+
+def parse_task_ids(task_ids_str):
+    if not task_ids_str:
+        return None
+    ids = set()
+    for part in task_ids_str.split(','):
+        part = part.strip()
+        if '-' in part:
+            try:
+                start_str, end_str = part.split('-')
+                start_val = int(start_str.strip())
+                end_val = int(end_str.strip())
+                for val in range(start_val, end_val + 1):
+                    ids.add(val)
+            except ValueError:
+                pass
+        else:
+            try:
+                ids.add(int(part))
+            except ValueError:
+                pass
+    return ids
+
+
+def matches_task_id(file_path, start_id=None, end_id=None, task_ids_set=None):
+    filename = os.path.basename(file_path)
+    # Find leading numbers
+    match = re.match(r'^(\d+)', filename)
+    if not match:
+        # If no leading number, it fails the ID filter if any filter is active
+        if start_id is not None or end_id is not None or task_ids_set is not None:
+            return False
+        return True
+    
+    file_id = int(match.group(1))
+    
+    if task_ids_set is not None and file_id not in task_ids_set:
+        return False
+    if start_id is not None and file_id < start_id:
+        return False
+    if end_id is not None and file_id > end_id:
+        return False
+        
+    return True
+
     
 PERSONA_ORDER = [
     "calm_explainer",
@@ -540,7 +614,7 @@ def render_conversation(doc, conv, index):
     add_separator(doc)
 
 
-def build_persona_documents(input_file, output_dir, language=DEFAULT_LANGUAGE):
+def build_persona_documents(input_file, output_dir, language=DEFAULT_LANGUAGE, version=None, set_number=SET_NUMBER, start_id=None, end_id=None, task_ids=None):
     language_key = str(language).strip().lower()
     if not language_key:
         raise ValueError("Language must be provided")
@@ -548,29 +622,66 @@ def build_persona_documents(input_file, output_dir, language=DEFAULT_LANGUAGE):
     if not os.path.exists(input_file):
         raise FileNotFoundError(f"Input file not found: {input_file}")
 
+    # Gather input files (supporting both file and directory)
+    if os.path.isdir(input_file):
+        jsonl_files = []
+        for root, _, files in os.walk(input_file):
+            for file in sorted(files):
+                if file.endswith('.jsonl'):
+                    jsonl_files.append(os.path.join(root, file))
+    else:
+        jsonl_files = [input_file]
+
+    # Parse task IDs set if provided as a string
+    task_ids_set = parse_task_ids(task_ids) if isinstance(task_ids, str) else task_ids
+
+    # Filter files by task/test ID if specified
+    if start_id is not None or end_id is not None or task_ids_set is not None:
+        jsonl_files = [f for f in jsonl_files if matches_task_id(f, start_id, end_id, task_ids_set)]
+        print(f"Applying task ID filters: found {len(jsonl_files)} matching file(s).")
+
+    # Filter files by version if specified
+    if version:
+        jsonl_files = [f for f in jsonl_files if matches_version(f, version)]
+        print(f"Applying version filter '{version}': found {len(jsonl_files)} matching file(s).")
+
     all_conversations = []
-    with open(input_file, 'r', encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            item = json.loads(line)
-            if not is_language(item, language_key):
-                continue
-            raw_grade = None
-            if isinstance(item, dict):
-                cell = item.get('cell')
-                if isinstance(cell, dict):
-                    raw_grade = cell.get('grade_bucket')
-                if raw_grade is None:
-                    raw_grade = item.get('grade_bucket')
-            grade = grade_key(raw_grade)
-            if grade not in ALLOWED_GRADES:
-                continue
-            persona = (item.get('teacher_persona') or item.get('persona') or '').strip()
-            if persona not in PERSONA_ORDER:
-                continue
-            all_conversations.append((grade, persona, item))
+    seen_ids = set()
+
+    for file_path in jsonl_files:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not is_language(item, language_key):
+                    continue
+                raw_grade = None
+                if isinstance(item, dict):
+                    cell = item.get('cell')
+                    if isinstance(cell, dict):
+                        raw_grade = cell.get('grade_bucket')
+                    if raw_grade is None:
+                        raw_grade = item.get('grade_bucket')
+                grade = grade_key(raw_grade)
+                if grade not in ALLOWED_GRADES:
+                    continue
+                persona = (item.get('teacher_persona') or item.get('persona') or '').strip()
+                if persona not in PERSONA_ORDER:
+                    continue
+                
+                # Deduplicate by item ID
+                item_id = item.get('id')
+                if item_id:
+                    if item_id in seen_ids:
+                        continue
+                    seen_ids.add(item_id)
+
+                all_conversations.append((grade, persona, item))
 
     by_persona = defaultdict(list)
     for grade, persona, item in all_conversations:
@@ -586,9 +697,11 @@ def build_persona_documents(input_file, output_dir, language=DEFAULT_LANGUAGE):
             continue
 
         unique_grades = sorted(list(set(g for g, item in items)))
-        grades_slug = "_".join(unique_grades)
         
-        filename = f"{language_key}_{grades_slug}_{persona}.docx"
+        # Format name like Language_Persona_Set{n}.docx
+        lang_title = language_key.replace('_', ' ').title().replace(' ', '_')
+        persona_title = persona.title()
+        filename = f"{lang_title}_{persona_title}_Set{set_number}.docx"
         output_path = os.path.join(output_dir, filename)
         
         grades_title_list = [GRADE_DISPLAY.get(g, g.replace("_", " ").title()) for g in unique_grades]
@@ -651,7 +764,7 @@ def parse_arguments():
         'input_file',
         nargs='?',
         default='conversations_final.jsonl',
-        help='Path to the input JSONL file (default: conversations_final.jsonl)'
+        help='Path to the input JSONL file or directory (default: conversations_final.jsonl)'
     )
     parser.add_argument(
         'output_dir',
@@ -673,6 +786,37 @@ def parse_arguments():
         help='Target language to filter conversations (default: inferred from input file or english)'
     )
     parser.add_argument(
+        '--version',
+        '-v',
+        default=None,
+        help='Filter conversation task files by version (e.g. 3, version_3, new_version)'
+    )
+    parser.add_argument(
+        '--set',
+        '-s',
+        default=None,
+        type=int,
+        help='Set number to append to the filename (defaults to SET_NUMBER at top of script)'
+    )
+    parser.add_argument(
+        '--start-id',
+        default=None,
+        type=int,
+        help='Starting task ID to filter files (inclusive)'
+    )
+    parser.add_argument(
+        '--end-id',
+        default=None,
+        type=int,
+        help='Ending task ID to filter files (inclusive)'
+    )
+    parser.add_argument(
+        '--task-ids',
+        '-t',
+        default=None,
+        help='Comma-separated list or range of task IDs (e.g. 20179-20186 or 20179,20180)'
+    )
+    parser.add_argument(
         '--audit',
         action='store_true',
         help='Audit an output directory for any leftover raw LaTeX after DOCX generation'
@@ -689,12 +833,27 @@ def main():
 
     language = args.language
     if not language:
-        language = infer_language_from_path(args.input_file) or infer_language_from_file(args.input_file) or DEFAULT_LANGUAGE
-        print(f"Inferred language '{language}' from input file")
+        if os.path.isdir(args.input_file):
+            language = DEFAULT_LANGUAGE
+        else:
+            language = infer_language_from_path(args.input_file) or infer_language_from_file(args.input_file) or DEFAULT_LANGUAGE
+        print(f"Inferred language '{language}' from input source")
 
     output_dir = args.output_dir or f"{language.strip().lower()}_persona_docx"
+    
+    set_num = args.set if args.set is not None else SET_NUMBER
+    
     try:
-        results = build_persona_documents(args.input_file, output_dir, language)
+        results = build_persona_documents(
+            input_file=args.input_file, 
+            output_dir=output_dir, 
+            language=language,
+            version=args.version,
+            set_number=set_num,
+            start_id=args.start_id,
+            end_id=args.end_id,
+            task_ids=args.task_ids
+        )
     except Exception as exc:
         print(f"ERROR: {exc}")
         sys.exit(1)

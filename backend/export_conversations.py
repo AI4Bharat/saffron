@@ -14,7 +14,7 @@ from main import app
 # ----------------------------------------------------
 # CONFIGURATION (Edit these variables directly in code)
 # ----------------------------------------------------
-TEST_IDS = [i for i in range(20155,20163)]  # List of Test IDs to export
+TEST_IDS = [i for i in range(20227,20235)]  # List of Test IDs to export
 OUTPUT_DIR = "/root/saffron/backend/exports"  # Directory where JSONL files will be saved
 # ----------------------------------------------------
 

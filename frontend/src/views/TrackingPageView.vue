@@ -193,29 +193,35 @@
       <div v-if="activeTab === 'batches'">
         <div class="card shadow-sm border mb-4">
           <div class="card-header bg-white py-3 border-bottom-0">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3 border-bottom pb-2">
+              <h3 class="fw-bold text-dark m-0 d-inline-flex align-items-center flex-wrap gap-2">
+                Test Batches Progress
+                <span v-if="batchAttentionFilter" class="badge attention-chip rounded-pill">
+                  {{ batchAttentionFilter === 'unassigned' ? 'Unassigned' : batchAttentionFilter === 'stalled' ? 'Stalled · 0%' : 'Almost done · ≥80%' }}
+                  <i class="bi bi-x-lg ms-1" role="button" title="Clear filter" @click="batchAttentionFilter = ''"></i>
+                </span>
+              </h3>
+            </div>
             <div class="row g-3 align-items-center">
-              <div class="col-12 col-lg-3">
-                <h3 class="fw-bold text-dark m-0 d-inline-flex align-items-center flex-wrap gap-2">
-                  Test Batches Progress
-                  <span v-if="batchAttentionFilter" class="badge attention-chip rounded-pill">
-                    {{ batchAttentionFilter === 'unassigned' ? 'Unassigned' : batchAttentionFilter === 'stalled' ? 'Stalled · 0%' : 'Almost done · ≥80%' }}
-                    <i class="bi bi-x-lg ms-1" role="button" title="Clear filter" @click="batchAttentionFilter = ''"></i>
-                  </span>
-                </h3>
-              </div>
-              <div class="col-12 col-sm-6 col-md-3 col-lg-2">
+              <div class="col-12 col-sm-6 col-md-2">
                 <select v-model="batchLanguageFilter" class="form-select">
                   <option value="">All Languages</option>
                   <option v-for="lang in uniqueLanguages" :key="lang" :value="lang">{{ lang }}</option>
                 </select>
               </div>
-              <div class="col-12 col-sm-6 col-md-3 col-lg-2">
+              <div class="col-12 col-sm-6 col-md-2">
+                <select v-model="batchVersionFilter" class="form-select">
+                  <option value="">All Versions</option>
+                  <option v-for="version in uniqueVersions" :key="version" :value="version">{{ version }}</option>
+                </select>
+              </div>
+              <div class="col-12 col-sm-6 col-md-2">
                 <select v-model="batchTestTypeFilter" class="form-select">
                   <option value="">All Test Types</option>
                   <option v-for="type in uniqueTestTypes" :key="type" :value="type">{{ formatTestType(type) }}</option>
                 </select>
               </div>
-              <div class="col-12 col-sm-6 col-md-3 col-lg-2">
+              <div class="col-12 col-sm-6 col-md-3">
                 <input 
                   v-model="batchSearchQuery" 
                   type="text" 
@@ -223,7 +229,7 @@
                   placeholder="Search batches..." 
                 />
               </div>
-              <div class="col-12 col-sm-6 col-md-3 col-lg-3">
+              <div class="col-12 col-sm-6 col-md-3">
                 <div class="input-group">
                   <input 
                     type="number" 
@@ -258,6 +264,11 @@
                   <td class="ps-4 fw-bold text-secondary">#{{ test.id }}</td>
                   <td>
                     <div class="fw-semibold text-dark">{{ test.description }}</div>
+                    <div class="mt-1">
+                      <span class="badge bg-secondary-subtle text-secondary-emphasis text-xs border rounded-pill">
+                        {{ test.version || getVersionFromDescription(test.description) }}
+                      </span>
+                    </div>
                   </td>
                   <td>
                     <span class="badge rounded-pill bg-light text-dark border">{{ test.language }}</span>
@@ -601,6 +612,7 @@ const error = ref(null)
 // Filters & Search
 const batchSearchQuery = ref('')
 const batchLanguageFilter = ref('')
+const batchVersionFilter = ref('')
 const batchTestTypeFilter = ref('')
 const raterSearchQuery = ref('')
 const raterStatusFilter = ref('')
@@ -884,10 +896,32 @@ const globalProgressPercent = computed(() => {
   return getPercent(stats.value.unique_tasks_completed, stats.value.total_tasks)
 })
 
+const getVersionFromDescription = (description) => {
+  if (!description) return 'V1 / Default'
+  const match = description.match(/Version\s*([\w\d]+)/i)
+  if (match) {
+    return `Version ${match[1]}`
+  }
+  if (/new\s*version/i.test(description)) {
+    return 'New Version'
+  }
+  return 'V1 / Default'
+}
+
 // Languages filter list
 const uniqueLanguages = computed(() => {
   const langs = tests.value.map(t => t.language)
   return [...new Set(langs)].sort()
+})
+
+// Versions filter list
+const uniqueVersions = computed(() => {
+  const versions = tests.value.map(t => t.version || getVersionFromDescription(t.description))
+  return [...new Set(versions)].sort((a, b) => {
+    if (a.includes('Default') || a.includes('V1')) return -1
+    if (b.includes('Default') || b.includes('V1')) return 1
+    return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+  })
 })
 
 // Test Types filter list
@@ -915,6 +949,10 @@ const filteredTests = computed(() => {
 
   if (batchLanguageFilter.value) {
     list = list.filter(t => t.language === batchLanguageFilter.value)
+  }
+
+  if (batchVersionFilter.value) {
+    list = list.filter(t => (t.version || getVersionFromDescription(t.description)) === batchVersionFilter.value)
   }
 
   if (batchTestTypeFilter.value) {
