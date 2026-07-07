@@ -69,6 +69,9 @@ def load_jsonl(path):
 def main():
     parser = argparse.ArgumentParser(description="Load all editable conversation files into the database as separate tests")
     parser.add_argument("--dry-run", action="store_true", help="Print actions without writing to database")
+    parser.add_argument("--batch-size", type=int, default=None, help="Number of tasks per batch")
+    parser.add_argument("--exclude-english", action="store_true", help="Exclude English tasks (files containing 'english' in name)")
+    parser.add_argument("--subfolder", type=str, default=None, help="Only process files in this subfolder (e.g. version_5)")
     args = parser.parse_args()
     
     conversations_dir = None
@@ -89,13 +92,26 @@ def main():
             if file.endswith(".jsonl"):
                 rel_dir = os.path.relpath(root, conversations_dir)
                 subfolder = None if rel_dir == "." else rel_dir
+                
+                # Check subfolder filter
+                if args.subfolder:
+                    if not subfolder:
+                        continue
+                    if args.subfolder.strip('/').lower() != subfolder.strip('/').lower():
+                        continue
+                        
+                # Check exclude English
+                if args.exclude_english:
+                    if "english" in file.lower():
+                        continue
+                        
                 file_path = os.path.join(root, file)
                 files_to_load.append((file_path, file, subfolder))
                 
     # Sort files_to_load by subfolder and filename for predictability
     files_to_load.sort(key=lambda x: (x[2] or "", x[1]))
     
-    print(f"Found {len(files_to_load)} JSONL files in {conversations_dir} (including subdirectories).")
+    print(f"Found {len(files_to_load)} JSONL files to process in {conversations_dir} (after filtering).")
     
     with app.app_context():
         # Get existing descriptions to prevent duplicates
@@ -107,34 +123,70 @@ def main():
         
         for file_path, file, subfolder in files_to_load:
             description = format_description(file, subfolder)
-            
-            if description in existing_descriptions:
-                print(f"[SKIP] Test '{description}' already exists.")
-                skipped_count += 1
-                continue
-                
             data = load_jsonl(file_path)
             num_tasks = len(data)
             
-            if args.dry_run:
-                print(f"[DRY RUN] Would create Test ID={next_id} '{description}' with {num_tasks} tasks.")
+            if args.batch_size:
+                batch_size = args.batch_size
+                num_batches = (num_tasks + batch_size - 1) // batch_size
+                for i in range(num_batches):
+                    start_idx = i * batch_size
+                    end_idx = min((i + 1) * batch_size, num_tasks)
+                    batch_data = data[start_idx:end_idx]
+                    
+                    batch_desc = f"{description} - Part {i+1} (Tasks {start_idx+1} to {end_idx})"
+                    
+                    if batch_desc in existing_descriptions:
+                        print(f"[SKIP] Test '{batch_desc}' already exists.")
+                        skipped_count += 1
+                        continue
+                        
+                    if args.dry_run:
+                        print(f"[DRY RUN] Would create Test ID={next_id} '{batch_desc}' with {len(batch_data)} tasks.")
+                    else:
+                        test = Test(
+                            id=next_id,
+                            test_type="conversation-editable",
+                            description=batch_desc,
+                            json_entry=batch_data
+                        )
+                        db.session.add(test)
+                        db.session.commit()
+                        print(f"[CREATED] Test ID={next_id} '{batch_desc}' with {len(batch_data)} tasks.")
+                        
+                    next_id += 1
+                    created_count += 1
             else:
-                test = Test(
-                    id=next_id,
-                    test_type="conversation-editable",
-                    description=description,
-                    json_entry=data
-                )
-                db.session.add(test)
-                db.session.commit()
-                print(f"[CREATED] Test ID={next_id} '{description}' with {num_tasks} tasks.")
-                
-            next_id += 1
-            created_count += 1
+                if description in existing_descriptions:
+                    print(f"[SKIP] Test '{description}' already exists.")
+                    skipped_count += 1
+                    continue
+                    
+                if args.dry_run:
+                    print(f"[DRY RUN] Would create Test ID={next_id} '{description}' with {num_tasks} tasks.")
+                else:
+                    test = Test(
+                        id=next_id,
+                        test_type="conversation-editable",
+                        description=description,
+                        json_entry=data
+                    )
+                    db.session.add(test)
+                    db.session.commit()
+                    print(f"[CREATED] Test ID={next_id} '{description}' with {num_tasks} tasks.")
+                    
+                next_id += 1
+                created_count += 1
             
         print("\n" + "="*50)
-        print(f"Done: {created_count} tests created, {skipped_count} skipped.")
+        print(f"Done: {created_count} tests/parts created, {skipped_count} skipped.")
         print("="*50)
+
+    try:
+        from update_status_report import update_status
+        update_status()
+    except Exception as e:
+        print(f"Warning: Could not auto-update status report: {e}")
 
 if __name__ == "__main__":
     main()

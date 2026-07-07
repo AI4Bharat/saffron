@@ -23,6 +23,22 @@ Write the tasks to the backend database as `conversation-editable` test types:
 /root/saffron/backend/venv/bin/python /root/saffron/backend/load_conversation_editable_tasks.py
 ```
 
+### Advanced Loading Options
+The script supports additional flags for batching, filtering by subfolders, and excluding languages:
+* **`--batch-size <N>`**: Split each large JSONL file into smaller tests containing up to `N` tasks.
+* **`--exclude-english`**: Exclude files containing `english` in their filename.
+* **`--subfolder <folder_name>`**: Only load files located inside a specific subfolder (e.g. `version_5`).
+
+#### Example: Batching non-English tasks from Version 5 (Sets of 100)
+**Dry Run**:
+```bash
+/root/saffron/backend/venv/bin/python /root/saffron/backend/load_conversation_editable_tasks.py --dry-run --subfolder version_5 --exclude-english --batch-size 100
+```
+**Active Load**:
+```bash
+/root/saffron/backend/venv/bin/python /root/saffron/backend/load_conversation_editable_tasks.py --subfolder version_5 --exclude-english --batch-size 100
+```
+
 ---
 
 ## 2. Export Rated/Edited Annotations
@@ -134,3 +150,20 @@ If you want to scan generated Word files for any surviving raw LaTeX strings tha
 ```bash
 /root/saffron/backend/venv/bin/python /root/saffron/backend/generate_docs.py --audit /root/saffron/backend/exports/docx/
 ```
+
+---
+
+## 5. One-Command Export + DOCX + Drive Upload (export_upload_docs.py)
+
+Automates steps 2-3 plus Google Drive upload for a given language and version:
+
+```bash
+/root/saffron/backend/venv/bin/python /root/saffron/backend/export_upload_docs.py --language telugu --version 5
+```
+
+- Finds all matching conversation-editable tests in the DB, exports **accepted, comment-free** annotations (`--include-all` for rejected/unrated, `--any-comments` to include commented ones), builds persona DOCX sets with max 30 conversations each, and uploads them to the Drive folder under `<Language>/<Persona>/`.
+- Set numbering continues from the last uploaded set per (language, persona), taken as max of the state CSV (`backend/upload_sets_state.csv`) and a live listing of the Drive folder. Existing Drive files are never overwritten.
+- Versions: `--version 5`, `--version new` (New Version), `--version base` (no suffix).
+- Useful flags: `--dry-run` (plan only), `--no-upload` (generate DOCX only), `--personas storyteller,relatable_peer`, `--chunk-size 30`, `--create-missing-folders`.
+- Outputs land in `backend/exports/auto_docs/<lang>_<version>_<timestamp>/{jsonl,docx}/`.
+- Drive upload needs a Google service account key at `backend/config/gdrive_service_account.json` (or `--sa-file` / `GDRIVE_SA_FILE`); share the Drive folder with the service account email as Editor. Without it, run `--no-upload`.

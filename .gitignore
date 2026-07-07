@@ -178,3 +178,6 @@ cython_debug/
 frontend/.ui_backup_*
 test_direct_download.wav
 test_download
+# Run artifacts and bulk task data
+backend/exports/
+backend/conversation_editable_tasks/version_5/

@@ -14,7 +14,7 @@ from main import app
 # ----------------------------------------------------
 # CONFIGURATION (Edit these variables directly in code)
 # ----------------------------------------------------
-TEST_IDS = [i for i in range(20227,20235)]  # List of Test IDs to export
+TEST_IDS = [i for i in range(20492,20500)]  # List of Test IDs to export
 OUTPUT_DIR = "/root/saffron/backend/exports"  # Directory where JSONL files will be saved
 # ----------------------------------------------------
 
@@ -181,8 +181,13 @@ def main():
             desc_slug = slugify(test.description or f"test_{test_id}")
             filename = f"{test_id}_{test.test_type}_{desc_slug}.jsonl"
             output_path = os.path.join(OUTPUT_DIR, filename)
-            
         export_conversation_ratings(test_id, output_path, args.only_accepted, comments_filter)
+
+    try:
+        from update_status_report import update_status
+        update_status()
+    except Exception as e:
+        print(f"Warning: Could not auto-update status report: {e}")
 
 if __name__ == "__main__":
     main()

@@ -3,7 +3,7 @@
     
     <!-- Guidelines & Keyboard Shortcuts Alert -->
     <div class="usage-alert shadow-sm mb-4">
-      <div class="d-flex justify-content-center">
+      <div class="d-flex justify-content-center gap-3 flex-wrap">
         <button
           class="btn btn-primary instruction-btn shadow-sm"
           type="button"
@@ -14,6 +14,14 @@
         >
           <i class="bi bi-keyboard me-2"></i>
           How to Use &amp; Shortcuts (Click to Expand)
+        </button>
+        <button
+          class="btn btn-success qc-guidelines-btn shadow-sm"
+          type="button"
+          @click="showQCGuidelinesModal = true"
+        >
+          <i class="bi bi-file-earmark-music-fill me-2"></i>
+          Audio QC Guidelines
         </button>
       </div>
       <div class="collapse mt-3" id="audioGuidelines">
@@ -422,6 +430,93 @@
       </div>
     </div>
 
+    <!-- Audio Quality Control (QC) Guidelines Modal Popup -->
+    <div v-if="showQCGuidelinesModal" class="qc-modal-overlay animate-fade-in" @click.self="showQCGuidelinesModal = false">
+      <div class="qc-modal-card card border-0 shadow-lg rounded-4 animate-scale-up">
+        <div class="card-header bg-dark text-white py-3 border-0 rounded-top-4 d-flex align-items-center justify-content-between">
+          <h5 class="mb-0 fw-bold d-flex align-items-center gap-2">
+            <i class="bi bi-shield-check text-warning"></i>
+            Audio Quality Control (QC) Guidelines
+          </h5>
+          <button type="button" class="btn-close btn-close-white" aria-label="Close" @click="showQCGuidelinesModal = false"></button>
+        </div>
+        
+        <div class="card-body p-4 qc-modal-body">
+          <p class="text-secondary mb-4">
+            Please review all audio files against the following checklist to ensure high-quality output. Your goal is to verify that the audio is clean, matches the script, and fits the required persona.
+          </p>
+          
+          <!-- ACCEPT Criteria Card -->
+          <div class="qc-section-card accept-card p-3 rounded-4 mb-3">
+            <h6 class="fw-bold text-success mb-2 d-flex align-items-center gap-2">
+              <i class="bi bi-check-circle-fill"></i>
+              ACCEPT Criteria
+            </h6>
+            <p class="small text-muted mb-2">Approve the audio if it meets all of the following conditions:</p>
+            <ul class="qc-list accept-list mb-0">
+              <li><strong>Persona Match:</strong> The voice artist's tone, energy, and style perfectly match the assigned persona.</li>
+              <li><strong>Performance Quality:</strong> The speaker maintains consistent voice pitch, natural modulation, and appropriate variation throughout the recording.</li>
+              <li><strong>Audio Clarity:</strong> The background is completely clean and clear.</li>
+              <li><strong>Script Accuracy:</strong> The audio matches the provided script (subject to the correction rules below).</li>
+            </ul>
+          </div>
+
+          <!-- REJECT Criteria Card -->
+          <div class="qc-section-card reject-card p-3 rounded-4 mb-3">
+            <h6 class="fw-bold text-danger mb-2 d-flex align-items-center gap-2">
+              <i class="bi bi-x-circle-fill"></i>
+              REJECT Criteria
+            </h6>
+            <p class="small text-muted mb-2">Reject the audio and send it back for a re-record if you notice any of the following:</p>
+            
+            <div class="row g-3">
+              <div class="col-md-6">
+                <div class="fw-bold text-danger-emphasis small mb-2"><i class="bi bi-volume-up-fill me-1"></i>Noise Issues:</div>
+                <ul class="qc-list reject-list mb-0">
+                  <li><strong>Background Noise:</strong> Any hum, hiss, static, or environmental sound.</li>
+                  <li><strong>Breathing Sounds:</strong> Heavy, distracting, or loud breathing noises.</li>
+                  <li><strong>Extraneous Sounds:</strong> Any sound other than the voice artist reading the script (e.g., lip smacks, mic bumps, background talking).</li>
+                </ul>
+              </div>
+              <div class="col-md-6">
+                <div class="fw-bold text-danger-emphasis small mb-2"><i class="bi bi-blockquote-left me-1"></i>Script &amp; Reading Errors:</div>
+                <ul class="qc-list reject-list mb-0">
+                  <li><strong>Major Mismatches:</strong> The audio meaning drastically differs from the text.</li>
+                  <li><strong>Word Skips:</strong> The artist skips more than 2 words in the script.</li>
+                  <li><strong>Sentence Skips:</strong> An entire sentence from the script is missed.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- Script Correction Rules Card -->
+          <div class="qc-section-card correction-card p-3 rounded-4 border-2">
+            <h6 class="fw-bold text-warning-emphasis mb-2 d-flex align-items-center gap-2">
+              <i class="bi bi-pencil-square"></i>
+              Script Correction Rules (Do Not Reject)
+            </h6>
+            <p class="small text-muted mb-2">Sometimes the audio is great, but the text needs a quick update. Accept the audio and manually update the text script in these scenarios:</p>
+            <ul class="qc-list correction-list mb-0">
+              <li><strong>Script Typos:</strong> If there is a grammatical error or typo in the original script, but the artist says it correctly and naturally, update the text to match the audio.</li>
+              <li><strong>Natural Phrase Additions:</strong> If the artist adds extra words or full phrases to make the delivery sound more natural (e.g., "Can you understand?", "Are you able to follow what I'm saying?"), amend the script to match the audio, provided the additions do not alter the original meaning.</li>
+              <li><strong>Human Filler Sounds:</strong> If the voice artist adds natural human expressions (e.g., "hmm", "ok", "oh"), do not reject the audio. Simply type those exact sounds into the script where they occur.</li>
+            </ul>
+          </div>
+
+        </div>
+
+        <div class="card-footer bg-light p-3 border-top rounded-bottom-4 d-flex justify-content-end">
+          <button 
+            type="button" 
+            class="btn btn-dark px-4 py-2 rounded-pill fw-bold fs-8 shadow-sm"
+            @click="showQCGuidelinesModal = false"
+          >
+            Got It
+          </button>
+        </div>
+      </div>
+    </div>
+
   </div>
 </template>
 
@@ -502,6 +597,7 @@ const customRejectionReason = ref('')
 
 // Modal state variables
 const showRejectModal = ref(false)
+const showQCGuidelinesModal = ref(false)
 const tempReasons = ref([])
 const tempCustomReason = ref('')
 
@@ -581,6 +677,7 @@ function setupState() {
 
   // Close modals
   showRejectModal.value = false
+  showQCGuidelinesModal.value = false
 
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
@@ -1237,5 +1334,129 @@ onUnmounted(() => {
 
 .hover-translate:hover {
   transform: translateY(-1px);
+}
+
+/* QC Guidelines button & modal styling */
+.qc-guidelines-btn {
+  border-radius: 20px;
+  background-color: #0d9488;
+  border-color: #0d9488;
+  color: white;
+  padding: 8px 20px;
+  font-weight: 600;
+  transition: all 0.25s ease;
+}
+
+.qc-guidelines-btn:hover {
+  background-color: #0f766e;
+  border-color: #0f766e;
+  color: white;
+}
+
+.qc-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(15, 23, 42, 0.4);
+  backdrop-filter: blur(8px);
+  z-index: 1050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.qc-modal-card {
+  width: 100%;
+  max-width: 800px;
+  background-color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+}
+
+.qc-modal-body {
+  overflow-y: auto;
+  padding-right: 12px;
+}
+
+.qc-section-card {
+  border: 1px solid;
+  transition: transform 0.2s ease;
+}
+
+.qc-section-card:hover {
+  transform: translateY(-2px);
+}
+
+.accept-card {
+  background-color: #f0fdf4;
+  border-color: #bbf7d0 !important;
+}
+
+.reject-card {
+  background-color: #fef2f2;
+  border-color: #fca5a5 !important;
+}
+
+.correction-card {
+  background-color: #fffbeb;
+  border-color: #fde68a !important;
+}
+
+.text-danger-emphasis {
+  color: #991b1b !important;
+}
+
+.text-warning-emphasis {
+  color: #854d0e !important;
+}
+
+.qc-list {
+  padding-left: 0;
+  list-style: none;
+}
+
+.qc-list li {
+  margin-bottom: 8px;
+  position: relative;
+  padding-left: 20px;
+  line-height: 1.45;
+  font-size: 0.85rem;
+}
+
+.qc-list li:last-child {
+  margin-bottom: 0;
+}
+
+.accept-list li::before {
+  content: "✓";
+  color: #10b981;
+  font-weight: bold;
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.reject-list li::before {
+  content: "✗";
+  color: #ef4444;
+  font-weight: bold;
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.correction-list li::before {
+  content: "✎";
+  color: #d97706;
+  font-weight: bold;
+  position: absolute;
+  left: 0;
+  top: 0;
 }
 </style>

@@ -614,7 +614,7 @@ def render_conversation(doc, conv, index):
     add_separator(doc)
 
 
-def build_persona_documents(input_file, output_dir, language=DEFAULT_LANGUAGE, version=None, set_number=SET_NUMBER, start_id=None, end_id=None, task_ids=None):
+def build_persona_documents(input_file, output_dir, language=DEFAULT_LANGUAGE, version=None, set_number=SET_NUMBER, start_id=None, end_id=None, task_ids=None, chunk_size=None, personas_to_process=None, persona_start_sets=None):
     language_key = str(language).strip().lower()
     if not language_key:
         raise ValueError("Language must be provided")
@@ -692,42 +692,63 @@ def build_persona_documents(input_file, output_dir, language=DEFAULT_LANGUAGE, v
 
     language_title = language_key.replace('_', ' ').title()
     for persona in PERSONA_ORDER:
+        # Only process requested personas if personas_to_process is specified
+        if personas_to_process is not None and persona not in personas_to_process:
+            continue
+
         items = by_persona.get(persona, [])
         if not items:
             continue
 
-        unique_grades = sorted(list(set(g for g, item in items)))
-        
-        # Format name like Language_Persona_Set{n}.docx
-        lang_title = language_key.replace('_', ' ').title().replace(' ', '_')
-        persona_title = persona.title()
-        filename = f"{lang_title}_{persona_title}_Set{set_number}.docx"
-        output_path = os.path.join(output_dir, filename)
-        
-        grades_title_list = [GRADE_DISPLAY.get(g, g.replace("_", " ").title()) for g in unique_grades]
-        grades_title = " + ".join(grades_title_list)
-        
-        doc = create_document(
-            f"{language_title} Conversations — {grades_title} — {persona}",
-            f"Filtered {language_title} conversations: {grades_title}"
-        )
+        # Set the starting set number based on the persona mapping, or default to set_number
+        if persona_start_sets and persona in persona_start_sets:
+            start_set = persona_start_sets[persona]
+        else:
+            start_set = set_number
 
+        # Sort all items by grade so that the chunked documents remain grouped by grade
         items.sort(key=lambda x: (x[0],))
-        conversation_index = 0
-        for grade, item in items:
-            conversation_index += 1
-            heading = doc.add_heading(level=2)
-            heading_run = heading.add_run(f"📚 {GRADE_DISPLAY.get(grade, grade.title())}")
-            heading_run.font.name = "Calibri"
-            heading_run.font.size = Pt(13)
-            heading_run.font.bold = True
-            heading_run.font.color.rgb = RGBColor(30, 78, 120)
-            heading.paragraph_format.space_before = Pt(10)
-            heading.paragraph_format.space_after = Pt(6)
-            render_conversation(doc, item, conversation_index)
 
-        doc.save(output_path)
-        written_files.append((persona, output_path, len(items)))
+        # Chunk items into sublists of at most chunk_size conversations
+        if chunk_size:
+            chunks = [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+        else:
+            chunks = [items]
+
+        for chunk_idx, chunk in enumerate(chunks):
+            current_set_number = start_set + chunk_idx
+
+            unique_grades = sorted(list(set(g for g, item in chunk)))
+            
+            # Format name like Language_Persona_Set{n}.docx
+            lang_title = language_key.replace('_', ' ').title().replace(' ', '_')
+            persona_title = persona.title()
+            filename = f"{lang_title}_{persona_title}_Set{current_set_number}.docx"
+            output_path = os.path.join(output_dir, filename)
+            
+            grades_title_list = [GRADE_DISPLAY.get(g, g.replace("_", " ").title()) for g in unique_grades]
+            grades_title = " + ".join(grades_title_list)
+            
+            doc = create_document(
+                f"{language_title} Conversations — {grades_title} — {persona}",
+                f"Filtered {language_title} conversations: {grades_title}"
+            )
+
+            conversation_index = 0
+            for grade, item in chunk:
+                conversation_index += 1
+                heading = doc.add_heading(level=2)
+                heading_run = heading.add_run(f"📚 {GRADE_DISPLAY.get(grade, grade.title())}")
+                heading_run.font.name = "Calibri"
+                heading_run.font.size = Pt(13)
+                heading_run.font.bold = True
+                heading_run.font.color.rgb = RGBColor(30, 78, 120)
+                heading.paragraph_format.space_before = Pt(10)
+                heading.paragraph_format.space_after = Pt(6)
+                render_conversation(doc, item, conversation_index)
+
+            doc.save(output_path)
+            written_files.append((persona, output_path, len(chunk)))
 
     return written_files
 
@@ -821,6 +842,22 @@ def parse_arguments():
         action='store_true',
         help='Audit an output directory for any leftover raw LaTeX after DOCX generation'
     )
+    parser.add_argument(
+        '--chunk-size',
+        type=int,
+        default=None,
+        help='Maximum number of conversations per document (default: no chunking)'
+    )
+    parser.add_argument(
+        '--personas',
+        default=None,
+        help='Comma-separated list of personas to process (default: all)'
+    )
+    parser.add_argument(
+        '--persona-start-sets',
+        default=None,
+        help='Comma-separated mapping of persona starting sets (e.g. calm_explainer=7,storyteller=4)'
+    )
     return parser.parse_args()
 
 
@@ -842,6 +879,19 @@ def main():
     output_dir = args.output_dir or f"{language.strip().lower()}_persona_docx"
     
     set_num = args.set if args.set is not None else SET_NUMBER
+
+    # Parse persona start sets
+    persona_start_sets = {}
+    if args.persona_start_sets:
+        for part in args.persona_start_sets.split(','):
+            if '=' in part:
+                p, s = part.split('=', 1)
+                persona_start_sets[p.strip().lower()] = int(s.strip())
+
+    # Parse personas to process list
+    personas_to_process = None
+    if args.personas:
+        personas_to_process = [p.strip().lower() for p in args.personas.split(',')]
     
     try:
         results = build_persona_documents(
@@ -852,7 +902,10 @@ def main():
             set_number=set_num,
             start_id=args.start_id,
             end_id=args.end_id,
-            task_ids=args.task_ids
+            task_ids=args.task_ids,
+            chunk_size=args.chunk_size,
+            personas_to_process=personas_to_process,
+            persona_start_sets=persona_start_sets
         )
     except Exception as exc:
         print(f"ERROR: {exc}")
@@ -867,6 +920,12 @@ def main():
     print("Generated persona DOCX files:")
     for persona, path, count in results:
         print(f" - {persona}: {path} ({count} conversations)")
+
+    try:
+        from update_status_report import update_status
+        update_status()
+    except Exception as e:
+        print(f"Warning: Could not auto-update status report: {e}")
 
 
 # ---------------------------------------------------------------------------
