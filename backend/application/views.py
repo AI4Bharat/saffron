@@ -4,6 +4,7 @@ from flask import current_app as app
 from application.models import db, Rater, Test, Rating, Study, Session, Consent, Message
 from datetime import datetime, timedelta
 import jwt
+import uuid
 from functools import wraps
 import random
 import logging
@@ -1657,6 +1658,8 @@ def _serialize_message(m):
         'category': m.category or 'message',
         'is_read': bool(m.is_read),
         'created_at': m.created_at.isoformat() if m.created_at else None,
+        'edited_at': m.edited_at.isoformat() if getattr(m, 'edited_at', None) else None,
+        'broadcast_id': getattr(m, 'broadcast_id', None),
     }
 
 
@@ -1697,17 +1700,144 @@ def broadcast_message(current_user):
         if len(body) > 2000:
             body = body[:2000]
         # Broadcast to every real annotator (there is no 'admin' Rater row).
+        # Every row of this broadcast shares one broadcast_id so the admin can
+        # later view/edit it as a single message rather than N copies.
+        broadcast_id = uuid.uuid4().hex
         recipients = Rater.query.all()
         count = 0
         for r in recipients:
-            db.session.add(Message(rater_id=r.id, body=body, sender='admin', category='broadcast', is_read=False))
+            db.session.add(Message(rater_id=r.id, body=body, sender='admin', category='broadcast',
+                                   is_read=False, broadcast_id=broadcast_id))
             count += 1
         db.session.commit()
-        return jsonify({'message': f'Broadcast sent to {count} annotator(s).', 'count': count}), 201
+        return jsonify({'message': f'Broadcast sent to {count} annotator(s).', 'count': count,
+                        'broadcast_id': broadcast_id}), 201
     except Exception as e:
         db.session.rollback()
         app.logger.error(f"Error in broadcast_message: {e}")
         return jsonify({'error': 'Failed to broadcast message.'}), 500
+
+
+@app.route('/api/admin/messages', methods=['GET'])
+@token_required
+def get_admin_messages(current_user):
+    """Admin outbox: everything the admin has shared. Individual messages/nudges
+    are listed one per row; a broadcast is collapsed into a single entry (grouped
+    by broadcast_id) that carries how many recipients have read it. Read-only."""
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    try:
+        rater_names = {r.id: r.name for r in Rater.query.all()}
+        msgs = Message.query.order_by(Message.created_at.desc()).all()
+        items = []
+        broadcasts = {}  # broadcast_id -> aggregate entry (also appended to items)
+        for m in msgs:
+            if m.broadcast_id:
+                entry = broadcasts.get(m.broadcast_id)
+                if entry is None:
+                    entry = {
+                        'kind': 'broadcast',
+                        'broadcast_id': m.broadcast_id,
+                        'body': m.body,
+                        'category': m.category or 'broadcast',
+                        'created_at': m.created_at.isoformat() if m.created_at else None,
+                        'edited_at': m.edited_at.isoformat() if m.edited_at else None,
+                        'recipients_total': 0,
+                        'recipients_read': 0,
+                        '_sort': m.created_at or datetime.min,
+                    }
+                    broadcasts[m.broadcast_id] = entry
+                    items.append(entry)
+                entry['recipients_total'] += 1
+                if m.is_read:
+                    entry['recipients_read'] += 1
+            else:
+                items.append({
+                    'kind': 'individual',
+                    'id': m.id,
+                    'rater_id': m.rater_id,
+                    'rater_name': rater_names.get(m.rater_id, f'#{m.rater_id}'),
+                    'body': m.body,
+                    'category': m.category or 'message',
+                    'created_at': m.created_at.isoformat() if m.created_at else None,
+                    'edited_at': m.edited_at.isoformat() if m.edited_at else None,
+                    'is_read': bool(m.is_read),
+                    '_sort': m.created_at or datetime.min,
+                })
+        items.sort(key=lambda x: x['_sort'], reverse=True)
+        for x in items:
+            x.pop('_sort', None)
+        return jsonify({'items': items, 'count': len(items)}), 200
+    except Exception as e:
+        app.logger.error(f"Error in get_admin_messages: {e}")
+        return jsonify({'items': [], 'count': 0}), 500
+
+
+@app.route('/api/admin/message/<int:message_id>', methods=['PUT'])
+@token_required
+def edit_message(current_user, message_id):
+    """Edit the body of an individual message the admin already sent. If the row
+    happens to belong to a broadcast, the whole broadcast is updated so every
+    recipient stays in sync. Only the body/edited_at change — read state and all
+    other tables are left untouched."""
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    try:
+        msg = Message.query.get_or_404(message_id)
+        data = request.get_json() or {}
+        body = (data.get('body') or '').strip()
+        if not body:
+            return jsonify({'message': 'Message body cannot be empty.'}), 400
+        if len(body) > 2000:
+            body = body[:2000]
+        now = datetime.utcnow()
+        if msg.broadcast_id:
+            rows = Message.query.filter_by(broadcast_id=msg.broadcast_id).all()
+            for r in rows:
+                r.body = body
+                r.edited_at = now
+            db.session.commit()
+            return jsonify({'message': f'Broadcast updated for {len(rows)} annotator(s).',
+                            'kind': 'broadcast', 'broadcast_id': msg.broadcast_id}), 200
+        msg.body = body
+        msg.edited_at = now
+        db.session.commit()
+        return jsonify({'message': 'Message updated.', 'kind': 'individual',
+                        'data': _serialize_message(msg)}), 200
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error in edit_message: {e}")
+        return jsonify({'error': 'Failed to update message.'}), 500
+
+
+@app.route('/api/admin/broadcast/<broadcast_id>', methods=['PUT'])
+@token_required
+def edit_broadcast(current_user, broadcast_id):
+    """Edit a broadcast (every annotator's copy) in one shot, keyed by the shared
+    broadcast_id. Only body/edited_at change."""
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    try:
+        rows = Message.query.filter_by(broadcast_id=broadcast_id).all()
+        if not rows:
+            return jsonify({'message': 'Broadcast not found.'}), 404
+        data = request.get_json() or {}
+        body = (data.get('body') or '').strip()
+        if not body:
+            return jsonify({'message': 'Message body cannot be empty.'}), 400
+        if len(body) > 2000:
+            body = body[:2000]
+        now = datetime.utcnow()
+        for r in rows:
+            r.body = body
+            r.edited_at = now
+        db.session.commit()
+        return jsonify({'message': f'Broadcast updated for {len(rows)} annotator(s).',
+                        'count': len(rows)}), 200
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error in edit_broadcast: {e}")
+        return jsonify({'error': 'Failed to update broadcast.'}), 500
 
 
 @app.route('/api/admin/rater/<int:rater_id>/nudge', methods=['POST'])

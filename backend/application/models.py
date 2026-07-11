@@ -95,9 +95,15 @@ class Message(db.Model):
     rater_id = db.Column(db.Integer, db.ForeignKey('rater.id'), nullable=False)  # recipient
     body = db.Column(db.Text, nullable=False)
     sender = db.Column(db.String(100), nullable=False, default='admin')
-    category = db.Column(db.String(50), nullable=True, default='message')  # 'message' | 'nudge'
+    category = db.Column(db.String(50), nullable=True, default='message')  # 'message' | 'nudge' | 'broadcast'
     is_read = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    # A single "broadcast" fans out to one Message row per annotator; they all share
+    # this id so the admin can view/edit the broadcast as one thing. NULL for a
+    # message sent to an individual annotator (or a nudge).
+    broadcast_id = db.Column(db.String(64), nullable=True, index=True)
+    # Set when an admin edits the body after sending; NULL if never edited.
+    edited_at = db.Column(db.DateTime, nullable=True)
 
     def __repr__(self):
         return f"<Message to Rater ID={self.rater_id}, read={self.is_read}>"

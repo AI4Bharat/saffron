@@ -88,6 +88,53 @@ with app.app_context():
                 db.session.rollback()
                 print(f"Database migration info: Column '{col_name}' may already exist.")
 
+    # Self-healing migrations for admin message view/edit (broadcast grouping +
+    # edit timestamp). Additive only — no existing rows/data are modified here.
+    for col_ddl_pg, col_ddl_lite, col_name in [
+        ("ALTER TABLE message ADD COLUMN IF NOT EXISTS broadcast_id VARCHAR(64)",
+         "ALTER TABLE message ADD COLUMN broadcast_id VARCHAR(64)", "broadcast_id"),
+        ("ALTER TABLE message ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP",
+         "ALTER TABLE message ADD COLUMN edited_at DATETIME", "edited_at"),
+    ]:
+        try:
+            db.session.execute(db.text(col_ddl_pg))
+            db.session.commit()
+            print(f"Database migration: Successfully verified/added {col_name} column (PostgreSQL)")
+        except Exception:
+            db.session.rollback()
+            try:
+                db.session.execute(db.text(col_ddl_lite))
+                db.session.commit()
+                print(f"Database migration: Successfully added {col_name} column (SQLite)")
+            except Exception:
+                db.session.rollback()
+                print(f"Database migration info: Column '{col_name}' may already exist.")
+
+    # One-time backfill: broadcasts sent before broadcast_id existed have one row
+    # per annotator with no grouping id. Group the legacy rows by (body, second)
+    # and give each group a shared id so the admin can view/edit them as one
+    # broadcast. Idempotent — only touches rows whose broadcast_id is still NULL.
+    try:
+        import uuid as _uuid
+        legacy = Message.query.filter(
+            Message.category == 'broadcast', Message.broadcast_id.is_(None)
+        ).all()
+        if legacy:
+            groups = {}
+            for m in legacy:
+                key = (m.body, m.created_at.replace(microsecond=0) if m.created_at else None)
+                groups.setdefault(key, []).append(m)
+            for rows in groups.values():
+                bid = _uuid.uuid4().hex
+                for m in rows:
+                    m.broadcast_id = bid
+            db.session.commit()
+            print(f"Database migration: backfilled broadcast_id for {len(legacy)} legacy broadcast row(s) "
+                  f"in {len(groups)} group(s)")
+    except Exception as e:
+        db.session.rollback()
+        print(f"Database migration info: broadcast_id backfill skipped ({e})")
+
 # Routes
 from application.views import *
 

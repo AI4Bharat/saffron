@@ -492,6 +492,9 @@
                   <button class="btn btn-outline-primary btn-sm d-inline-flex align-items-center gap-1" @click="openBroadcastModal" title="Send a message to every annotator">
                     <i class="bi bi-broadcast"></i> Broadcast
                   </button>
+                  <button class="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1" @click="openOutbox" title="View and edit messages you've sent">
+                    <i class="bi bi-clock-history"></i> Sent
+                  </button>
                   <div class="form-check form-switch mb-0 me-1">
                     <input class="form-check-input" type="checkbox" role="switch" id="showAllRaters" v-model="showAllRaters" />
                     <label class="form-check-label text-xs text-secondary user-select-none" for="showAllRaters">Show all</label>
@@ -855,6 +858,112 @@
       </div>
     </transition>
 
+    <!-- ===================== SENT MESSAGES (OUTBOX) MODAL ===================== -->
+    <transition name="modal-fade">
+      <div v-if="showOutboxModal" class="assign-modal-backdrop" @click.self="closeOutbox">
+        <div class="assign-modal-card shadow-lg" style="max-width: 680px;">
+          <div class="assign-modal-header d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-3">
+              <div class="avatar-circle-lg bg-secondary-subtle text-secondary"><i class="bi bi-clock-history"></i></div>
+              <div>
+                <h5 class="fw-bold mb-0 text-dark">Sent messages</h5>
+                <small class="text-muted">Messages and broadcasts you've shared with annotators.</small>
+              </div>
+            </div>
+            <button class="btn-close" @click="closeOutbox"></button>
+          </div>
+          <div class="assign-modal-body" style="max-height: 60vh; overflow-y: auto;">
+            <div v-if="outboxLoading" class="text-center text-muted py-4">
+              <span class="spinner-border spinner-border-sm me-2"></span> Loading…
+            </div>
+            <div v-else-if="outboxError" class="text-danger small py-2">
+              <i class="bi bi-exclamation-triangle-fill me-1"></i>{{ outboxError }}
+            </div>
+            <div v-else-if="!outboxItems.length" class="text-center text-muted py-4">
+              <i class="bi bi-inbox fs-3 d-block mb-2"></i> You haven't sent any messages yet.
+            </div>
+            <div v-else class="d-flex flex-column gap-2">
+              <div
+                v-for="item in outboxItems"
+                :key="item.kind === 'broadcast' ? 'b-' + item.broadcast_id : 'm-' + item.id"
+                class="border rounded-3 p-3"
+              >
+                <div class="d-flex justify-content-between align-items-start gap-2">
+                  <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <span v-if="item.kind === 'broadcast'" class="badge rounded-pill bg-primary-subtle text-primary">
+                      <i class="bi bi-broadcast me-1"></i>Broadcast
+                    </span>
+                    <span v-else-if="item.category === 'nudge'" class="badge rounded-pill bg-warning-subtle text-warning-emphasis">
+                      <i class="bi bi-bell me-1"></i>Nudge
+                    </span>
+                    <span v-else class="badge rounded-pill bg-secondary-subtle text-secondary">
+                      <i class="bi bi-chat-dots me-1"></i>Message
+                    </span>
+                    <span class="fw-semibold text-dark small">
+                      {{ item.kind === 'broadcast' ? 'All annotators' : item.rater_name }}
+                    </span>
+                    <span v-if="item.kind === 'broadcast'" class="text-muted fs-9">
+                      · {{ item.recipients_read }}/{{ item.recipients_total }} read
+                    </span>
+                    <span v-else class="fs-9" :class="item.is_read ? 'text-success' : 'text-muted'">
+                      · {{ item.is_read ? 'Read' : 'Unread' }}
+                    </span>
+                  </div>
+                  <button class="btn btn-sm btn-outline-primary flex-shrink-0" @click="openEditMsg(item)" title="Edit this message">
+                    <i class="bi bi-pencil"></i>
+                  </button>
+                </div>
+                <div class="text-body small mt-2" style="white-space: pre-wrap; word-break: break-word;">{{ item.body }}</div>
+                <div class="text-muted fs-9 mt-1">
+                  {{ formatDate(item.created_at) }}
+                  <span v-if="item.edited_at"> · edited {{ formatDate(item.edited_at) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="assign-modal-footer d-flex justify-content-end gap-2">
+            <button class="btn btn-light border btn-sm" @click="closeOutbox">Close</button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- ===================== EDIT SENT MESSAGE MODAL ===================== -->
+    <transition name="modal-fade">
+      <div v-if="showEditMsgModal" class="assign-modal-backdrop" @click.self="closeEditMsg">
+        <div class="assign-modal-card shadow-lg" style="max-width: 520px;">
+          <div class="assign-modal-header d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-3">
+              <div class="avatar-circle-lg bg-primary-subtle text-primary"><i class="bi bi-pencil-square"></i></div>
+              <div>
+                <h5 class="fw-bold mb-0 text-dark">Edit {{ editTarget && editTarget.kind === 'broadcast' ? 'broadcast' : 'message' }}</h5>
+                <small class="text-muted">
+                  {{ editTarget && editTarget.kind === 'broadcast'
+                      ? 'Updates the copy every annotator sees.'
+                      : (editTarget ? editTarget.rater_name : '') }}
+                </small>
+              </div>
+            </div>
+            <button class="btn-close" @click="closeEditMsg"></button>
+          </div>
+          <div class="assign-modal-body">
+            <label class="form-label fw-semibold text-dark small">Message</label>
+            <textarea v-model="editBody" class="form-control" rows="4" maxlength="2000" placeholder="Update your message…"></textarea>
+            <div class="text-end text-muted fs-9 mt-1">{{ editBody.length }}/2000</div>
+            <div v-if="editError" class="text-danger small mt-1"><i class="bi bi-exclamation-triangle-fill me-1"></i>{{ editError }}</div>
+          </div>
+          <div class="assign-modal-footer d-flex justify-content-end gap-2">
+            <button class="btn btn-light border btn-sm" @click="closeEditMsg" :disabled="isSavingEdit">Cancel</button>
+            <button class="btn btn-primary btn-sm d-inline-flex align-items-center gap-1.5" :disabled="isSavingEdit || !editBody.trim()" @click="saveEditMsg">
+              <span v-if="isSavingEdit" class="spinner-border spinner-border-sm"></span>
+              <i v-else class="bi bi-check-lg"></i>
+              <span>Save changes</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
     <!-- ===================== REMOVE (DEACTIVATE) MODAL ===================== -->
     <transition name="modal-fade">
       <div v-if="showRemoveModal" class="assign-modal-backdrop" @click.self="closeRemoveModal">
@@ -956,6 +1065,18 @@ const showBroadcastModal = ref(false)
 const broadcastBody = ref('')
 const isBroadcasting = ref(false)
 const broadcastError = ref(null)
+
+// ---- Sent messages (admin outbox) + edit ----
+const showOutboxModal = ref(false)
+const outboxItems = ref([])
+const outboxLoading = ref(false)
+const outboxError = ref(null)
+
+const showEditMsgModal = ref(false)
+const editTarget = ref(null)   // the outbox item currently being edited
+const editBody = ref('')
+const editError = ref(null)
+const isSavingEdit = ref(false)
 
 const showRemoveModal = ref(false)
 const removeTarget = ref(null)
@@ -1540,6 +1661,20 @@ const adminPost = async (path, body) => {
   return data
 }
 
+// Authenticated PUT — same contract as adminPost, used for editing sent messages.
+const adminPut = async (path, body) => {
+  const token = localStorage.getItem('authToken')
+  if (!token) { router.push('/login'); throw new Error('Not authenticated') }
+  const resp = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'PUT',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {})
+  })
+  const data = await resp.json().catch(() => ({}))
+  if (!resp.ok) throw new Error(data.message || `Request failed (HTTP ${resp.status}).`)
+  return data
+}
+
 // ---- Message a single annotator ----
 const openMessageModal = (rater) => {
   messageTarget.value = rater
@@ -1619,6 +1754,65 @@ const sendBroadcast = async () => {
     broadcastError.value = err.message || 'Failed to broadcast.'
   } finally {
     isBroadcasting.value = false
+  }
+}
+
+// ---- Sent messages (outbox): view + edit ----
+const openOutbox = async () => {
+  showOutboxModal.value = true
+  clearTimers()
+  await fetchOutbox()
+}
+const closeOutbox = () => {
+  showOutboxModal.value = false
+  if (isAutoRefreshActive.value) startTimers()
+}
+const fetchOutbox = async () => {
+  outboxLoading.value = true
+  outboxError.value = null
+  try {
+    const token = localStorage.getItem('authToken')
+    if (!token) { router.push('/login'); return }
+    const resp = await fetch(`${API_BASE_URL}/admin/messages`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    const data = await resp.json().catch(() => ({}))
+    if (!resp.ok) throw new Error(data.message || `Request failed (HTTP ${resp.status}).`)
+    outboxItems.value = data.items || []
+  } catch (err) {
+    outboxError.value = err.message || 'Failed to load sent messages.'
+  } finally {
+    outboxLoading.value = false
+  }
+}
+const openEditMsg = (item) => {
+  editTarget.value = item
+  editBody.value = item.body || ''
+  editError.value = null
+  showEditMsgModal.value = true
+}
+const closeEditMsg = () => {
+  showEditMsgModal.value = false
+  editTarget.value = null
+}
+const saveEditMsg = async () => {
+  if (!editTarget.value || !editBody.value.trim()) return
+  isSavingEdit.value = true
+  editError.value = null
+  try {
+    const item = editTarget.value
+    const path = item.kind === 'broadcast'
+      ? `/admin/broadcast/${item.broadcast_id}`
+      : `/admin/message/${item.id}`
+    const data = await adminPut(path, { body: editBody.value.trim() })
+    closeEditMsg()
+    showToast(data.message || 'Message updated', 'bi-check-circle-fill text-success')
+    await fetchOutbox()
+    fetchDashboardData(false)
+  } catch (err) {
+    editError.value = err.message || 'Failed to update message.'
+  } finally {
+    isSavingEdit.value = false
   }
 }
 
