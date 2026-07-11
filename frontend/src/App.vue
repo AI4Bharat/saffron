@@ -168,7 +168,7 @@ let msgPollId = null
 const notifKind = (cat) =>
   cat === 'nudge' ? 'nudge' : cat === 'broadcast' ? 'broadcast' : 'message'
 const notifIcon = (cat) =>
-  cat === 'nudge' ? 'bi-bell-fill' : cat === 'broadcast' ? 'bi-stars' : 'bi-chat-left-text-fill'
+  cat === 'nudge' ? 'bi-bell-fill' : cat === 'broadcast' ? 'bi-broadcast' : 'bi-chat-left-text-fill'
 const notifLabel = (cat) =>
   cat === 'nudge' ? 'Task reminder' : cat === 'broadcast' ? 'Announcement' : 'Message'
 const formatMsgDate = (iso) => {

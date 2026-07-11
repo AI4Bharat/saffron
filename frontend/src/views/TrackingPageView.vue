@@ -490,7 +490,7 @@
               <div class="col-12 col-md-6">
                 <div class="d-flex flex-wrap gap-2 justify-content-md-end align-items-center">
                   <button class="btn btn-outline-primary btn-sm d-inline-flex align-items-center gap-1" @click="openBroadcastModal" title="Send a message to every annotator">
-                    <i class="bi bi-megaphone-fill"></i> Broadcast
+                    <i class="bi bi-broadcast"></i> Broadcast
                   </button>
                   <div class="form-check form-switch mb-0 me-1">
                     <input class="form-check-input" type="checkbox" role="switch" id="showAllRaters" v-model="showAllRaters" />
@@ -519,7 +519,7 @@
                   <th class="sortable-th" style="width: 230px;" @click="sortRaters('assigned')">Assigned Tasks <i :class="['bi', sortIcon(raterSort, 'assigned')]"></i></th>
                   <th class="sortable-th" style="width: 160px;" @click="sortRaters('lastactive')">Last Active <i :class="['bi', sortIcon(raterSort, 'lastactive')]"></i></th>
                   <th style="width: 140px;">Status</th>
-                  <th class="text-end pe-4" style="width: 120px;">Actions</th>
+                  <th class="text-end pe-4" style="width: 180px;">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -575,61 +575,59 @@
                     </span>
                   </td>
                   <td class="text-end pe-4">
-                    <div class="d-flex gap-2 justify-content-end flex-wrap">
+                    <div class="d-inline-flex gap-1 justify-content-end rater-actions">
+                      <!-- Assign / Edit (primary action) -->
+                      <button
+                        class="rater-action-btn"
+                        :class="assignedIdList(rater).length ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-outline-primary'"
+                        @click="openAssignModal(rater)"
+                        :title="assignedIdList(rater).length ? 'Edit assigned tasks' : 'Assign tasks'"
+                      >
+                        <i :class="['bi', assignedIdList(rater).length ? 'bi-pencil-square' : 'bi-plus-lg']"></i>
+                      </button>
                       <!-- Message -->
                       <button
-                        class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center gap-1 position-relative"
+                        class="rater-action-btn btn btn-sm btn-outline-secondary position-relative"
                         @click="openMessageModal(rater)"
                         title="Send a message to this annotator"
                       >
                         <i class="bi bi-chat-dots"></i>
-                        <span v-if="rater.messages_sent" class="badge rounded-pill bg-secondary text-white fs-9">{{ rater.messages_sent }}</span>
+                        <span v-if="rater.messages_sent" class="rater-msg-badge">{{ rater.messages_sent }}</span>
                       </button>
-                      <!-- Nudge (only meaningful for stale annotators) -->
+                      <!-- Nudge (only for stale annotators) -->
                       <button
                         v-if="isStale(rater)"
-                        class="btn btn-sm btn-outline-warning d-inline-flex align-items-center gap-1"
+                        class="rater-action-btn btn btn-sm btn-outline-warning"
                         @click="nudgeRater(rater)"
                         title="Send a task reminder to this stale annotator"
                       >
                         <i class="bi bi-bell"></i>
                       </button>
+                      <!-- Export -->
                       <button
-                        class="btn btn-sm btn-outline-success d-inline-flex align-items-center gap-1"
+                        class="rater-action-btn btn btn-sm btn-outline-success"
                         @click="openExportModal(rater)"
                         title="Export annotator annotations to CSV"
                         :disabled="!assignedIdList(rater).length"
                       >
                         <i class="bi bi-download"></i>
-                        <span>Export</span>
-                      </button>
-                      <button
-                        class="btn btn-sm d-inline-flex align-items-center gap-1"
-                        :class="assignedIdList(rater).length ? 'btn-outline-primary' : 'btn-primary'"
-                        @click="openAssignModal(rater)"
-                        :title="assignedIdList(rater).length ? 'Edit assigned tasks' : 'Assign tasks'"
-                      >
-                        <i :class="['bi', assignedIdList(rater).length ? 'bi-pencil-square' : 'bi-plus-lg']"></i>
-                        <span>{{ assignedIdList(rater).length ? 'Edit' : 'Assign' }}</span>
                       </button>
                       <!-- Remove (deactivate) or Reactivate -->
                       <button
                         v-if="rater.account_active === false"
-                        class="btn btn-sm btn-success d-inline-flex align-items-center gap-1"
+                        class="rater-action-btn btn btn-sm btn-success"
                         @click="reactivateRater(rater)"
                         title="Reactivate this annotator (restores their previous task locks)"
                       >
                         <i class="bi bi-arrow-counterclockwise"></i>
-                        <span>Reactivate</span>
                       </button>
                       <button
                         v-else
-                        class="btn btn-sm btn-outline-danger d-inline-flex align-items-center gap-1"
+                        class="rater-action-btn btn btn-sm btn-outline-danger"
                         @click="openRemoveModal(rater)"
                         title="Remove (deactivate) this annotator"
                       >
                         <i class="bi bi-person-dash"></i>
-                        <span>Remove</span>
                       </button>
                     </div>
                   </td>
@@ -831,7 +829,7 @@
         <div class="assign-modal-card shadow-lg" style="max-width: 520px;">
           <div class="assign-modal-header d-flex justify-content-between align-items-center">
             <div class="d-flex align-items-center gap-3">
-              <div class="avatar-circle-lg bg-primary-subtle text-primary"><i class="bi bi-megaphone-fill"></i></div>
+              <div class="avatar-circle-lg bg-primary-subtle text-primary"><i class="bi bi-broadcast"></i></div>
               <div>
                 <h5 class="fw-bold mb-0 text-dark">Broadcast to all annotators</h5>
                 <small class="text-muted">Sends the same message to every registered annotator.</small>
@@ -849,7 +847,7 @@
             <button class="btn btn-light border btn-sm" @click="closeBroadcastModal" :disabled="isBroadcasting">Cancel</button>
             <button class="btn btn-primary btn-sm d-inline-flex align-items-center gap-1.5" :disabled="isBroadcasting || !broadcastBody.trim()" @click="sendBroadcast">
               <span v-if="isBroadcasting" class="spinner-border spinner-border-sm"></span>
-              <i v-else class="bi bi-megaphone-fill"></i>
+              <i v-else class="bi bi-broadcast"></i>
               <span>Broadcast</span>
             </button>
           </div>
@@ -1615,7 +1613,7 @@ const sendBroadcast = async () => {
   try {
     const data = await adminPost('/admin/message/broadcast', { body: broadcastBody.value.trim() })
     closeBroadcastModal()
-    showToast(data.message || 'Broadcast sent', 'bi-megaphone-fill text-primary')
+    showToast(data.message || 'Broadcast sent', 'bi-broadcast text-primary')
     fetchDashboardData(false)
   } catch (err) {
     broadcastError.value = err.message || 'Failed to broadcast.'
@@ -2037,6 +2035,21 @@ onUnmounted(() => {
 /* Clickable batch rows: the whole row opens the task in the same tab */
 .batch-row { cursor: pointer; transition: background-color .12s ease, box-shadow .12s ease; }
 .batch-row:hover { background-color: #fff7ee !important; box-shadow: inset 3px 0 0 #d8661b; }
+
+/* Rater actions: uniform square icon buttons in a single tidy row */
+.rater-actions { flex-wrap: nowrap; }
+.rater-action-btn {
+  width: 32px; height: 32px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 8px; flex-shrink: 0;
+}
+.rater-action-btn .bi { font-size: 0.9rem; }
+.rater-msg-badge {
+  position: absolute; top: -5px; right: -5px;
+  min-width: 15px; height: 15px; line-height: 15px; padding: 0 3px;
+  background: #64748b; color: #fff; font-size: 0.58rem; font-weight: 700;
+  border-radius: 999px; box-shadow: 0 0 0 1.5px #fff;
+}
 
 .sortable-th {
   cursor: pointer;
