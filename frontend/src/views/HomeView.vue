@@ -58,6 +58,45 @@
         </div>
       </div>
 
+      <!-- Annotator inbox: messages from the admin -->
+      <div v-if="!isAdmin && messages.length" class="card border-0 shadow-sm rounded-4 mb-5 overflow-hidden inbox-card">
+        <div class="card-header bg-white py-3 border-0 d-flex align-items-center justify-content-between">
+          <h5 class="mb-0 d-flex align-items-center gap-2 text-dark">
+            <i class="bi bi-inbox-fill text-primary"></i>
+            <span>Messages from admin</span>
+            <span v-if="unreadCount" class="badge rounded-pill bg-danger">{{ unreadCount }} new</span>
+          </h5>
+          <button v-if="unreadCount" class="btn btn-sm btn-outline-secondary" @click="markAllRead" :disabled="isMarkingRead">
+            <span v-if="isMarkingRead" class="spinner-border spinner-border-sm me-1"></span>
+            <i v-else class="bi bi-check2-all me-1"></i> Mark all read
+          </button>
+        </div>
+        <div class="card-body pt-0">
+          <ul class="list-unstyled mb-0 inbox-list">
+            <li
+              v-for="m in messages"
+              :key="m.id"
+              class="inbox-item p-3 rounded-3 mb-2 d-flex gap-3 align-items-start"
+              :class="[notifKind(m.category), { unread: !m.is_read }]"
+            >
+              <span class="inbox-avatar flex-shrink-0" :class="notifKind(m.category)">
+                <i class="bi" :class="notifIcon(m.category)"></i>
+              </span>
+              <div class="flex-grow-1 min-w-0">
+                <div class="d-flex justify-content-between align-items-center gap-2 mb-1">
+                  <span class="inbox-chip" :class="notifKind(m.category)">
+                    {{ notifLabel(m.category) }}
+                    <span v-if="!m.is_read" class="inbox-new-dot"></span>
+                  </span>
+                  <small class="text-muted flex-shrink-0">{{ formatMsgDate(m.created_at) }}</small>
+                </div>
+                <p class="mb-0 text-dark-emphasis inbox-body">{{ m.body }}</p>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
+
       <!-- Admin Control Panel inside Home (for manual Test ID bypass & quick link) -->
       <div v-if="isAdmin" class="card border-0 shadow-sm rounded-4 mb-5 overflow-hidden">
         <div class="card-header bg-dark text-white py-3 border-0">
@@ -269,7 +308,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { API_BASE_URL } from '@/config'
 
@@ -283,6 +322,12 @@ const manualTestId = ref('')
 const tasks = ref([])
 const isLoading = ref(true)
 const error = ref(null)
+
+// Annotator inbox (admin -> annotator messages)
+const messages = ref([])
+const unreadCount = ref(0)
+const isMarkingRead = ref(false)
+let msgPollTimer = null
 
 // Filtering & Search
 const searchQuery = ref('')
@@ -479,9 +524,67 @@ const getButtonText = (status) => {
 }
 
 // Lifecycle
+// ---- Annotator inbox ----
+const loadMessages = async () => {
+  if (isAdmin.value) return
+  try {
+    const token = localStorage.getItem('authToken')
+    if (!token) return
+    const resp = await fetch(`${API_BASE_URL}/rater/messages`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    if (!resp.ok) return
+    const data = await resp.json()
+    messages.value = data.messages || []
+    unreadCount.value = data.unread_count || 0
+  } catch (err) {
+    console.error('Error loading messages:', err)
+  }
+}
+
+const markAllRead = async () => {
+  if (isMarkingRead.value || !unreadCount.value) return
+  isMarkingRead.value = true
+  try {
+    const token = localStorage.getItem('authToken')
+    const resp = await fetch(`${API_BASE_URL}/rater/messages/read`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    })
+    if (resp.ok) {
+      messages.value = messages.value.map(m => ({ ...m, is_read: true }))
+      unreadCount.value = 0
+    }
+  } catch (err) {
+    console.error('Error marking messages read:', err)
+  } finally {
+    isMarkingRead.value = false
+  }
+}
+
+const formatMsgDate = (iso) => {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return ''
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+const notifKind = (cat) => cat === 'nudge' ? 'nudge' : cat === 'broadcast' ? 'broadcast' : 'message'
+const notifIcon = (cat) => cat === 'nudge' ? 'bi-bell-fill' : cat === 'broadcast' ? 'bi-stars' : 'bi-chat-left-text-fill'
+const notifLabel = (cat) => cat === 'nudge' ? 'Task reminder' : cat === 'broadcast' ? 'Announcement' : 'Message'
+
 onMounted(() => {
   loadUserFromToken()
   loadTasks()
+  if (!isAdmin.value) {
+    loadMessages()
+    // Light polling so new admin messages appear without a manual refresh.
+    msgPollTimer = setInterval(loadMessages, 30000)
+  }
+})
+
+onUnmounted(() => {
+  if (msgPollTimer) clearInterval(msgPollTimer)
 })
 </script>
 
@@ -702,4 +805,37 @@ onMounted(() => {
     border-right: 1px solid #e2e8f0;
   }
 }
+
+/* Annotator inbox */
+.inbox-card { border: 1px solid rgba(0,0,0,0.04) !important; }
+.inbox-item {
+  background-color: #f8fafc;
+  border: 1px solid #eef2f7;
+  transition: background-color .15s ease, border-color .15s ease;
+}
+.inbox-item.unread {
+  background-color: #fff8f0;
+  border-color: #fcd9a8;
+  box-shadow: inset 3px 0 0 #d8661b;
+}
+.inbox-avatar {
+  width: 40px; height: 40px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 1.15rem; color: #fff;
+}
+.inbox-avatar.broadcast { background: linear-gradient(135deg, #f4a93c, #d8661b); }
+.inbox-avatar.nudge { background: linear-gradient(135deg, #fbbf24, #f59e0b); }
+.inbox-avatar.message { background: linear-gradient(135deg, #818cf8, #4f46e5); }
+.inbox-chip {
+  display: inline-flex; align-items: center;
+  font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 3px 10px; border-radius: 999px;
+}
+.inbox-chip.broadcast { background: #fff1e2; color: #c2410c; }
+.inbox-chip.nudge { background: #fef3c7; color: #b45309; }
+.inbox-chip.message { background: #e0e7ff; color: #4338ca; }
+.inbox-new-dot { width: 7px; height: 7px; border-radius: 50%; background: #ef4444; margin-left: 6px; display: inline-block; }
+.inbox-body { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
+.min-w-0 { min-width: 0; }
+.fs-9 { font-size: 0.7rem; }
 </style>

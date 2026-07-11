@@ -153,6 +153,130 @@
           </div>
         </div>
 
+        <!-- Audio Segmentation Hours -->
+        <div v-if="audioSegStats.length">
+          <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+            <h3 class="fw-bold text-dark m-0"><i class="bi bi-soundwave text-primary me-2"></i>Audio Segmentation Hours</h3>
+            <span class="badge bg-light text-dark border py-2 px-3">
+              Completed {{ formatDuration(audioSegFilteredTotals.completedSecs) }} of {{ formatDuration(audioSegFilteredTotals.totalSecs) }} total audio
+            </span>
+          </div>
+
+          <!-- Filters + accept/reject totals for the audio tracker -->
+          <div class="bg-white p-3 rounded shadow-sm border mb-4">
+            <div class="row g-3 align-items-end">
+              <div class="col-6 col-md-3">
+                <label class="form-label text-xs fw-bold text-secondary mb-1">Language</label>
+                <select v-model="audioLangFilter" class="form-select">
+                  <option value="">All Languages</option>
+                  <option v-for="l in audioLanguages" :key="l" :value="l">{{ l }}</option>
+                </select>
+              </div>
+              <div class="col-6 col-md-3">
+                <label class="form-label text-xs fw-bold text-secondary mb-1">Persona</label>
+                <select v-model="audioPersonaFilter" class="form-select">
+                  <option value="">All Personas</option>
+                  <option v-for="p in audioPersonas" :key="p" :value="p">{{ p }}</option>
+                </select>
+              </div>
+              <div class="col-12 col-md-6">
+                <div class="d-flex flex-wrap gap-2 justify-content-md-end">
+                  <div class="seg-stat-pill total">
+                    <span class="lbl">Total Submissions</span>
+                    <span class="val">{{ audioSegFilteredTotals.total }}</span>
+                  </div>
+                  <div class="seg-stat-pill accept">
+                    <span class="lbl"><i class="bi bi-check-circle-fill me-1"></i>Accepted</span>
+                    <span class="val">{{ audioSegFilteredTotals.accepted }}</span>
+                  </div>
+                  <div class="seg-stat-pill reject">
+                    <span class="lbl"><i class="bi bi-x-circle-fill me-1"></i>Rejected</span>
+                    <span class="val">{{ audioSegFilteredTotals.rejected }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="row g-4 mb-4">
+            <div v-for="seg in filteredAudioSeg" :key="seg.test_id" class="col-12 col-lg-6">
+              <div class="bg-white p-4 rounded shadow-sm border hover-lift h-100">
+                <div class="d-flex justify-content-between align-items-start mb-2 gap-2">
+                  <div>
+                    <h4 class="fw-bold text-dark m-0 fs-6">#{{ seg.test_id }} — {{ seg.description }}</h4>
+                    <div class="d-flex flex-wrap gap-1 mt-1">
+                      <span class="badge rounded-pill bg-secondary-subtle text-secondary border">{{ seg.language || 'Unknown' }}</span>
+                      <span class="badge rounded-pill bg-info-subtle text-info-emphasis border">{{ seg.persona || 'Unknown' }}</span>
+                    </div>
+                  </div>
+                  <span class="badge bg-light text-dark border text-nowrap">{{ seg.total_tasks }} clips</span>
+                </div>
+
+                <!-- Accept / reject summary for this batch -->
+                <div class="d-flex flex-wrap gap-2 mb-3">
+                  <span class="badge bg-success-subtle text-success border py-2 px-2">
+                    <i class="bi bi-check-circle-fill me-1"></i>{{ seg.accepted || 0 }} accepted
+                  </span>
+                  <span class="badge bg-danger-subtle text-danger border py-2 px-2">
+                    <i class="bi bi-x-circle-fill me-1"></i>{{ seg.rejected || 0 }} rejected
+                  </span>
+                  <span class="badge bg-light text-secondary border py-2 px-2">
+                    {{ seg.total_submissions || 0 }} submissions
+                  </span>
+                </div>
+
+                <div class="d-flex justify-content-between text-xs mb-1">
+                  <span class="text-muted">Audio completed</span>
+                  <span class="fw-bold text-dark">
+                    {{ formatDuration(seg.completed_audio_seconds) }} / {{ formatDuration(seg.total_audio_seconds) }}
+                    ({{ getPercent(seg.completed_audio_seconds, seg.total_audio_seconds) }}%)
+                  </span>
+                </div>
+                <div class="progress bg-light-gradient mb-3" style="height: 10px; border-radius: 5px;">
+                  <div
+                    class="progress-bar progress-gradient"
+                    role="progressbar"
+                    :style="{ width: getPercent(seg.completed_audio_seconds, seg.total_audio_seconds) + '%' }"
+                  ></div>
+                </div>
+                <div class="table-responsive">
+                  <table class="table table-sm table-hover align-middle mb-0">
+                    <thead class="table-light">
+                      <tr>
+                        <th class="text-xs">Annotator</th>
+                        <th class="text-xs text-end" style="width: 100px;">Tasks Done</th>
+                        <th class="text-xs text-center" style="width: 120px;">Accept / Reject</th>
+                        <th class="text-xs text-end" style="width: 130px;">Hours Completed</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="a in seg.annotators" :key="a.rater_id">
+                        <td>
+                          <div class="fw-semibold text-dark text-xs">{{ a.name }}</div>
+                          <div class="text-muted" style="font-size: 0.7rem;">{{ a.email }}</div>
+                        </td>
+                        <td class="text-end text-xs">{{ a.completed_tasks }} / {{ seg.total_tasks }}</td>
+                        <td class="text-center text-xs">
+                          <span class="text-success fw-bold">{{ a.accepted || 0 }}</span>
+                          <span class="text-muted mx-1">/</span>
+                          <span class="text-danger fw-bold">{{ a.rejected || 0 }}</span>
+                        </td>
+                        <td class="text-end fw-bold text-xs">{{ formatDuration(a.completed_audio_seconds) }}</td>
+                      </tr>
+                      <tr v-if="seg.annotators.length === 0">
+                        <td colspan="4" class="text-center text-muted text-xs py-2">No submissions yet.</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+            <div v-if="filteredAudioSeg.length === 0" class="col-12 text-center text-muted py-4 bg-white rounded border">
+              No audio batches match the selected filters.
+            </div>
+          </div>
+        </div>
+
         <!-- Needs Attention: actionable batch health (click a card to jump) -->
         <h3 class="fw-bold text-dark mb-3"><i class="bi bi-clipboard2-pulse-fill text-primary me-2"></i>Needs Attention</h3>
         <div class="row g-4 mb-4">
@@ -256,11 +380,11 @@
                   <th style="width: 150px;">Test Type</th>
                   <th class="sortable-th" style="width: 250px;" @click="sortBatches('completion')">Unique Completed / Total <i :class="['bi', sortIcon(batchSort, 'completion')]"></i></th>
                   <th class="sortable-th" style="width: 140px;" @click="sortBatches('submissions')">Total Submissions <i :class="['bi', sortIcon(batchSort, 'submissions')]"></i></th>
-                  <th style="width: 140px;">Task Link</th>
+                  <th style="width: 120px;">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="test in filteredTests" :key="test.id">
+                <tr v-for="test in pagedTests" :key="test.id" class="batch-row" @click="openTask(test.id)" title="Click to open this task">
                   <td class="ps-4 fw-bold text-secondary">#{{ test.id }}</td>
                   <td>
                     <div class="fw-semibold text-dark">{{ test.description }}</div>
@@ -293,12 +417,8 @@
                   <td>
                     <span class="fw-semibold text-dark">{{ test.total_submissions }}</span>
                   </td>
-                  <td>
+                  <td @click.stop>
                     <div class="btn-group btn-group-sm" role="group">
-                      <a :href="`/${test.id}`" target="_blank" rel="noopener"
-                         class="btn btn-outline-primary" title="Open task in a new tab">
-                        <i class="bi bi-box-arrow-up-right"></i>
-                      </a>
                       <button type="button" class="btn btn-outline-secondary"
                               title="Copy task link" @click="copyTaskLink(test.id)">
                         <i class="bi bi-clipboard"></i>
@@ -318,6 +438,26 @@
               </tbody>
             </table>
           </div>
+
+          <!-- Pager: keeps the batch list scannable instead of one endless table -->
+          <div v-if="filteredTests.length" class="d-flex flex-wrap align-items-center justify-content-between gap-2 px-3 py-3 border-top bg-white">
+            <small class="text-muted">
+              Showing <strong>{{ batchRangeStart }}–{{ batchRangeEnd }}</strong> of <strong>{{ filteredTests.length }}</strong> batches
+            </small>
+            <div class="d-flex align-items-center gap-2">
+              <select v-model.number="batchPageSize" class="form-select form-select-sm" style="width: auto;" title="Rows per page">
+                <option :value="12">12 / page</option>
+                <option :value="25">25 / page</option>
+                <option :value="50">50 / page</option>
+                <option :value="9999">Show all</option>
+              </select>
+              <div class="btn-group btn-group-sm">
+                <button class="btn btn-outline-secondary" :disabled="batchPage <= 1" @click="batchPage--"><i class="bi bi-chevron-left"></i></button>
+                <span class="btn btn-outline-secondary disabled fw-semibold">{{ batchPage }} / {{ batchPageCount }}</span>
+                <button class="btn btn-outline-secondary" :disabled="batchPage >= batchPageCount" @click="batchPage++"><i class="bi bi-chevron-right"></i></button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -330,6 +470,11 @@
             <strong>{{ staleRaters.length }}</strong>
             annotator{{ staleRaters.length > 1 ? 's have' : ' has' }} tasks assigned but no activity in {{ STALE_DAYS }}+ days.
           </div>
+          <button class="btn btn-sm btn-warning flex-shrink-0 fw-semibold" @click="remindAllStale" :disabled="isBulkNudging" title="Send a reminder message to every stale annotator">
+            <span v-if="isBulkNudging" class="spinner-border spinner-border-sm me-1"></span>
+            <i v-else class="bi bi-bell-fill me-1"></i>
+            Remind all
+          </button>
           <button class="btn btn-sm btn-outline-dark flex-shrink-0" @click="showStaleOnly = !showStaleOnly">
             <i :class="['bi me-1', showStaleOnly ? 'bi-list-ul' : 'bi-funnel-fill']"></i>
             {{ showStaleOnly ? 'Show all' : 'Show only these' }}
@@ -344,6 +489,9 @@
               </div>
               <div class="col-12 col-md-6">
                 <div class="d-flex flex-wrap gap-2 justify-content-md-end align-items-center">
+                  <button class="btn btn-outline-primary btn-sm d-inline-flex align-items-center gap-1" @click="openBroadcastModal" title="Send a message to every annotator">
+                    <i class="bi bi-megaphone-fill"></i> Broadcast
+                  </button>
                   <div class="form-check form-switch mb-0 me-1">
                     <input class="form-check-input" type="checkbox" role="switch" id="showAllRaters" v-model="showAllRaters" />
                     <label class="form-check-label text-xs text-secondary user-select-none" for="showAllRaters">Show all</label>
@@ -411,6 +559,14 @@
                   </td>
                   <td>
                     <span
+                      v-if="rater.account_active === false"
+                      class="badge px-3 py-2 text-xs rounded-pill d-inline-flex align-items-center gap-1 bg-danger-subtle text-danger"
+                      title="This annotator is deactivated and cannot log in"
+                    >
+                      <i class="bi bi-slash-circle-fill"></i> Deactivated
+                    </span>
+                    <span
+                      v-else
                       :class="['badge px-3 py-2 text-xs rounded-pill d-inline-flex align-items-center gap-1',
                         rater.completed_tasks_count >= 1 ? 'bg-success-subtle text-success' : 'bg-warning-subtle text-warning animate-pulse-border']"
                     >
@@ -419,7 +575,25 @@
                     </span>
                   </td>
                   <td class="text-end pe-4">
-                    <div class="d-flex gap-2 justify-content-end">
+                    <div class="d-flex gap-2 justify-content-end flex-wrap">
+                      <!-- Message -->
+                      <button
+                        class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center gap-1 position-relative"
+                        @click="openMessageModal(rater)"
+                        title="Send a message to this annotator"
+                      >
+                        <i class="bi bi-chat-dots"></i>
+                        <span v-if="rater.messages_sent" class="badge rounded-pill bg-secondary text-white fs-9">{{ rater.messages_sent }}</span>
+                      </button>
+                      <!-- Nudge (only meaningful for stale annotators) -->
+                      <button
+                        v-if="isStale(rater)"
+                        class="btn btn-sm btn-outline-warning d-inline-flex align-items-center gap-1"
+                        @click="nudgeRater(rater)"
+                        title="Send a task reminder to this stale annotator"
+                      >
+                        <i class="bi bi-bell"></i>
+                      </button>
                       <button
                         class="btn btn-sm btn-outline-success d-inline-flex align-items-center gap-1"
                         @click="openExportModal(rater)"
@@ -437,6 +611,25 @@
                       >
                         <i :class="['bi', assignedIdList(rater).length ? 'bi-pencil-square' : 'bi-plus-lg']"></i>
                         <span>{{ assignedIdList(rater).length ? 'Edit' : 'Assign' }}</span>
+                      </button>
+                      <!-- Remove (deactivate) or Reactivate -->
+                      <button
+                        v-if="rater.account_active === false"
+                        class="btn btn-sm btn-success d-inline-flex align-items-center gap-1"
+                        @click="reactivateRater(rater)"
+                        title="Reactivate this annotator (restores their previous task locks)"
+                      >
+                        <i class="bi bi-arrow-counterclockwise"></i>
+                        <span>Reactivate</span>
+                      </button>
+                      <button
+                        v-else
+                        class="btn btn-sm btn-outline-danger d-inline-flex align-items-center gap-1"
+                        @click="openRemoveModal(rater)"
+                        title="Remove (deactivate) this annotator"
+                      >
+                        <i class="bi bi-person-dash"></i>
+                        <span>Remove</span>
                       </button>
                     </div>
                   </td>
@@ -595,6 +788,123 @@
         </div>
       </div>
     </transition>
+
+    <!-- ===================== MESSAGE MODAL ===================== -->
+    <transition name="modal-fade">
+      <div v-if="showMessageModal" class="assign-modal-backdrop" @click.self="closeMessageModal">
+        <div class="assign-modal-card shadow-lg" style="max-width: 520px;">
+          <div class="assign-modal-header d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-3">
+              <div class="avatar-circle-lg">{{ (messageTarget && messageTarget.name ? messageTarget.name : '?').charAt(0).toUpperCase() }}</div>
+              <div>
+                <h5 class="fw-bold mb-0 text-dark">Message annotator</h5>
+                <small class="text-muted">{{ messageTarget && messageTarget.name }} · {{ messageTarget && messageTarget.email }}</small>
+              </div>
+            </div>
+            <button class="btn-close" @click="closeMessageModal"></button>
+          </div>
+          <div class="assign-modal-body">
+            <div class="d-flex align-items-start gap-2 py-2 px-3 rounded-3 bg-info-subtle mb-3">
+              <i class="bi bi-info-circle-fill text-info mt-1"></i>
+              <small class="text-info-emphasis">The annotator sees this in their in-app inbox the next time they open the studio.</small>
+            </div>
+            <label class="form-label fw-semibold text-dark small">Message</label>
+            <textarea v-model="messageBody" class="form-control" rows="4" maxlength="2000" placeholder="Write your message…"></textarea>
+            <div class="text-end text-muted fs-9 mt-1">{{ messageBody.length }}/2000</div>
+            <div v-if="messageError" class="text-danger small mt-1"><i class="bi bi-exclamation-triangle-fill me-1"></i>{{ messageError }}</div>
+          </div>
+          <div class="assign-modal-footer d-flex justify-content-end gap-2">
+            <button class="btn btn-light border btn-sm" @click="closeMessageModal" :disabled="isSendingMsg">Cancel</button>
+            <button class="btn btn-primary btn-sm d-inline-flex align-items-center gap-1.5" :disabled="isSendingMsg || !messageBody.trim()" @click="sendMessage">
+              <span v-if="isSendingMsg" class="spinner-border spinner-border-sm"></span>
+              <i v-else class="bi bi-send-fill"></i>
+              <span>Send message</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- ===================== BROADCAST MODAL ===================== -->
+    <transition name="modal-fade">
+      <div v-if="showBroadcastModal" class="assign-modal-backdrop" @click.self="closeBroadcastModal">
+        <div class="assign-modal-card shadow-lg" style="max-width: 520px;">
+          <div class="assign-modal-header d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-3">
+              <div class="avatar-circle-lg bg-primary-subtle text-primary"><i class="bi bi-megaphone-fill"></i></div>
+              <div>
+                <h5 class="fw-bold mb-0 text-dark">Broadcast to all annotators</h5>
+                <small class="text-muted">Sends the same message to every registered annotator.</small>
+              </div>
+            </div>
+            <button class="btn-close" @click="closeBroadcastModal"></button>
+          </div>
+          <div class="assign-modal-body">
+            <label class="form-label fw-semibold text-dark small">Message</label>
+            <textarea v-model="broadcastBody" class="form-control" rows="4" maxlength="2000" placeholder="Announcement for everyone…"></textarea>
+            <div class="text-end text-muted fs-9 mt-1">{{ broadcastBody.length }}/2000</div>
+            <div v-if="broadcastError" class="text-danger small mt-1"><i class="bi bi-exclamation-triangle-fill me-1"></i>{{ broadcastError }}</div>
+          </div>
+          <div class="assign-modal-footer d-flex justify-content-end gap-2">
+            <button class="btn btn-light border btn-sm" @click="closeBroadcastModal" :disabled="isBroadcasting">Cancel</button>
+            <button class="btn btn-primary btn-sm d-inline-flex align-items-center gap-1.5" :disabled="isBroadcasting || !broadcastBody.trim()" @click="sendBroadcast">
+              <span v-if="isBroadcasting" class="spinner-border spinner-border-sm"></span>
+              <i v-else class="bi bi-megaphone-fill"></i>
+              <span>Broadcast</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- ===================== REMOVE (DEACTIVATE) MODAL ===================== -->
+    <transition name="modal-fade">
+      <div v-if="showRemoveModal" class="assign-modal-backdrop" @click.self="closeRemoveModal">
+        <div class="assign-modal-card shadow-lg" style="max-width: 520px;">
+          <div class="assign-modal-header d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-3">
+              <div class="avatar-circle-lg bg-danger-subtle text-danger"><i class="bi bi-person-dash-fill"></i></div>
+              <div>
+                <h5 class="fw-bold mb-0 text-dark">Remove annotator</h5>
+                <small class="text-muted">{{ removeTarget && removeTarget.name }} · {{ removeTarget && removeTarget.email }}</small>
+              </div>
+            </div>
+            <button class="btn-close" @click="closeRemoveModal"></button>
+          </div>
+          <div class="assign-modal-body">
+            <div class="d-flex align-items-start gap-2 py-2 px-3 rounded-3 bg-warning-subtle mb-3">
+              <i class="bi bi-shield-check text-warning-emphasis mt-1"></i>
+              <small class="text-dark">
+                This <strong>deactivates</strong> the account (they can no longer log in) and
+                <strong>unlocks their {{ removeTarget ? assignedIdList(removeTarget).length : 0 }} assigned task(s)</strong> so others can pick them up.
+                Their submitted annotations are <strong>kept</strong>, and this is <strong>reversible</strong> — you can Reactivate them later.
+              </small>
+            </div>
+            <label class="form-label fw-semibold text-dark small">
+              Type <code class="text-danger">delete {{ removeTarget && removeTarget.name }}</code> to confirm
+            </label>
+            <input
+              v-model="removeConfirmText"
+              type="text"
+              class="form-control"
+              :class="{ 'is-invalid': removeConfirmText && !removeConfirmMatches }"
+              :placeholder="`delete ${removeTarget ? removeTarget.name : ''}`"
+              @keyup.enter="removeConfirmMatches && confirmRemove()"
+              autocomplete="off"
+            />
+            <div v-if="removeError" class="text-danger small mt-2"><i class="bi bi-exclamation-triangle-fill me-1"></i>{{ removeError }}</div>
+          </div>
+          <div class="assign-modal-footer d-flex justify-content-end gap-2">
+            <button class="btn btn-light border btn-sm" @click="closeRemoveModal" :disabled="isRemoving">Cancel</button>
+            <button class="btn btn-danger btn-sm d-inline-flex align-items-center gap-1.5" :disabled="isRemoving || !removeConfirmMatches" @click="confirmRemove">
+              <span v-if="isRemoving" class="spinner-border spinner-border-sm"></span>
+              <i v-else class="bi bi-person-dash-fill"></i>
+              <span>Deactivate annotator</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -636,6 +946,30 @@ const exportTaskId = ref('')
 const showExportModal = ref(false)
 const currentRaterForExport = ref(null)
 const selectedExportTaskId = ref('')
+
+// ---- Messaging / nudge / remove(deactivate) modal state ----
+const showMessageModal = ref(false)
+const messageTarget = ref(null)
+const messageBody = ref('')
+const isSendingMsg = ref(false)
+const messageError = ref(null)
+
+const showBroadcastModal = ref(false)
+const broadcastBody = ref('')
+const isBroadcasting = ref(false)
+const broadcastError = ref(null)
+
+const showRemoveModal = ref(false)
+const removeTarget = ref(null)
+const removeConfirmText = ref('')
+const isRemoving = ref(false)
+const removeError = ref(null)
+const isBulkNudging = ref(false)
+
+const removeConfirmMatches = computed(() =>
+  !!removeTarget.value &&
+  removeConfirmText.value.trim().toLowerCase() === `delete ${removeTarget.value.name}`.toLowerCase()
+)
 
 // Copy a batch's rater-facing task URL to the clipboard.
 const copyTaskLink = async (id) => {
@@ -896,6 +1230,58 @@ const globalProgressPercent = computed(() => {
   return getPercent(stats.value.unique_tasks_completed, stats.value.total_tasks)
 })
 
+// Audio segmentation: total audio duration + hours completed per annotator
+const audioSegStats = computed(() => dashboardData.value.audio_segmentation || [])
+
+// Audio tracker filters (Overview tab)
+const audioLangFilter = ref('')
+const audioPersonaFilter = ref('')
+
+// Distinct languages across audio-segmentation batches
+const audioLanguages = computed(() =>
+  [...new Set(audioSegStats.value.map(s => s.language).filter(Boolean))].sort()
+)
+
+// Personas — narrowed to the selected language so the two filters stay in sync
+const audioPersonas = computed(() => {
+  let list = audioSegStats.value
+  if (audioLangFilter.value) list = list.filter(s => s.language === audioLangFilter.value)
+  return [...new Set(list.map(s => s.persona).filter(Boolean))].sort()
+})
+
+// Reset the persona filter whenever language changes so we never show an empty set
+watch(audioLangFilter, () => { audioPersonaFilter.value = '' })
+
+const filteredAudioSeg = computed(() =>
+  audioSegStats.value.filter(s =>
+    (!audioLangFilter.value || s.language === audioLangFilter.value) &&
+    (!audioPersonaFilter.value || s.persona === audioPersonaFilter.value)
+  )
+)
+
+// One set of totals for the current language + persona filter
+const audioSegFilteredTotals = computed(() => {
+  let accepted = 0, rejected = 0, totalSecs = 0, completedSecs = 0
+  for (const seg of filteredAudioSeg.value) {
+    accepted += seg.accepted || 0
+    rejected += seg.rejected || 0
+    totalSecs += seg.total_audio_seconds || 0
+    completedSecs += seg.completed_audio_seconds || 0
+  }
+  return { accepted, rejected, total: accepted + rejected, totalSecs, completedSecs }
+})
+
+// 5025s -> "1h 23m 45s", 754s -> "12m 34s", 9s -> "9s"
+const formatDuration = (seconds) => {
+  const s = Math.round(seconds || 0)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  if (h > 0) return `${h}h ${m}m ${sec}s`
+  if (m > 0) return `${m}m ${sec}s`
+  return `${sec}s`
+}
+
 const getVersionFromDescription = (description) => {
   if (!description) return 'V1 / Default'
   const match = description.match(/Version\s*([\w\d]+)/i)
@@ -994,6 +1380,26 @@ const filteredTests = computed(() => {
     }
   })
 })
+
+// ---- Batch pagination (keeps the long task list scannable) ----
+const batchPage = ref(1)
+const batchPageSize = ref(12)
+const batchPageCount = computed(() => Math.max(1, Math.ceil(filteredTests.value.length / batchPageSize.value)))
+const pagedTests = computed(() => {
+  const start = (batchPage.value - 1) * batchPageSize.value
+  return filteredTests.value.slice(start, start + batchPageSize.value)
+})
+const batchRangeStart = computed(() => filteredTests.value.length ? (batchPage.value - 1) * batchPageSize.value + 1 : 0)
+const batchRangeEnd = computed(() => Math.min(batchPage.value * batchPageSize.value, filteredTests.value.length))
+// Snap back to page 1 whenever the filtered set or page size changes.
+watch([() => filteredTests.value.length, batchPageSize], () => { batchPage.value = 1 })
+watch(batchPage, (p) => {
+  if (p < 1) batchPage.value = 1
+  else if (p > batchPageCount.value) batchPage.value = batchPageCount.value
+})
+
+// Open a task in the SAME tab (in-app navigation) — used by the clickable batch row.
+const openTask = (id) => { router.push(`/${id}`) }
 
 // Parse a rater's assigned_tasks string ("1,2,3") into a numeric id array
 const assignedIdList = (rater) => {
@@ -1121,6 +1527,142 @@ const showToast = (msg, icon = 'bi-check-circle-fill text-success') => {
   setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300) }, 2400)
 }
 
+// Small helper: authenticated POST that returns parsed JSON or throws with the
+// server-provided message. Mirrors the pattern used by saveAssignments.
+const adminPost = async (path, body) => {
+  const token = localStorage.getItem('authToken')
+  if (!token) { router.push('/login'); throw new Error('Not authenticated') }
+  const resp = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {})
+  })
+  const data = await resp.json().catch(() => ({}))
+  if (!resp.ok) throw new Error(data.message || `Request failed (HTTP ${resp.status}).`)
+  return data
+}
+
+// ---- Message a single annotator ----
+const openMessageModal = (rater) => {
+  messageTarget.value = rater
+  messageBody.value = ''
+  messageError.value = null
+  showMessageModal.value = true
+  clearTimers()
+}
+const closeMessageModal = () => {
+  showMessageModal.value = false
+  messageTarget.value = null
+  if (isAutoRefreshActive.value) startTimers()
+}
+const sendMessage = async () => {
+  if (!messageTarget.value || !messageBody.value.trim()) return
+  isSendingMsg.value = true
+  messageError.value = null
+  try {
+    const name = messageTarget.value.name
+    await adminPost(`/admin/rater/${messageTarget.value.id}/message`, { body: messageBody.value.trim() })
+    closeMessageModal()
+    showToast(`Message sent to ${name}`)
+    fetchDashboardData(false)
+  } catch (err) {
+    messageError.value = err.message || 'Failed to send message.'
+  } finally {
+    isSendingMsg.value = false
+  }
+}
+
+// ---- Nudge (canned reminder) ----
+const nudgeRater = async (rater) => {
+  try {
+    await adminPost(`/admin/rater/${rater.id}/nudge`, {})
+    showToast(`Reminder sent to ${rater.name}`, 'bi-bell-fill text-warning')
+    fetchDashboardData(false)
+  } catch (err) {
+    showToast(err.message || 'Failed to send nudge.', 'bi-exclamation-triangle-fill text-danger')
+  }
+}
+const remindAllStale = async () => {
+  if (isBulkNudging.value || !staleRaters.value.length) return
+  isBulkNudging.value = true
+  try {
+    let ok = 0
+    for (const r of staleRaters.value) {
+      try { await adminPost(`/admin/rater/${r.id}/nudge`, {}); ok++ } catch (_) { /* skip */ }
+    }
+    showToast(`Reminder sent to ${ok} stale annotator(s)`, 'bi-bell-fill text-warning')
+    fetchDashboardData(false)
+  } finally {
+    isBulkNudging.value = false
+  }
+}
+
+// ---- Broadcast to all ----
+const openBroadcastModal = () => {
+  broadcastBody.value = ''
+  broadcastError.value = null
+  showBroadcastModal.value = true
+  clearTimers()
+}
+const closeBroadcastModal = () => {
+  showBroadcastModal.value = false
+  if (isAutoRefreshActive.value) startTimers()
+}
+const sendBroadcast = async () => {
+  if (!broadcastBody.value.trim()) return
+  isBroadcasting.value = true
+  broadcastError.value = null
+  try {
+    const data = await adminPost('/admin/message/broadcast', { body: broadcastBody.value.trim() })
+    closeBroadcastModal()
+    showToast(data.message || 'Broadcast sent', 'bi-megaphone-fill text-primary')
+    fetchDashboardData(false)
+  } catch (err) {
+    broadcastError.value = err.message || 'Failed to broadcast.'
+  } finally {
+    isBroadcasting.value = false
+  }
+}
+
+// ---- Remove (deactivate) / reactivate ----
+const openRemoveModal = (rater) => {
+  removeTarget.value = rater
+  removeConfirmText.value = ''
+  removeError.value = null
+  showRemoveModal.value = true
+  clearTimers()
+}
+const closeRemoveModal = () => {
+  showRemoveModal.value = false
+  removeTarget.value = null
+  if (isAutoRefreshActive.value) startTimers()
+}
+const confirmRemove = async () => {
+  if (!removeTarget.value || !removeConfirmMatches.value) return
+  isRemoving.value = true
+  removeError.value = null
+  try {
+    const name = removeTarget.value.name
+    const data = await adminPost(`/admin/rater/${removeTarget.value.id}/deactivate`, { confirm: removeConfirmText.value.trim() })
+    closeRemoveModal()
+    showToast(data.message || `${name} deactivated`, 'bi-person-dash-fill text-danger')
+    fetchDashboardData(false)
+  } catch (err) {
+    removeError.value = err.message || 'Failed to deactivate annotator.'
+  } finally {
+    isRemoving.value = false
+  }
+}
+const reactivateRater = async (rater) => {
+  try {
+    const data = await adminPost(`/admin/rater/${rater.id}/reactivate`, {})
+    showToast(data.message || `${rater.name} reactivated`, 'bi-arrow-counterclockwise text-success')
+    fetchDashboardData(false)
+  } catch (err) {
+    showToast(err.message || 'Failed to reactivate.', 'bi-exclamation-triangle-fill text-danger')
+  }
+}
+
 const saveAssignments = async () => {
   if (!currentRater.value) return
   isSaving.value = true
@@ -1244,6 +1786,49 @@ onUnmounted(() => {
   box-shadow: 0 10px 25px rgba(0,0,0,0.08) !important;
   border-color: rgba(0,0,0,0.15);
 }
+
+/* Audio tracker accept/reject totals pills */
+.seg-stat-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 96px;
+  padding: 0.45rem 0.9rem;
+  border-radius: 12px;
+  border: 1px solid rgba(0,0,0,0.08);
+  background: #f8f9fa;
+}
+.seg-stat-pill .lbl {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #64748b;
+}
+.seg-stat-pill .val {
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.1;
+  color: #1e293b;
+}
+.seg-stat-pill.accept {
+  background: #ecfdf3;
+  border-color: #abefc6;
+}
+.seg-stat-pill.accept .lbl,
+.seg-stat-pill.accept .val { color: #087443; }
+.seg-stat-pill.reject {
+  background: #fef3f2;
+  border-color: #fecdca;
+}
+.seg-stat-pill.reject .lbl,
+.seg-stat-pill.reject .val { color: #b42318; }
+.seg-stat-pill.total {
+  background: #eff8ff;
+  border-color: #b2ddff;
+}
+.seg-stat-pill.total .lbl,
+.seg-stat-pill.total .val { color: #175cd3; }
 
 /* Helper Text styles */
 .text-xs {
@@ -1449,6 +2034,10 @@ onUnmounted(() => {
 }
 
 /* Sortable table headers */
+/* Clickable batch rows: the whole row opens the task in the same tab */
+.batch-row { cursor: pointer; transition: background-color .12s ease, box-shadow .12s ease; }
+.batch-row:hover { background-color: #fff7ee !important; box-shadow: inset 3px 0 0 #d8661b; }
+
 .sortable-th {
   cursor: pointer;
   user-select: none;

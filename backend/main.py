@@ -66,6 +66,28 @@ with app.app_context():
             # Ignore error if it means the column already exists
             print("Database migration info: Column 'assigned_tasks' may already exist.")
 
+    # Self-healing migrations for admin deactivation (reversible account state).
+    # Additive only — no existing rows/data are modified by these ALTERs.
+    for col_ddl_pg, col_ddl_lite, col_name in [
+        ("ALTER TABLE rater ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE",
+         "ALTER TABLE rater ADD COLUMN is_active BOOLEAN DEFAULT 1", "is_active"),
+        ("ALTER TABLE rater ADD COLUMN IF NOT EXISTS prev_assigned_tasks VARCHAR(1024) DEFAULT ''",
+         "ALTER TABLE rater ADD COLUMN prev_assigned_tasks VARCHAR(1024) DEFAULT ''", "prev_assigned_tasks"),
+    ]:
+        try:
+            db.session.execute(db.text(col_ddl_pg))
+            db.session.commit()
+            print(f"Database migration: Successfully verified/added {col_name} column (PostgreSQL)")
+        except Exception:
+            db.session.rollback()
+            try:
+                db.session.execute(db.text(col_ddl_lite))
+                db.session.commit()
+                print(f"Database migration: Successfully added {col_name} column (SQLite)")
+            except Exception:
+                db.session.rollback()
+                print(f"Database migration info: Column '{col_name}' may already exist.")
+
 # Routes
 from application.views import *
 

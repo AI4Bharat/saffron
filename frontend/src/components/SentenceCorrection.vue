@@ -76,14 +76,32 @@
               </button>
             </div>
             <textarea
+              v-if="editingKey === 'text'"
               v-model="text"
               v-auto-grow
+              v-focus
+              @blur="stopEdit"
               class="form-control correction-textarea shadow-inner border-2"
               :class="{ 'rtl-text': isRtl }"
               :dir="isRtl ? 'rtl' : 'ltr'"
               rows="3"
               placeholder="Enter the corrected translation here..."
             ></textarea>
+            <!-- Rendered (KaTeX) view: click anywhere to edit the raw text. -->
+            <div
+              v-else
+              class="editable-rendered"
+              :class="{ 'rtl-text': isRtl }"
+              :dir="isRtl ? 'rtl' : 'ltr'"
+              role="textbox"
+              tabindex="0"
+              title="Click to edit — LaTeX is shown rendered; click to reveal and edit the raw text"
+              @click="startEdit('text')"
+              @focus="startEdit('text')"
+            >
+              <span v-if="(text || '').trim()" v-html="renderMath(text)"></span>
+              <span v-else class="editable-placeholder">Click to edit the translation…</span>
+            </div>
             <div class="d-flex justify-content-between align-items-center mt-2 fs-7">
               <span v-if="isModified" class="text-warning"><i class="bi bi-pencil-fill me-1"></i> Modified</span>
               <span v-else class="text-success-emphasis"><i class="bi bi-check-circle-fill me-1"></i> Original</span>
@@ -144,6 +162,15 @@ const vAutoGrow = {
   unmounted(el) { if (el._r) el.removeEventListener('input', el._r) }
 }
 
+// Focus (and place the caret at the end of) a textarea the moment it mounts, so
+// the click-to-edit field starts editing on the first click.
+const vFocus = {
+  mounted(el) {
+    el.focus()
+    try { const len = el.value.length; el.setSelectionRange(len, len) } catch (_) { /* non-text inputs */ }
+  }
+}
+
 const props = defineProps({
   currentTest: { type: Object, required: true },
   isLastTest: { type: Boolean, default: false },
@@ -158,6 +185,12 @@ const isSaving = ref(false)
 const startTime = ref(Date.now())
 const text = ref('')
 const origText = ref('')
+
+// Click-to-edit: the field shows rendered math/text until clicked, then becomes a
+// raw textarea; on blur it renders again. Keyed so only one field edits at a time.
+const editingKey = ref(null)
+function startEdit(key) { editingKey.value = key }
+function stopEdit() { editingKey.value = null }
 
 function setup() {
   startTime.value = Date.now()
@@ -288,6 +321,19 @@ async function handleSkip() {
 .correction-textarea { font-size: 1.1rem; line-height: 1.6; border-radius: 12px; padding: 14px 16px; resize: none; overflow-y: hidden; background-color: #fff; transition: border-color .2s ease, box-shadow .2s ease; min-height: 90px; }
 .correction-textarea:focus { border-color: #d8661b; box-shadow: 0 0 0 3px rgba(216,102,27,0.15) !important; }
 .shadow-inner { box-shadow: inset 0 2px 4px rgba(0,0,0,0.06); }
+/* Click-to-edit field: shows rendered math/text, becomes a textarea on click,
+   renders again on blur. Styled to echo the editing textarea so it doesn't jump. */
+.editable-rendered {
+  min-height: 90px; padding: 14px 16px; border: 2px solid #e2e8f0; border-radius: 12px;
+  background-color: #fff; cursor: text; font-size: 1.1rem; line-height: 1.6; color: #0f172a;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.06);
+  transition: border-color .2s ease, box-shadow .2s ease, background-color .2s ease; overflow-x: auto;
+}
+.editable-rendered:hover { border-color: #d8661b; background-color: #fffdfb; }
+.editable-rendered:focus { outline: none; border-color: #d8661b; box-shadow: 0 0 0 3px rgba(216,102,27,0.15); background-color: #fffdfb; }
+.editable-rendered.rtl-text { text-align: right; }
+.editable-placeholder { color: #94a3b8; font-style: italic; }
+.editable-rendered :deep(.katex) { white-space: normal; }
 .leading-relaxed { line-height: 1.7; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 .animate-fade-in { animation: fadeIn 0.4s ease-out; }

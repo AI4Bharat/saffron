@@ -1,7 +1,7 @@
 from flask import jsonify, request
 from werkzeug.security import generate_password_hash
 from flask import current_app as app
-from application.models import db, Rater, Test, Rating, Study, Session, Consent
+from application.models import db, Rater, Test, Rating, Study, Session, Consent, Message
 from datetime import datetime, timedelta
 import jwt
 from functools import wraps
@@ -24,6 +24,31 @@ cache.init_app(app)
 
 def get_screening_timer_key(rater_id, study_id):
     return f"screening_timer_{rater_id}_{study_id}"
+
+
+# Duration of the audio_segmentation WAV files, cached per (path, mtime) so the
+# headers are only read once per file per worker.
+_WAV_DURATION_CACHE = {}
+
+
+def _wav_duration_seconds(filepath):
+    import os
+    import wave
+    try:
+        mtime = os.path.getmtime(filepath)
+    except OSError:
+        return 0.0
+    hit = _WAV_DURATION_CACHE.get(filepath)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    try:
+        with wave.open(filepath, 'rb') as w:
+            rate = w.getframerate()
+            dur = w.getnframes() / float(rate) if rate else 0.0
+    except Exception:
+        dur = 0.0
+    _WAV_DURATION_CACHE[filepath] = (mtime, dur)
+    return dur
 
 # Set up logging
 if not app.debug:
@@ -165,6 +190,9 @@ def login():
     password = data.get('password')
     user = Rater.query.filter_by(name=username).first()
     if user and user.password == password:
+        # Deactivated annotators cannot log in (reversible via admin reactivate).
+        if getattr(user, 'is_active', True) is False:
+            return jsonify({'message': 'This account has been deactivated. Please contact the admin.'}), 403
         auth_token = generate_token(username)
         return jsonify({'token': auth_token}), 200
     elif username == 'admin':
@@ -259,8 +287,14 @@ def get_test(current_user, test_id):
                 if test_id in assigned_ids:
                     return jsonify({'message': 'This task is locked to another annotator.'}), 403
 
-    # Get the page numbers and ratings that the rater has already done
-    ratings = Rating.query.filter_by(rater_id=rater_id, test_id=test_id).all()
+    # Get the page numbers and ratings that the rater has already done.
+    # Admin uses 'Direct Task Preview' to inspect the pristine annotation
+    # flow, so it must NEVER load another annotator's saved work (admin has
+    # no Rater row and only borrows Rater.query.first() for auth above).
+    if username == "admin":
+        ratings = []
+    else:
+        ratings = Rating.query.filter_by(rater_id=rater_id, test_id=test_id).all()
     latest_status = {}
     for r in ratings:
         if r.page_no_progress:
@@ -1273,7 +1307,15 @@ def get_admin_dashboard(current_user):
             
         raters_data = []
         active_users_count = 0
-        
+
+        # How many messages the admin has already sent each annotator (for the UI badge).
+        msg_count_by_rater = {}
+        try:
+            for rid, cnt in db.session.query(Message.rater_id, db.func.count(Message.id)).group_by(Message.rater_id).all():
+                msg_count_by_rater[rid] = cnt
+        except Exception:
+            msg_count_by_rater = {}
+
         for rater in raters:
             rater_ratings = ratings_by_rater.get(rater.id, [])
             completed_tasks_count = len({r.page_no_progress for r in rater_ratings if r.page_no_progress and r.completion_status in ['completed', 'skipped']})
@@ -1297,7 +1339,9 @@ def get_admin_dashboard(current_user):
                 'completed_tasks_count': completed_tasks_count,
                 'last_active': last_active,
                 'status': status_text,
-                'assigned_tasks': rater.assigned_tasks or ""
+                'assigned_tasks': rater.assigned_tasks or "",
+                'account_active': bool(getattr(rater, 'is_active', True)),
+                'messages_sent': msg_count_by_rater.get(rater.id, 0)
             })
             
         pending_registrations_count = total_registered_users - active_users_count
@@ -1386,10 +1430,102 @@ def get_admin_dashboard(current_user):
             
         languages_data = list(languages_map.values())
         languages_data.sort(key=lambda x: x['language'])
-        
+
         total_consents_count = Consent.query.count()
         total_sessions_count = Session.query.count()
-        
+
+        # 3. Audio segmentation: total audio duration per batch + audio hours
+        # completed per annotator (durations read from the WAV headers, cached).
+        import os as _os
+        audio_root = _os.path.join(
+            _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+            'audio_segmentation'
+        )
+        raters_by_id = {r.id: r for r in raters}
+        audio_seg_data = []
+        for test in tests:
+            if test.test_type != 'audio-segmentation':
+                continue
+            entries = test.json_entry if isinstance(test.json_entry, list) else []
+            dur_by_task = {}
+            lang_counts = {}
+            persona_counts = {}
+            for item in entries:
+                task_id = str(item.get('id') or '')
+                filename = item.get('audio_filename')
+                # Track the language / persona of this batch (single-valued per set,
+                # but count occurrences and pick the most common to be safe).
+                il = item.get('language')
+                if il:
+                    lang_counts[il] = lang_counts.get(il, 0) + 1
+                ip = item.get('persona')
+                if ip:
+                    persona_counts[ip] = persona_counts.get(ip, 0) + 1
+                if not task_id or not filename:
+                    continue
+                dur_by_task[task_id] = _wav_duration_seconds(
+                    _os.path.join(audio_root, filename)
+                )
+            total_secs = sum(dur_by_task.values())
+
+            seg_language = max(lang_counts, key=lang_counts.get) if lang_counts else "Unknown"
+            seg_persona = max(persona_counts, key=persona_counts.get) if persona_counts else "Unknown"
+
+            # Distinct completed task ids per rater for this test + accept/reject
+            # tallies read from each submission's results_json ("evaluation" field).
+            done_by_rater = {}
+            eval_by_rater = {}   # rater_id -> [accepted, rejected]
+            seg_accepted = 0
+            seg_rejected = 0
+            for r in ratings_by_test.get(test.id, []):
+                if not (r.page_no_progress and r.completion_status in ['completed', 'skipped']):
+                    continue
+                done_by_rater.setdefault(r.rater_id, set()).add(str(r.page_no_progress))
+                rj = r.results_json if isinstance(r.results_json, dict) else {}
+                ev = str(rj.get('evaluation') or '').strip().lower()
+                tally = eval_by_rater.setdefault(r.rater_id, [0, 0])
+                if ev == 'accept':
+                    seg_accepted += 1
+                    tally[0] += 1
+                elif ev == 'reject':
+                    seg_rejected += 1
+                    tally[1] += 1
+
+            unique_done = set().union(*done_by_rater.values()) if done_by_rater else set()
+            annotators = []
+            for rater_id, task_ids in done_by_rater.items():
+                rater = raters_by_id.get(rater_id)
+                secs = sum(dur_by_task.get(t, 0.0) for t in task_ids)
+                tally = eval_by_rater.get(rater_id, [0, 0])
+                annotators.append({
+                    'rater_id': rater_id,
+                    'name': rater.name if rater else f"Rater {rater_id}",
+                    'email': rater.email if rater else "",
+                    'completed_tasks': len(task_ids),
+                    'completed_audio_seconds': round(secs, 1),
+                    'accepted': tally[0],
+                    'rejected': tally[1]
+                })
+            annotators.sort(key=lambda a: -a['completed_audio_seconds'])
+
+            audio_seg_data.append({
+                'test_id': test.id,
+                'description': test.description or "No description",
+                'language': seg_language,
+                'persona': seg_persona,
+                'total_tasks': len(dur_by_task),
+                'total_audio_seconds': round(total_secs, 1),
+                'completed_tasks': len(unique_done),
+                'completed_audio_seconds': round(
+                    sum(dur_by_task.get(t, 0.0) for t in unique_done), 1
+                ),
+                'accepted': seg_accepted,
+                'rejected': seg_rejected,
+                'total_submissions': seg_accepted + seg_rejected,
+                'annotators': annotators
+            })
+        audio_seg_data.sort(key=lambda x: x['test_id'])
+
         return jsonify({
             'stats': {
                 'total_registered_users': total_registered_users,
@@ -1404,7 +1540,8 @@ def get_admin_dashboard(current_user):
             },
             'languages': languages_data,
             'tests': tests_data,
-            'raters': raters_data
+            'raters': raters_data,
+            'audio_segmentation': audio_seg_data
         })
         
     except Exception as e:
@@ -1503,3 +1640,197 @@ def assign_tasks(current_user, rater_id):
         db.session.rollback()
         app.logger.error(f"Error in assign_tasks: {e}")
         return jsonify({'error': 'Failed to assign tasks.'}), 500
+
+
+# ============================================================================
+# Admin -> Annotator messaging, nudges, and reversible account deactivation.
+# All additive: messaging never mutates other tables; deactivation only flips a
+# flag and stashes/restores assigned_tasks. No Rating (annotation) data is ever
+# touched or deleted.
+# ============================================================================
+
+def _serialize_message(m):
+    return {
+        'id': m.id,
+        'body': m.body,
+        'sender': m.sender,
+        'category': m.category or 'message',
+        'is_read': bool(m.is_read),
+        'created_at': m.created_at.isoformat() if m.created_at else None,
+    }
+
+
+@app.route('/api/admin/rater/<int:rater_id>/message', methods=['POST'])
+@token_required
+def send_message(current_user, rater_id):
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    try:
+        rater = Rater.query.get_or_404(rater_id)
+        data = request.get_json() or {}
+        body = (data.get('body') or '').strip()
+        if not body:
+            return jsonify({'message': 'Message body cannot be empty.'}), 400
+        if len(body) > 2000:
+            body = body[:2000]
+        category = (data.get('category') or 'message').strip() or 'message'
+        msg = Message(rater_id=rater.id, body=body, sender='admin', category=category, is_read=False)
+        db.session.add(msg)
+        db.session.commit()
+        return jsonify({'message': f'Message sent to {rater.name}.', 'data': _serialize_message(msg)}), 201
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error in send_message: {e}")
+        return jsonify({'error': 'Failed to send message.'}), 500
+
+
+@app.route('/api/admin/message/broadcast', methods=['POST'])
+@token_required
+def broadcast_message(current_user):
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    try:
+        data = request.get_json() or {}
+        body = (data.get('body') or '').strip()
+        if not body:
+            return jsonify({'message': 'Message body cannot be empty.'}), 400
+        if len(body) > 2000:
+            body = body[:2000]
+        # Broadcast to every real annotator (there is no 'admin' Rater row).
+        recipients = Rater.query.all()
+        count = 0
+        for r in recipients:
+            db.session.add(Message(rater_id=r.id, body=body, sender='admin', category='broadcast', is_read=False))
+            count += 1
+        db.session.commit()
+        return jsonify({'message': f'Broadcast sent to {count} annotator(s).', 'count': count}), 201
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error in broadcast_message: {e}")
+        return jsonify({'error': 'Failed to broadcast message.'}), 500
+
+
+@app.route('/api/admin/rater/<int:rater_id>/nudge', methods=['POST'])
+@token_required
+def nudge_rater(current_user, rater_id):
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    try:
+        rater = Rater.query.get_or_404(rater_id)
+        data = request.get_json() or {}
+        note = (data.get('note') or '').strip()
+        body = ("Reminder: you have annotation tasks assigned and waiting. Please "
+                "continue when you can — thank you!")
+        if note:
+            body += f"\n\nNote from admin: {note}"
+        msg = Message(rater_id=rater.id, body=body, sender='admin', category='nudge', is_read=False)
+        db.session.add(msg)
+        db.session.commit()
+        return jsonify({'message': f'Nudge sent to {rater.name}.', 'data': _serialize_message(msg)}), 201
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error in nudge_rater: {e}")
+        return jsonify({'error': 'Failed to send nudge.'}), 500
+
+
+@app.route('/api/admin/rater/<int:rater_id>/deactivate', methods=['POST'])
+@token_required
+def deactivate_rater(current_user, rater_id):
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    try:
+        rater = Rater.query.get_or_404(rater_id)
+        data = request.get_json() or {}
+        confirm = (data.get('confirm') or '').strip()
+        # Require the admin to type exactly: delete <name>
+        expected = f"delete {rater.name}".strip().lower()
+        if confirm.lower() != expected:
+            return jsonify({'message': f'Confirmation text did not match. Type "delete {rater.name}" to confirm.'}), 400
+
+        # Reversible: stash the current assignment, then unlock those tasks.
+        # Ratings (submitted annotations) are intentionally left untouched.
+        if rater.assigned_tasks:
+            rater.prev_assigned_tasks = rater.assigned_tasks
+        rater.assigned_tasks = ''
+        rater.is_active = False
+        db.session.commit()
+        return jsonify({
+            'message': f'{rater.name} has been deactivated. Their {len((rater.prev_assigned_tasks or "").split(",")) if rater.prev_assigned_tasks else 0} task(s) were unlocked. Annotations were kept.',
+            'account_active': False
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error in deactivate_rater: {e}")
+        return jsonify({'error': 'Failed to deactivate annotator.'}), 500
+
+
+@app.route('/api/admin/rater/<int:rater_id>/reactivate', methods=['POST'])
+@token_required
+def reactivate_rater(current_user, rater_id):
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    try:
+        rater = Rater.query.get_or_404(rater_id)
+        rater.is_active = True
+        # Restore the previous assignment only if nothing has been assigned since.
+        if not rater.assigned_tasks and rater.prev_assigned_tasks:
+            rater.assigned_tasks = rater.prev_assigned_tasks
+        rater.prev_assigned_tasks = ''
+        db.session.commit()
+        return jsonify({
+            'message': f'{rater.name} has been reactivated.',
+            'account_active': True,
+            'assigned_tasks': rater.assigned_tasks or ''
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error in reactivate_rater: {e}")
+        return jsonify({'error': 'Failed to reactivate annotator.'}), 500
+
+
+@app.route('/api/rater/messages', methods=['GET'])
+@token_required
+def get_rater_messages(current_user):
+    # Admin has no inbox; annotators fetch their own messages.
+    if current_user == "admin":
+        return jsonify({'messages': [], 'unread_count': 0}), 200
+    try:
+        rater = Rater.query.filter_by(name=current_user).first()
+        if not rater:
+            return jsonify({'messages': [], 'unread_count': 0}), 200
+        msgs = (Message.query.filter_by(rater_id=rater.id)
+                .order_by(Message.created_at.desc()).limit(100).all())
+        unread = sum(1 for m in msgs if not m.is_read)
+        return jsonify({
+            'messages': [_serialize_message(m) for m in msgs],
+            'unread_count': unread
+        }), 200
+    except Exception as e:
+        app.logger.error(f"Error in get_rater_messages: {e}")
+        return jsonify({'messages': [], 'unread_count': 0}), 200
+
+
+@app.route('/api/rater/messages/read', methods=['POST'])
+@token_required
+def mark_messages_read(current_user):
+    if current_user == "admin":
+        return jsonify({'message': 'No inbox for admin.'}), 200
+    try:
+        rater = Rater.query.filter_by(name=current_user).first()
+        if not rater:
+            return jsonify({'message': 'Rater not found.'}), 404
+        data = request.get_json(silent=True) or {}
+        ids = data.get('ids')
+        q = Message.query.filter_by(rater_id=rater.id, is_read=False)
+        if isinstance(ids, list) and ids:
+            q = q.filter(Message.id.in_([i for i in ids if isinstance(i, int)]))
+        updated = 0
+        for m in q.all():
+            m.is_read = True
+            updated += 1
+        db.session.commit()
+        return jsonify({'message': 'Marked as read.', 'updated': updated}), 200
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error in mark_messages_read: {e}")
+        return jsonify({'error': 'Failed to mark messages read.'}), 500

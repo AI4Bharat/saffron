@@ -12,6 +12,11 @@ class Rater(db.Model):
     email = db.Column(db.String(100), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)  # Ensure you hash passwords
     assigned_tasks = db.Column(db.String(1024), nullable=True, default='')
+    # Account state for admin deactivation. Deactivating is fully reversible: it
+    # stashes the current assignment into prev_assigned_tasks and clears
+    # assigned_tasks (freeing those locked tasks) without touching any Rating rows.
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    prev_assigned_tasks = db.Column(db.String(1024), nullable=True, default='')
 
     ratings = db.relationship('Rating', backref='rater', lazy=True)
 
@@ -80,3 +85,19 @@ class Consent(db.Model):
 
     def __repr__(self):
         return f"<Consent Rater ID={self.rater_id}>, Test ID={self.test_id}>"
+
+
+class Message(db.Model):
+    """Admin -> annotator messages. Purely additive: created by admins, read by the
+    recipient annotator. Never deletes or mutates any other table's data."""
+    __tablename__ = 'message'
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    rater_id = db.Column(db.Integer, db.ForeignKey('rater.id'), nullable=False)  # recipient
+    body = db.Column(db.Text, nullable=False)
+    sender = db.Column(db.String(100), nullable=False, default='admin')
+    category = db.Column(db.String(50), nullable=True, default='message')  # 'message' | 'nudge'
+    is_read = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<Message to Rater ID={self.rater_id}, read={self.is_read}>"

@@ -54,7 +54,7 @@
             <!-- English pre-scene -->
             <div v-if="preSceneEn" class="mb-3 p-3 bg-light rounded-3 border-start border-3 border-secondary">
               <span class="badge bg-secondary-subtle text-secondary mb-2 fs-8 uppercase tracking-wide">English Context</span>
-              <p class="mb-0 text-dark font-medium italic-text">"{{ preSceneEn }}"</p>
+              <p class="mb-0 text-dark font-medium italic-text">"<span v-html="renderMath(preSceneEn)"></span>"</p>
             </div>
 
             <!-- Translated/Editable pre-scene -->
@@ -70,14 +70,32 @@
                 </div>
               </div>
               <textarea
+                v-if="editingKey === 'pre_scene'"
                 v-model="sceneState.pre_scene"
                 v-auto-grow
+                v-focus
+                @blur="stopEdit"
                 class="form-control correction-textarea shadow-inner border-2"
                 :class="{ 'rtl-text': isRtl }"
                 :dir="isRtl ? 'rtl' : 'ltr'"
                 rows="2"
                 placeholder="Correct pre-scene translation..."
               ></textarea>
+              <!-- Rendered (KaTeX) view: click to reveal and edit the raw text. -->
+              <div
+                v-else
+                class="editable-rendered"
+                :class="{ 'rtl-text': isRtl }"
+                :dir="isRtl ? 'rtl' : 'ltr'"
+                role="textbox"
+                tabindex="0"
+                title="Click to edit — LaTeX is shown rendered; click to reveal and edit the raw text"
+                @click="startEdit('pre_scene')"
+                @focus="startEdit('pre_scene')"
+              >
+                <span v-if="(sceneState.pre_scene || '').trim()" v-html="renderMath(sceneState.pre_scene)"></span>
+                <span v-else class="editable-placeholder">Click to edit pre-scene translation…</span>
+              </div>
               
               <div class="d-flex justify-content-between align-items-center mt-2 fs-7">
                 <span v-if="isSceneModified('pre_scene')" class="text-warning">
@@ -96,7 +114,7 @@
               :class="{ 'rtl-text': isRtl }"
               :dir="isRtl ? 'rtl' : 'ltr'"
             >
-              "{{ preSceneText }}"
+              "<span v-html="renderMath(preSceneText)"></span>"
             </p>
           </div>
         </div>
@@ -158,7 +176,7 @@
                     <span class="badge bg-light text-dark border position-absolute top-0 end-0 translate-middle-y me-3 px-2 py-1 fs-8 text-uppercase tracking-wide">
                       English
                     </span>
-                    <p class="mb-0 text-dark font-medium leading-relaxed">{{ getEnglishText(turn) }}</p>
+                    <p class="mb-0 text-dark font-medium leading-relaxed" v-html="renderMath(getEnglishText(turn))"></p>
                   </div>
 
                   <!-- Translation Correction Box (Only if translation key exists) -->
@@ -184,16 +202,32 @@
 
                     <!-- Text area for edit -->
                     <textarea
+                      v-if="editingKey === 'turn:' + idx"
                       v-model="turn[turn._translationKey]"
                       v-auto-grow
+                      v-focus
                       class="form-control correction-textarea shadow-inner border-2"
                       :class="{ 'rtl-text': isRtl }"
                       :dir="isRtl ? 'rtl' : 'ltr'"
                       rows="3"
                       placeholder="Enter the corrected translation here..."
-                      @focus="activeTurnIndex = idx"
-                      @blur="activeTurnIndex = null"
+                      @blur="stopEdit"
                     ></textarea>
+                    <!-- Rendered (KaTeX) view: click to reveal and edit the raw text. -->
+                    <div
+                      v-else
+                      class="editable-rendered"
+                      :class="{ 'rtl-text': isRtl }"
+                      :dir="isRtl ? 'rtl' : 'ltr'"
+                      role="textbox"
+                      tabindex="0"
+                      title="Click to edit — LaTeX is shown rendered; click to reveal and edit the raw text"
+                      @click="startEdit('turn:' + idx, idx)"
+                      @focus="startEdit('turn:' + idx, idx)"
+                    >
+                      <span v-if="(turn[turn._translationKey] || '').trim()" v-html="renderMath(turn[turn._translationKey])"></span>
+                      <span v-else class="editable-placeholder">Click to edit the translation…</span>
+                    </div>
 
                     <div class="d-flex justify-content-between align-items-center mt-2 fs-7">
                       <!-- Status Indicator -->
@@ -234,7 +268,7 @@
             <!-- English post-scene -->
             <div v-if="postSceneEn" class="mb-3 p-3 bg-light rounded-3 border-start border-3 border-secondary">
               <span class="badge bg-secondary-subtle text-secondary mb-2 fs-8 uppercase tracking-wide">English Context</span>
-              <p class="mb-0 text-dark font-medium italic-text">"{{ postSceneEn }}"</p>
+              <p class="mb-0 text-dark font-medium italic-text">"<span v-html="renderMath(postSceneEn)"></span>"</p>
             </div>
 
             <!-- Translated/Editable post-scene -->
@@ -250,14 +284,32 @@
                 </div>
               </div>
               <textarea
+                v-if="editingKey === 'post_scene'"
                 v-model="sceneState.post_scene"
                 v-auto-grow
+                v-focus
+                @blur="stopEdit"
                 class="form-control correction-textarea shadow-inner border-2"
                 :class="{ 'rtl-text': isRtl }"
                 :dir="isRtl ? 'rtl' : 'ltr'"
                 rows="2"
                 placeholder="Correct post-scene translation..."
               ></textarea>
+              <!-- Rendered (KaTeX) view: click to reveal and edit the raw text. -->
+              <div
+                v-else
+                class="editable-rendered"
+                :class="{ 'rtl-text': isRtl }"
+                :dir="isRtl ? 'rtl' : 'ltr'"
+                role="textbox"
+                tabindex="0"
+                title="Click to edit — LaTeX is shown rendered; click to reveal and edit the raw text"
+                @click="startEdit('post_scene')"
+                @focus="startEdit('post_scene')"
+              >
+                <span v-if="(sceneState.post_scene || '').trim()" v-html="renderMath(sceneState.post_scene)"></span>
+                <span v-else class="editable-placeholder">Click to edit post-scene translation…</span>
+              </div>
               
               <div class="d-flex justify-content-between align-items-center mt-2 fs-7">
                 <span v-if="isSceneModified('post_scene')" class="text-warning">
@@ -276,7 +328,7 @@
               :class="{ 'rtl-text': isRtl }"
               :dir="isRtl ? 'rtl' : 'ltr'"
             >
-              "{{ postSceneText }}"
+              "<span v-html="renderMath(postSceneText)"></span>"
             </p>
           </div>
         </div>
@@ -394,6 +446,15 @@ const vAutoGrow = {
   }
 }
 
+// Focus (and place the caret at the end of) a textarea the moment it mounts, so
+// the click-to-edit fields start editing on the first click.
+const vFocus = {
+  mounted(el) {
+    el.focus();
+    try { const len = el.value.length; el.setSelectionRange(len, len); } catch (_) { /* non-text inputs */ }
+  }
+}
+
 const props = defineProps({
   currentTest: {
     type: Object,
@@ -425,6 +486,19 @@ const isSaving = ref(false)
 const startTime = ref(Date.now())
 const conversationState = ref([])
 const activeTurnIndex = ref(null)
+
+// Click-to-edit: each field shows rendered math/text until clicked, then becomes a
+// raw textarea; on blur it renders again. Keyed ('pre_scene' | 'post_scene' |
+// 'turn:<idx>') so only one field edits at a time.
+const editingKey = ref(null)
+function startEdit(key, turnIdx = null) {
+  editingKey.value = key
+  activeTurnIndex.value = turnIdx
+}
+function stopEdit() {
+  editingKey.value = null
+  activeTurnIndex.value = null
+}
 
 // Scene texts state for correction
 const sceneState = ref({
@@ -877,6 +951,24 @@ onMounted(() => {
   window.addEventListener('keydown', onKeydown)
 })
 onUnmounted(() => window.removeEventListener('keydown', onKeydown))
+
+// Render $...$ / \(...\) math with KaTeX if present (loaded lazily, safe no-op otherwise).
+function renderMath(s) {
+  const esc = String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+  if (window.katex && window.renderMathInElement) {
+    const div = document.createElement('div'); div.innerHTML = esc
+    try {
+      window.renderMathInElement(div, {
+        delimiters: [
+          { left: '$$', right: '$$', display: true }, { left: '\\[', right: '\\]', display: true },
+          { left: '\\(', right: '\\)', display: false }, { left: '$', right: '$', display: false }
+        ], throwOnError: false
+      })
+      return div.innerHTML
+    } catch (_) { /* fall through */ }
+  }
+  return esc
+}
 </script>
 
 <style scoped>
@@ -988,6 +1080,28 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   border-color: #d8661b;
   box-shadow: 0 0 0 3px rgba(216, 102, 27, 0.15) !important;
 }
+
+/* Click-to-edit field: shows rendered math/text, becomes a textarea on click,
+   renders again on blur. Styled to echo the editing textarea so it doesn't jump. */
+.editable-rendered {
+  min-height: 100px;
+  padding: 14px 16px;
+  border: 2px solid #e2e8f0;
+  border-radius: 12px;
+  background-color: #fff;
+  cursor: text;
+  font-size: 1.1rem;
+  line-height: 1.6;
+  color: #0f172a;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.06);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+  overflow-x: auto;
+}
+.editable-rendered:hover { border-color: #d8661b; background-color: #fffdfb; }
+.editable-rendered:focus { outline: none; border-color: #d8661b; box-shadow: 0 0 0 3px rgba(216,102,27,0.15); background-color: #fffdfb; }
+.editable-rendered.rtl-text { text-align: right; }
+.editable-placeholder { color: #94a3b8; font-style: italic; }
+.editable-rendered :deep(.katex) { white-space: normal; }
 
 .scene-card {
   background: linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(248,250,252,0.9) 100%);
