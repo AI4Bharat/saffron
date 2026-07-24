@@ -365,6 +365,7 @@ def get_test(current_user, test_id):
     # Task assignment locking protection.
     # A task assigned to THIS rater is always accessible to them; a task assigned to
     # someone else is locked; a task assigned to nobody stays open (legacy behaviour).
+    my_assigned_ids = []
     if username != "admin":
         my_assigned_ids = [int(x.strip()) for x in (rater.assigned_tasks or "").split(',') if x.strip().isdigit()]
         if test_id not in my_assigned_ids:
@@ -395,19 +396,27 @@ def get_test(current_user, test_id):
                     'status': r.completion_status or 'completed',
                     'time': r.time_of_submission
                 }
-    
-    completed_pages_raw = {pid for pid, val in latest_status.items() if val['status'] in ['completed', 'skipped']}
-    
-    # Safely match original IDs with the string IDs from rating
-    all_page_ids = [sample['id'] for sample in test.json_entry]
-    page_nos_done = [pid for pid in all_page_ids if str(pid) in completed_pages_raw]
-    
-    samples = [sample for sample in test.json_entry if sample['id'] not in page_nos_done]
-    # Keep tasks in the original order instead of shuffling
-    # random.shuffle(samples)
-    samples_done = [sample for sample in test.json_entry if sample['id'] in page_nos_done]
-    samples_done.extend(samples)
-    
+
+    # Leftover reassignment / handoff: when this task is ASSIGNED to the current
+    # rater, hide items ANOTHER annotator already COMPLETED, so a batch can be
+    # handed over mid-way (A did 1-100, admin reassigns to B, B sees only 101-N).
+    # Skips are NOT hidden (a skipped item is still open work). For a task only ever
+    # touched by one rater this set is empty, so nothing changes for the normal case.
+    others_completed_ids = set()
+    if username != "admin" and test_id in my_assigned_ids:
+        for r in Rating.query.filter(
+            Rating.test_id == test_id,
+            Rating.rater_id != rater_id,
+            Rating.completion_status == 'completed'
+        ).all():
+            if r.page_no_progress:
+                others_completed_ids.add(str(r.page_no_progress))
+
+    # ALWAYS preserve the original json_entry order (no done-first shuffling) so the
+    # task list looks identical on every visit. Items completed by OTHER annotators
+    # (the handoff case above) are dropped from this rater's view.
+    ordered_samples = [s for s in test.json_entry if str(s['id']) not in others_completed_ids]
+
     # Map latest ratings by task ID to merge corrections
     latest_ratings = {}
     for r in ratings:
@@ -418,7 +427,7 @@ def get_test(current_user, test_id):
 
     # Inject completion_status and merge corrected translations into each entry
     required_response = []
-    for sample in samples_done:
+    for sample in ordered_samples:
         # Performance optimization: shallow copy dictionary and copy nested dialogue lists to avoid copy.deepcopy
         sample_copy = {k: v for k, v in sample.items()}
         for k in ['dialogue', 'conversation', 'turns']:
@@ -476,10 +485,13 @@ def get_test(current_user, test_id):
             sample_copy['completion_status'] = 'uncompleted'
         required_response.append(sample_copy)
 
-    try:
-        page_no = len(page_nos_done)
-    except:
-        page_no = 0
+    # Resume at the first item THIS rater hasn't finished (in original order). If
+    # everything is done, point past the end so the frontend shows the complete state.
+    page_no = next(
+        (i for i, s in enumerate(required_response)
+         if s.get('completion_status') not in ('completed', 'skipped')),
+        len(required_response)
+    )
 
     return jsonify({
         'test_id': test.id,

@@ -85,6 +85,25 @@ merges `raw_text`, `spoken_form`, `decision`, and `comments` back into each item
 
 ---
 
+## 3b. Consistent order & reassigning leftover work
+
+**Order is fixed.** Every visit shows the task's items in their **original JSONL order**
+— completed items are marked done in place, never moved to the front (no jumbling).
+An annotator resumes at the first item they haven't finished.
+
+**Handing a partly-done batch to another annotator.** Say batch `benchmark_hi_batch2`
+(200 items) was assigned to annotator **A**, who finished the first 100 and stopped.
+To give the remaining 100 to **B**:
+
+1. Admin dashboard → **Annotators** → open **A**'s *Assign Tasks* modal, **remove** that
+   batch, Save. (Or **Deactivate** A — that frees all her batches and is reversible.)
+2. Open **B**'s *Assign Tasks* modal, **add** that batch, Save.
+3. B opens the batch and sees **only the 100 items A did not complete**, in order.
+
+This works because `get_test` hides items **another** annotator already **completed** from
+an assignee's view (skips are left open, so they carry over too). A's 100 and B's 100 both
+land in the export (latest completed submission per item wins). Nothing is duplicated or lost.
+
 ## 4. Admin review of submitted annotations
 
 In the admin dashboard **Tasks Overview**, clicking any task opens
