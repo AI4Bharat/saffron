@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import pandas as pd
 import json
@@ -102,18 +103,36 @@ def main():
         print("Error: No tasks were generated.")
         sys.exit(1)
         
-    # Append the set name (e.g. Set0, Set1) to description to make it unique in the database
-    description = f"Audio Segmentation - {language} - {persona} - {set_name.title()}"
-    
+    # The set number shown in the UI is the RECORDING EXCEL's set (e.g.
+    # English_Storyteller_Set1.xlsx -> Set1), not the local setN directory name --
+    # the two drift apart (dir set4 can hold the Set1 excel). Fall back to the dir
+    # name only if the excel filename carries no Set<n>.
+    m_set = re.search(r"_Set(\d+)$", os.path.splitext(excel_file)[0], re.IGNORECASE)
+    set_label = f"Set{int(m_set.group(1))}" if m_set else set_name.title()
+    description = f"Audio Segmentation - {language} - {persona} - {set_label}"
+
+    # Record which local dir this batch came from so the row can be identified even
+    # when two batches share an excel set (e.g. set5 and set6 are both Set2).
+    for t in tasks:
+        t["set_dir"] = set_name
+        t["excel_set"] = set_label
+
     with app.app_context():
-        # Check if description already exists
-        existing_test = Test.query.filter_by(description=description).first()
+        # Identify an existing row by its SET DIR (unique), not by description --
+        # descriptions may legitimately repeat now that they use the excel set.
+        existing_test = None
+        for t in Test.query.filter_by(test_type="audio-segmentation").all():
+            entries = t.json_entry if isinstance(t.json_entry, list) else []
+            if entries and str(entries[0].get("audio_filename", "")).split("/")[0] == set_name:
+                existing_test = t
+                break
         if existing_test:
-            print(f"Test '{description}' already exists in DB with ID: {existing_test.id}")
+            print(f"Test for dir '{set_name}' already exists in DB with ID: {existing_test.id}")
             existing_test.json_entry = tasks
+            existing_test.description = description
             existing_test.test_type = "audio-segmentation"
             db.session.commit()
-            print(f"Updated existing Test ID={existing_test.id} with {len(tasks)} tasks.")
+            print(f"Updated existing Test ID={existing_test.id} '{description}' with {len(tasks)} tasks.")
         else:
             next_id = (db.session.query(db.func.max(Test.id)).scalar() or 0) + 1
             test = Test(
@@ -125,6 +144,15 @@ def main():
             db.session.add(test)
             db.session.commit()
             print(f"Created new Test ID={next_id} '{description}' with {len(tasks)} tasks.")
+
+        # Recompute every audio-segmentation label: sets recorded/loaded as more than
+        # one batch get "(Recorder, Conv X-Y)" appended so they are told apart.
+        try:
+            import audio_set_labels
+            print("Refreshing audio-segmentation labels...")
+            audio_set_labels.relabel_all(db, Test)
+        except Exception as e:
+            print(f"[WARN] Could not refresh labels: {e}")
 
 if __name__ == "__main__":
     main()

@@ -197,6 +197,7 @@ import TranslationCorrection from '@/components/TranslationCorrection.vue'
 import SentenceCorrection from '@/components/SentenceCorrection.vue'
 import ConversationEvaluation from '@/components/ConversationEvaluation.vue'
 import AudioSegmentation from '@/components/AudioSegmentation.vue'
+import BenchmarkVerification from '@/components/BenchmarkVerification.vue'
 
 // Receive props from the router
 const props = defineProps({
@@ -258,6 +259,7 @@ const currentTestComponent = computed(() => {
     'conversation-evaluation': ConversationEvaluation,
     'conversation-editable': ConversationEvaluation,
     'audio-segmentation': AudioSegmentation,
+    'benchmark-verification': BenchmarkVerification,
   }
 
   return testComponents[data.value.test_type]

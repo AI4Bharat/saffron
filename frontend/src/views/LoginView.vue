@@ -85,10 +85,11 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { API_BASE_URL } from '@/config';
 
 const router = useRouter()
+const route = useRoute()
 
 const username = ref('')
 const password = ref('')
@@ -139,8 +140,12 @@ const handleSubmit = async () => {
       sessionStorage.setItem('authToken', data.token)
     }
 
-    // Redirect to home page
-    let redirectPath = '/'
+    // Return the user to whatever they originally clicked (deep links carry
+    // ?redirect=/<test_id>?task=<id>); fall back to home.
+    let redirectPath = route.query.redirect || '/'
+    if (Array.isArray(redirectPath)) redirectPath = redirectPath[0]
+    // only allow internal paths -- never bounce to an external site
+    if (typeof redirectPath !== 'string' || !redirectPath.startsWith('/')) redirectPath = '/'
     window.location.href = redirectPath  // Redirect with full refresh
   } catch (err) {
     console.error('Login error:', err)
@@ -156,7 +161,10 @@ onMounted(() => {
   // Check if there's a stored token
   const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken')
   if (token) {
-    router.push('/')  // Redirect to home if already logged in
+    let dest = route.query.redirect || '/'
+    if (Array.isArray(dest)) dest = dest[0]
+    if (typeof dest !== 'string' || !dest.startsWith('/')) dest = '/'
+    router.push(dest)  // already logged in: honour the deep link
   }
 })
 </script>

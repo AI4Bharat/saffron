@@ -64,6 +64,7 @@
           <h5 class="mb-0 d-flex align-items-center gap-2 text-dark">
             <i class="bi bi-inbox-fill text-primary"></i>
             <span>Messages from admin</span>
+            <span class="badge rounded-pill bg-light text-secondary border">{{ messages.length }}</span>
             <span v-if="unreadCount" class="badge rounded-pill bg-danger">{{ unreadCount }} new</span>
           </h5>
           <button v-if="unreadCount" class="btn btn-sm btn-outline-secondary" @click="markAllRead" :disabled="isMarkingRead">
@@ -565,7 +566,8 @@ const markAllRead = async () => {
 
 const formatMsgDate = (iso) => {
   if (!iso) return ''
-  const d = new Date(iso)
+  // Timestamps come from the server as UTC without a timezone marker.
+  const d = new Date(/[Zz]|[+-]\d\d:\d\d$/.test(iso) ? iso : iso + 'Z')
   if (isNaN(d.getTime())) return ''
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
@@ -808,6 +810,9 @@ onUnmounted(() => {
 
 /* Annotator inbox */
 .inbox-card { border: 1px solid rgba(0,0,0,0.04) !important; }
+/* The full history stays available as a scrollable stack instead of an
+   ever-growing card that pushes the task list off screen. */
+.inbox-list { max-height: 430px; overflow-y: auto; padding-right: 4px; }
 .inbox-item {
   background-color: #f8fafc;
   border: 1px solid #eef2f7;

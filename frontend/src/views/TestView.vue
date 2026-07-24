@@ -41,6 +41,7 @@
                 v-for="task in filteredTasks"
                 :key="task.id"
                 class="task-item-card p-3 mb-2 rounded-3 cursor-pointer transition-all border d-flex align-items-center justify-content-between"
+                :data-task-index="task.originalIndex"
                 :class="{
                   'active-task': currentIndex === task.originalIndex,
                   'completed-task': task.completion_status === 'completed',
@@ -184,13 +185,14 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { API_BASE_URL } from '@/config';
 import TranslationCorrection from '@/components/TranslationCorrection.vue'
 import SentenceCorrection from '@/components/SentenceCorrection.vue'
 import ConversationEvaluation from '@/components/ConversationEvaluation.vue'
 import AudioSegmentation from '@/components/AudioSegmentation.vue'
+import BenchmarkVerification from '@/components/BenchmarkVerification.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -222,6 +224,35 @@ const isLast = computed(() => {
   return currentIndex.value === testData.value.length - 1
 })
 
+// Keep the task explorer scrolled to whichever task is open -- otherwise a deep link
+// to task 40 of 43 leaves the sidebar sitting at task 1 and looks like it did nothing.
+async function scrollActiveTaskIntoView() {
+  await nextTick()
+  const wrapper = document.querySelector('.task-list-wrapper')
+  const el = wrapper && wrapper.querySelector(`[data-task-index="${currentIndex.value}"]`)
+  if (!wrapper || !el) return
+  // Scroll the sidebar list *only*. el.scrollIntoView() also scrolls every
+  // scrollable ancestor -- including the page itself -- which is what left the
+  // annotator parked halfway down the page after submitting a task.
+  const delta = el.getBoundingClientRect().top - wrapper.getBoundingClientRect().top
+  const target = wrapper.scrollTop + delta - (wrapper.clientHeight - el.offsetHeight) / 2
+  wrapper.scrollTop = Math.max(0, target)
+}
+
+// Every task change must land the annotator at the top of the page, with no
+// scrolling on their part. Instant (not smooth) so nothing can interrupt it.
+async function scrollPageToTop() {
+  await nextTick()
+  window.scrollTo({ top: 0, behavior: 'auto' })
+  document.documentElement.scrollTop = 0
+  document.body.scrollTop = 0
+}
+
+watch(currentIndex, async () => {
+  await scrollActiveTaskIntoView()
+  await scrollPageToTop()
+})
+
 const filteredTasks = computed(() => {
   return testData.value.map((task, originalIndex) => ({
     ...task,
@@ -244,6 +275,7 @@ const currentTestComponent = computed(() => {
     'conversation-evaluation': ConversationEvaluation,
     'conversation-editable': ConversationEvaluation,
     'audio-segmentation': AudioSegmentation,
+    'benchmark-verification': BenchmarkVerification,
   }
 
   return testComponents[data.value.test_type]
@@ -253,14 +285,14 @@ const currentTestComponent = computed(() => {
 const jumpToTask = (index) => {
   if (index >= 0 && index < testData.value.length) {
     currentIndex.value = index
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    scrollPageToTop()
   }
 }
 
 const handlePrev = () => {
   if (currentIndex.value > 0) {
     currentIndex.value--
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    scrollPageToTop()
   }
 }
 
@@ -320,7 +352,7 @@ const handleNext = async () => {
     }
   } else {
     currentIndex.value++;
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    scrollPageToTop()
   }
 }
 
@@ -353,6 +385,37 @@ onMounted(async () => {
     currentIndex.value = Number(responseData.page_no) || 0
     testData.value = responseData.json_entry || []
     test_id.value = responseData.test_id
+
+    // deep-link: /<test_id>?task=<task_id> (or ?index=<n>) jumps straight to that task,
+    // so a link in an export/report opens the exact clip and you can play it.
+    let wantTask = route.query.task
+    const wantIndex = route.query.index
+    if (Array.isArray(wantTask)) wantTask = wantTask[0]
+    if (wantTask) {
+      // Be liberal in what we accept: a link copied out of a CSV/email often drags the
+      // rest of the row along ("?task=En_Conv_30_T_2,completed,2026-..."), and some
+      // clients append stray punctuation. Take the clean leading token.
+      let want = decodeURIComponent(String(wantTask)).trim()
+      want = want.split(',')[0].split(/[\s;|]/)[0].replace(/[).,;:'"]+$/, '').trim()
+      let idx = testData.value.findIndex(t => String(t.id) === want)
+      if (idx === -1) {
+        // case-insensitive, then prefix match as a last resort
+        const lower = want.toLowerCase()
+        idx = testData.value.findIndex(t => String(t.id).toLowerCase() === lower)
+        if (idx === -1) idx = testData.value.findIndex(t => lower.startsWith(String(t.id).toLowerCase()))
+      }
+      if (idx !== -1) {
+        currentIndex.value = idx
+      } else {
+        console.warn('Task not found in this test:', wantTask, '-> parsed as', want)
+      }
+    } else if (wantIndex !== undefined && wantIndex !== '') {
+      const n = Number(wantIndex)
+      if (!Number.isNaN(n) && n >= 0 && n < testData.value.length) currentIndex.value = n
+    }
+
+    // bring the opened task into view in the sidebar once the list has rendered
+    scrollActiveTaskIntoView()
 
     // If initial index is out of bounds, check if completed and redirect
     if (currentIndex.value >= testData.value.length) {

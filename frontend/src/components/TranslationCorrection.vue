@@ -336,7 +336,7 @@
     </div>
 
     <!-- Submit / Navigation Bar -->
-    <div class="row justify-content-center mt-4 mb-5 animate-fade-in">
+    <div v-if="!readonly" class="row justify-content-center mt-4 mb-5 animate-fade-in">
       <div class="col-12 col-lg-10">
         <div class="card border-0 shadow-sm rounded-4 bg-white p-4">
           <div class="d-flex flex-column flex-sm-row justify-content-between align-items-center gap-3">
@@ -403,7 +403,7 @@
   </div>
 
   <!-- Floating Save Draft Button -->
-  <div class="position-fixed bottom-0 end-0 m-4 z-3 d-none d-md-block animate-fade-in">
+  <div v-if="!readonly" class="position-fixed bottom-0 end-0 m-4 z-3 d-none d-md-block animate-fade-in">
     <button
       class="btn btn-warning shadow rounded-circle d-flex align-items-center justify-content-center floating-save-btn"
       style="width: 56px; height: 56px;"
@@ -475,6 +475,11 @@ const props = defineProps({
   currentIndex: {
     type: Number,
     required: true
+  },
+  // Read-only preview (admin review): hide actions, disable all submit paths.
+  readonly: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -529,7 +534,7 @@ function setupState() {
   }
 
   // Scroll viewport smoothly to top
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  window.scrollTo({ top: 0, behavior: 'auto' })
 
   // 2. Setup turns
   const originalTurns = props.currentTest.conversation || props.currentTest.dialogue || props.currentTest.turns
@@ -750,6 +755,7 @@ const isValid = computed(() => {
 
 // Skip Action
 async function handleSkip() {
+  if (props.readonly) return
   if (isSubmitting.value) return
   isSubmitting.value = true
 
@@ -810,6 +816,7 @@ async function handleSkip() {
 
 // Draft Save
 async function handleSave() {
+  if (props.readonly) return
   if (isSaving.value || isSubmitting.value) return
   isSaving.value = true
 
@@ -881,6 +888,7 @@ async function handleSave() {
 
 // Submission
 async function handleSubmit() {
+  if (props.readonly) return
   if (isSubmitting.value || !isValid.value) return
   isSubmitting.value = true
 
@@ -942,6 +950,7 @@ async function handleSubmit() {
 
 // Keyboard shortcuts: Ctrl/Cmd+Enter = Submit & Next, Ctrl/Cmd+S = Save Draft.
 function onKeydown(e) {
+  if (props.readonly) return
   if (!(e.ctrlKey || e.metaKey)) return
   if (e.key === 'Enter') { e.preventDefault(); if (isValid.value) handleSubmit() }
   else if (e.key.toLowerCase() === 's') { e.preventDefault(); handleSave() }

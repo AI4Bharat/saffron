@@ -5,11 +5,37 @@ from datetime import datetime, timedelta
 from threading import Lock
 from dotenv import load_dotenv
 from flask_cors import CORS
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
 from application.database import db
 from application.models import *
 
 # Load environment variables
 load_dotenv()
+
+
+# ---------------------------------------------------------------------------
+# SQLite performance/concurrency pragmas.
+# The DB is a ~1GB SQLite file served by multiple gunicorn workers. WAL lets
+# readers and a writer proceed concurrently (instead of the old 'delete' journal
+# that serialised everything), and busy_timeout makes a worker wait for a lock
+# rather than instantly erroring with "database is locked". Applied on every new
+# DBAPI connection so it holds for all workers/threads.
+# ---------------------------------------------------------------------------
+@event.listens_for(Engine, "connect")
+def _set_sqlite_pragma(dbapi_connection, connection_record):
+    try:
+        cur = dbapi_connection.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.execute("PRAGMA busy_timeout=30000")   # wait up to 30s for a lock
+        cur.execute("PRAGMA cache_size=-65536")    # ~64MB page cache per connection
+        cur.execute("PRAGMA temp_store=MEMORY")
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
+    except Exception:
+        # Non-SQLite engines (or a locked DB during startup) must not crash boot.
+        pass
 
 def create_app():
     app = Flask(__name__, static_folder='static', static_url_path='/api/static')
@@ -20,6 +46,14 @@ def create_app():
     app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY')
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=300)
     app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB
+    # Connection pool tuned for gthread workers over SQLite: reuse a small pool,
+    # recycle idle connections, and allow a connection to move across the worker's
+    # threads (safe because each request checks one out of the pool).
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_pre_ping': True,
+        'pool_recycle': 1800,
+        'connect_args': {'timeout': 30, 'check_same_thread': False},
+    }
     app.app_context().push()
 
     # Initialize database

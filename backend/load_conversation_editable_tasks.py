@@ -52,6 +52,7 @@ def format_description(filename, subfolder=None):
     return desc
 
 def load_jsonl(path):
+    import re
     data = []
     with open(path, 'r', encoding='utf-8') as f:
         for idx, line in enumerate(f, 1):
@@ -59,7 +60,9 @@ def load_jsonl(path):
             if not line:
                 continue
             try:
-                item = json.loads(line)
+                pattern = r'(?<!\\)\\(times|theta|tau|to|text|tfrac|triangle|frac|phi|varphi|forall|beta|binom|bar|bullet|bot|begin|tilde|tan|top|textrm|textbf|textit)\b'
+                fixed_line = re.sub(pattern, r'\\\\\1', line)
+                item = json.loads(fixed_line)
                 data.append(item)
             except json.JSONDecodeError as e:
                 print(f"Error parsing JSON on line {idx} in {path}: {e}")

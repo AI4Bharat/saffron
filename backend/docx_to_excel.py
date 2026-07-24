@@ -19,6 +19,9 @@ the same mechanism as the conversation docs pipeline. Files are arranged in
 Usage:
     venv/bin/python docx_to_excel.py <docx | folder | zip>
     venv/bin/python docx_to_excel.py exports/auto_docs/<run>/docx
+    venv/bin/python docx_to_excel.py -l telugu -p storyteller -s 3
+                                # fetch Telugu/Storyteller/..._Set3.docx from the
+                                # conversation-docs Drive folder, then convert
     venv/bin/python docx_to_excel.py --sync-state      # reset CSV from Drive
 """
 
@@ -39,6 +42,9 @@ from openpyxl.utils import get_column_letter
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 EXCEL_DRIVE_FOLDER_ID = "1nP_Eu7rtI_R49vd_s4c6JxzyaI-vb8HD"
 EXCEL_DRIVE_URL = f"https://drive.google.com/drive/folders/{EXCEL_DRIVE_FOLDER_ID}"
+# Source conversation DOCX files live here (same folder export_upload_docs.py uploads to)
+DOCS_DRIVE_FOLDER_ID = "15NnqyQ4FBqW9Hs7N47mIakCWGvj1_nQk"
+DOCS_DRIVE_URL = f"https://drive.google.com/drive/folders/{DOCS_DRIVE_FOLDER_ID}"
 STATE_CSV = os.path.join(BACKEND_DIR, "excel_sets_state.csv")
 RUNS_DIR = os.path.join(BACKEND_DIR, "exports", "excel_runs")
 
@@ -214,6 +220,70 @@ def sync_state_from_drive():
 
 
 # ---------------------------------------------------------------------------
+# Drive fetch (conversation docs folder) — anonymous, folder is link-shared
+# ---------------------------------------------------------------------------
+def _norm(s):
+    return re.sub(r"[\s_]+", "_", s.strip().lower())
+
+
+def find_docx_locally(language, persona, set_no):
+    """Fallback: look for the docx in past export runs (exports/auto_docs/*/docx)
+    for sets that were generated on this server but not (yet) uploaded to Drive."""
+    want = (_norm(language), _norm(persona), int(set_no))
+    auto_docs = os.path.join(BACKEND_DIR, "exports", "auto_docs")
+    hits = []
+    for root, _, names in os.walk(auto_docs):
+        for n in names:
+            m = DOCX_NAME_RE.match(n)
+            if m and (_norm(m.group(1)), _norm(m.group(2)), int(m.group(3))) == want:
+                hits.append(os.path.join(root, n))
+    return max(hits, key=os.path.getmtime) if hits else None
+
+
+def fetch_docx_from_drive(language, persona, set_no, dest_dir):
+    """Download <Language>/<Persona>/<Language>_<Persona>_Set<n>.docx from the
+    conversation-docs Drive folder; fall back to local export runs if the set
+    is not on Drive. Returns the local path."""
+    import gdown
+
+    want_lang, want_persona = _norm(language), _norm(persona)
+
+    print(f"Listing conversation-docs Drive folder for "
+          f"{language.title()} / {persona.replace('_', ' ').title()} / Set{set_no} ...")
+    files = gdown.download_folder(url=DOCS_DRIVE_URL, skip_download=True, quiet=True)
+
+    target, candidates = None, []
+    for f in files or []:
+        base = os.path.basename(f.path.replace("\\", "/"))
+        m = DOCX_NAME_RE.match(base)
+        if not m:
+            continue
+        if _norm(m.group(1)) == want_lang and _norm(m.group(2)) == want_persona:
+            candidates.append(int(m.group(3)))
+            if int(m.group(3)) == int(set_no):
+                target = f
+    if target is None:
+        local = find_docx_locally(language, persona, set_no)
+        if local:
+            print(f"Set{set_no} not on Drive; using local copy from a past export run:\n  {local}")
+            return local
+        have = ", ".join(str(n) for n in sorted(candidates)) or "none"
+        raise SystemExit(
+            f"Set{set_no} not found on Drive for {language}/{persona} "
+            f"(and no local copy in exports/auto_docs). Available sets on Drive: {have}"
+        )
+
+    os.makedirs(dest_dir, exist_ok=True)
+    out_path = os.path.join(dest_dir, os.path.basename(target.path.replace("\\", "/")))
+    print(f"Downloading {target.path} (id={target.id}) ...")
+    got = gdown.download(id=target.id, output=out_path, quiet=True)
+    if not got or not os.path.exists(out_path):
+        raise SystemExit(f"Download failed for {target.path}")
+    print(f"Downloaded -> {out_path}")
+    return out_path
+
+
+# ---------------------------------------------------------------------------
 # Input gathering
 # ---------------------------------------------------------------------------
 def gather_docx(input_path):
@@ -256,6 +326,10 @@ def main():
                     "(two sheets, <Lg>_ prefixed IDs, Drive-tracked set numbering)."
     )
     p.add_argument("input_path", nargs="?", help=".docx file, folder of docx, or .zip")
+    p.add_argument("-l", "--language", help="Fetch from Drive: language (e.g. telugu)")
+    p.add_argument("-p", "--persona", help="Fetch from Drive: persona (e.g. storyteller)")
+    p.add_argument("-s", "--set", type=int, dest="set_no",
+                   help="Fetch from Drive: docx set number to convert")
     p.add_argument("-o", "--output-dir", help="Output directory (default: exports/excel_runs/run_<timestamp>)")
     p.add_argument("--sync-state", action="store_true",
                    help="Rewrite the Excel state CSV from a live Drive listing and exit")
@@ -264,8 +338,22 @@ def main():
     if args.sync_state:
         sync_state_from_drive()
         return
+
+    drive_args = (args.language, args.persona, args.set_no)
+    if any(a is not None for a in drive_args):
+        if not all(a is not None for a in drive_args):
+            p.error("Drive fetch needs all three of --language, --persona and --set")
+        if args.input_path:
+            p.error("Give either an input_path or --language/--persona/--set, not both")
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        src_dir = os.path.join(RUNS_DIR, f"run_{ts}", "source_docx")
+        args.input_path = fetch_docx_from_drive(
+            args.language, args.persona, args.set_no, src_dir
+        )
+        if not args.output_dir:
+            args.output_dir = os.path.dirname(src_dir)
     if not args.input_path:
-        p.error("input_path is required (unless using --sync-state)")
+        p.error("input_path is required (unless using --sync-state or -l/-p/-s)")
 
     docs = list(gather_docx(args.input_path))
     if not docs:
@@ -314,6 +402,8 @@ def main():
         written += 1
         print(f"[OK] {os.path.basename(name)} -> {lang_title}/{out_name} "
               f"({len(conversations)} conversations, {turns} turns, IDs like {lang_code}_Conv_1_T_1)")
+        # Stable marker for wrapper scripts (e.g. the local scp launcher)
+        print(f"XLSX_FILE={out_path}")
 
     if not written:
         raise SystemExit("Nothing was converted.")

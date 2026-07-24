@@ -6,7 +6,7 @@ This guide explains the backend loader pipeline, server serving logic, frontend 
 
 ## 1. Pipeline Overview
 
-The `audio-segmentation` task type allows annotators to review segment audio recordings, edit or correct transcripts, and select an **Accept** or **Reject** decision. If rejected, annotators select from a checklist of 30 specific reasons (and optionally enter a custom reason).
+The `audio-segmentation` task type allows annotators to review segment audio recordings, edit or correct transcripts, and select an **Accept** or **Reject** decision. If rejected, annotators select from a checklist of 31 specific reasons (and optionally enter a custom reason).
 
 ```mermaid
 graph TD
@@ -34,6 +34,17 @@ The loader script processes the assets in the `/root/saffron/backend/audio_segme
 ```bash
 backend/venv/bin/python backend/load_audio_segmentation_tasks.py
 ```
+
+**Preferred one-command loader (`backend/load_audio_set.py`):** downloads the
+recordings + Excel from Drive, normalises names, validates, and calls this
+loader for you.
+
+- Two-source: `$PY load_audio_set.py --audio-link "<recordings folder>" --persona storyteller --excel-set 2`
+  (downloads only the `EXPORTED ID` WAVs via curl, renames `Conv_10_T_1_En.wav`
+  -> `En_Conv_10_T_1.wav`, pulls `<Lang>_<Persona>_Set<n>.xlsx` from the shared
+  Excel folder). Each set has its own audio folder.
+- Single-folder: `$PY load_audio_set.py --link "<folder with WAVs+Excel>"`
+- From laptop: `C:\Users\Avnish\saffron_audio.ps1 -AudioLink "<...>" -Persona storyteller -ExcelSet 2`
 
 ---
 
@@ -89,3 +100,18 @@ Annotations can be exported cleanly using the bulk exporter script:
 ```bash
 backend/venv/bin/python backend/export_all_results.py
 ```
+
+---
+
+## Admin dashboard: audio hours (added 2026-07-08)
+
+The admin dashboard (Tracking page, Overview tab) has an **Audio Segmentation
+Hours** section: one card per audio-segmentation batch showing the total audio
+duration of the batch (summed from the WAV headers under
+`backend/audio_segmentation/<set>/`, cached per file), the completed duration
+with a progress bar, and a per-annotator table (tasks done + audio hours
+completed, counted over distinct submitted task ids). Data comes from the
+`audio_segmentation` key of `GET /api/admin/dashboard` (see
+`get_admin_dashboard` in `backend/application/views.py`). After backend edits:
+`kill -HUP <gunicorn master pid>`; after frontend edits: `npm run build` in
+`frontend/`.

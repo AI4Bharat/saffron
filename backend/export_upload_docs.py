@@ -2,32 +2,48 @@
 """
 export_upload_docs.py — one-command conversation delivery pipeline.
 
-Given a language and a version, this script:
-  1. Finds all matching `conversation-editable` tests in the backend DB.
-  2. Exports their rated/edited annotations to JSONL (reuses export_conversations.py).
-     Defaults: accepted conversations only, without comments
-     (override with --include-all / --any-comments / --with-comments).
-  3. Generates persona DOCX files with at most 30 conversations per set
-     (reuses generate_docs.py), numbering sets from the last uploaded set + 1.
-  4. Uploads the DOCX files to Google Drive under <Language>/<Persona>/.
-  5. Tracks the last uploaded set number per (language, persona) in a CSV.
+TWO ways to drive it:
 
-The last-set number is taken as max(state CSV, live Drive listing) so numbering
-never collides even if the CSV falls out of date. Existing Drive files are NEVER
-overwritten: if a target filename already exists in the destination folder the
-upload is skipped and reported.
+A) Range mode (recommended) — language selector(s) + one END version:
+       venv/bin/python export_upload_docs.py --languages odia,hindi,telugu --end-version 6
+       venv/bin/python export_upload_docs.py --all-languages --end-version 6          # all non-English
+       venv/bin/python export_upload_docs.py --all-languages --english --end-version 6 # + English
+       venv/bin/python export_upload_docs.py --english --end-version 6                 # English only
+   Selectors: --languages a,b,c (explicit), --all-languages (all non-English DB
+   languages: hindi kannada marathi odia tamil telugu), --english (adds English).
+   Per language it looks up the last uploaded version in version_state.csv and
+   generates docs for versions (last_version + 1) .. end_version. So if english is
+   at 5 and odia/hindi/telugu at 3, with --end-version 6 english makes v6 and the
+   others make v4,v5,v6. A language already at/above the end version is skipped.
+   version_state.csv is advanced automatically (to the highest version that
+   produced docs). Everything lands in ONE run dir, arranged <Language>/<Persona>/,
+   for a single clean pull to your laptop.
 
-Usage:
-    venv/bin/python export_upload_docs.py --language telugu --version 5
-    venv/bin/python export_upload_docs.py -l hindi -v new           # "New Version"
-    venv/bin/python export_upload_docs.py -l marathi -v base        # no version suffix
-    venv/bin/python export_upload_docs.py -l odia -v 5 --dry-run    # plan only
-    venv/bin/python export_upload_docs.py -l odia -v 5 --no-upload  # generate docs only
+   English is NOT annotated in saffron: its conversations are read straight from
+   conversation_editable_tasks/version_<n>/ (filtered to English). All other
+   languages are exported from the annotation DB (accepted, comment-free).
 
-Drive upload requires a Google service account JSON key. Default location:
-    /root/saffron/backend/config/gdrive_service_account.json
-(override with --sa-file or the GDRIVE_SA_FILE env var). The Drive folder must be
-shared with the service account's email address as Editor.
+B) Single mode (original) — one language, one version:
+       venv/bin/python export_upload_docs.py -l telugu -v 5
+       venv/bin/python export_upload_docs.py -l hindi  -v new     # "New Version"
+       venv/bin/python export_upload_docs.py -l marathi -v base   # no version suffix
+
+Both modes, by default, export only ACCEPTED conversations WITHOUT comments
+(override with --include-all / --any-comments / --with-comments), build persona
+DOCX sets of at most 30 conversations, and continue SET numbers from the last
+uploaded set (max of state CSV + live Drive listing) so numbering never collides
+and existing Drive files are never overwritten.
+
+    --dry-run       plan only (matched tests, versions, next set numbers)
+    --no-upload     generate DOCX only (skip Drive upload); the local launcher uses this
+    --sync-state    refresh the SET-number CSV from a live Drive listing and exit
+
+Drive upload requires a Google service account JSON key (default
+/root/saffron/backend/config/gdrive_service_account.json, or --sa-file /
+GDRIVE_SA_FILE); the Drive folder must be shared with that service account as
+Editor. SET numbers come from Drive, so after a manual upload run --sync-state.
+VERSION numbers are NOT encoded on Drive — they live only in version_state.csv
+and are updated automatically by this script.
 """
 
 import argparse
@@ -52,13 +68,28 @@ from generate_docs import build_persona_documents, PERSONA_ORDER
 DRIVE_ROOT_FOLDER_ID = "15NnqyQ4FBqW9Hs7N47mIakCWGvj1_nQk"
 DRIVE_ROOT_URL = f"https://drive.google.com/drive/folders/{DRIVE_ROOT_FOLDER_ID}"
 STATE_CSV = os.path.join(BACKEND_DIR, "upload_sets_state.csv")
+VERSION_CSV = os.path.join(BACKEND_DIR, "version_state.csv")
 RUNS_DIR = os.path.join(BACKEND_DIR, "exports", "auto_docs")
 DEFAULT_SA_FILE = os.environ.get(
     "GDRIVE_SA_FILE", os.path.join(BACKEND_DIR, "config", "gdrive_service_account.json")
 )
 CHUNK_SIZE = 30  # max conversations per DOCX set
 
+# All non-English languages are sourced from the annotation DB. English is special:
+# it is NOT annotated in saffron — its conversations are taken straight from the
+# per-version source JSONL under conversation_editable_tasks/version_<n>/.
+ALL_DB_LANGUAGES = ["hindi", "kannada", "marathi", "odia", "tamil", "telugu"]
+CONV_EDITABLE_ROOT = os.path.join(BACKEND_DIR, "conversation_editable_tasks")
+
 DOCX_NAME_RE = re.compile(r"^(?P<prefix>.+)_Set(?P<num>\d+)\.docx$", re.IGNORECASE)
+
+
+def english_version_dir(version):
+    """Source dir of English conversation JSONL for a version:
+    numeric N -> conversation_editable_tasks/version_N ; 'new' -> new_version."""
+    v = str(version).strip().lower().replace(" ", "_")
+    sub = "new_version" if v in ("new", "new_version") else f"version_{v}"
+    return os.path.join(CONV_EDITABLE_ROOT, sub)
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +156,31 @@ def save_state(state):
     os.replace(tmp, STATE_CSV)
 
 
+# ---------------------------------------------------------------------------
+# Version state (CSV only — versions are not encoded on Drive)
+# ---------------------------------------------------------------------------
+def load_version_state():
+    st = {}
+    if os.path.exists(VERSION_CSV):
+        with open(VERSION_CSV, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                try:
+                    st[row["language"].strip().lower()] = int(row["last_version"])
+                except (KeyError, ValueError):
+                    continue
+    return st
+
+
+def save_version_state(st):
+    tmp = VERSION_CSV + ".tmp"
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["language", "last_version", "updated_at"])
+        for lang, v in sorted(st.items()):
+            w.writerow([lang, v, datetime.datetime.now().isoformat(timespec="seconds")])
+    os.replace(tmp, VERSION_CSV)
+
+
 def drive_all_last_sets():
     """Scan the shared Drive folder (anonymous, read-only) for the highest existing
     Set number per (language, persona). Returns {} if the listing fails."""
@@ -149,9 +205,9 @@ def drive_all_last_sets():
     return result
 
 
-def drive_last_sets(language):
+def drive_last_sets_for(language, all_drive):
     lang = language.strip().lower()
-    return {p: n for (l, p), n in drive_all_last_sets().items() if l == lang}
+    return {p: n for (l, p), n in all_drive.items() if l == lang}
 
 
 def sync_state_from_drive():
@@ -177,6 +233,66 @@ def effective_start_sets(language, state, drive_sets):
         starts[persona] = last + 1
         sources[persona] = f"csv={csv_last}, drive={drv_last}"
     return starts, sources
+
+
+# ---------------------------------------------------------------------------
+# Generation (shared by both modes)
+# ---------------------------------------------------------------------------
+def export_and_build(language, version, run_dir, next_set,
+                     only_accepted, comments_filter, chunk_size, personas_filter):
+    """One (language, version): produce the JSONL for that language+version, build persona
+    DOCX into run_dir/docx/<Lang>/<Persona>/, and advance next_set (per persona) in place.
+    Non-English is exported from the annotation DB (accepted, comment-free by default);
+    English is read straight from its per-version source JSONL dir (no DB, no rating filter).
+    Returns (label, [(persona, dest_path, count, set_no), ...]); [] if no source/docs."""
+    if language == "english":
+        label = "New Version" if str(version).strip().lower().replace(" ", "_") in ("new", "new_version") else f"Version {version}"
+        jsonl_dir = english_version_dir(version)
+        if not os.path.isdir(jsonl_dir):
+            print(f"  [English / {label}] source dir not found (skip): {jsonl_dir}")
+            return label, []
+        print(f"  [English / {label}] source JSONL dir: {jsonl_dir} (filtered to English)")
+    else:
+        label, tests = find_tests(language, version, personas_filter)
+        if not tests:
+            return label, []
+        print(f"  [{language.title()} / {label}] {len(tests)} test(s): "
+              f"{', '.join(str(t[0]) for t in tests)}")
+        jsonl_dir = os.path.join(run_dir, "jsonl", f"{language}_{slugify(label)}")
+        os.makedirs(jsonl_dir, exist_ok=True)
+        for tid, desc, _ in tests:
+            out = os.path.join(jsonl_dir, f"{tid}_conversation-editable_{slugify(desc or str(tid))}.jsonl")
+            export_conversation_ratings(tid, out, only_accepted, comments_filter)
+
+    tmp_docx = os.path.join(run_dir, "_tmp", f"{language}_{slugify(label)}")
+    os.makedirs(tmp_docx, exist_ok=True)
+    written_raw = build_persona_documents(
+        jsonl_dir, tmp_docx, language=language, chunk_size=chunk_size,
+        personas_to_process=personas_filter, persona_start_sets=dict(next_set),
+    )
+
+    docx_dir = os.path.join(run_dir, "docx")
+    lang_title = language.replace("_", " ").title()
+    written = []
+    for persona, path, count in written_raw:
+        persona_title = persona.replace("_", " ").title()
+        dest_dir = os.path.join(docx_dir, lang_title, persona_title)
+        os.makedirs(dest_dir, exist_ok=True)
+        dest = os.path.join(dest_dir, os.path.basename(path))
+        os.replace(path, dest)
+        m = DOCX_NAME_RE.match(os.path.basename(dest))
+        set_no = int(m.group("num")) if m else None
+        if set_no is not None:
+            next_set[persona] = max(next_set.get(persona, 1), set_no + 1)
+        written.append((persona, dest, count, set_no))
+        print(f"    {lang_title}/{persona_title}/{os.path.basename(dest)}  ({count} conversations)")
+    return label, written
+
+
+def bump_set_state(state, language, written):
+    for persona, _dest, _count, set_no in written:
+        if set_no is not None and state.get((language, persona), 0) < set_no:
+            state[(language, persona)] = set_no
 
 
 # ---------------------------------------------------------------------------
@@ -256,19 +372,271 @@ def upload_docx(service, folder_id, local_path):
     return "uploaded", created["id"]
 
 
+def upload_language(service, language, written, state, create_missing):
+    """Upload one language's arranged DOCX files to Drive; advance set state. Returns counts."""
+    lang_id, lang_name, created = find_subfolder(
+        service, DRIVE_ROOT_FOLDER_ID, language, create=create_missing
+    )
+    if not lang_id:
+        raise SystemExit(f"Language folder '{language.title()}' not found on Drive. "
+                         "Re-run with --create-missing-folders to create it.")
+    if created:
+        print(f"  Created language folder '{lang_name}' on Drive.")
+
+    persona_folder_cache = {}
+    uploaded, skipped, failed = [], [], []
+    for persona, path, _count, set_no in written:
+        if persona not in persona_folder_cache:
+            pid, pname, pcreated = find_subfolder(service, lang_id, persona, create=create_missing)
+            if pcreated:
+                print(f"  Created persona folder '{pname}' on Drive.")
+            persona_folder_cache[persona] = pid
+        folder_id = persona_folder_cache[persona]
+        name = os.path.basename(path)
+        if not folder_id:
+            failed.append((name, "persona folder missing on Drive (use --create-missing-folders)"))
+            continue
+        try:
+            status, file_id = upload_docx(service, folder_id, path)
+        except Exception as e:
+            failed.append((name, str(e)))
+            continue
+        if status == "exists":
+            skipped.append((name, file_id))
+            print(f"  [SKIP] {name} already exists on Drive (id={file_id}) — not overwritten.")
+        else:
+            uploaded.append((name, file_id))
+            print(f"  [OK]   {name} -> {lang_name}/{persona.replace('_', ' ').title()} (id={file_id})")
+        if set_no is not None and state.get((language, persona), 0) < set_no:
+            state[(language, persona)] = set_no
+            save_state(state)
+    return uploaded, skipped, failed
+
+
+# ---------------------------------------------------------------------------
+# CLI helpers
+# ---------------------------------------------------------------------------
+def build_opts(args):
+    only_accepted = not args.include_all
+    comments_filter = "with" if args.with_comments else ("all" if args.any_comments else "without")
+    personas_filter = None
+    if args.personas:
+        personas_filter = {s.strip().lower() for s in args.personas.split(",") if s.strip()}
+        unknown = personas_filter - set(PERSONA_ORDER)
+        if unknown:
+            raise SystemExit(f"Unknown persona(s): {', '.join(sorted(unknown))}")
+    return only_accepted, comments_filter, personas_filter
+
+
+def next_sync_reminder():
+    print("\nNEXT STEPS:")
+    print("  1. Upload the DOCX (arranged Language/Persona) to the Drive docs folder.")
+    print(f"  2. Then sync SET numbers from Drive:  {sys.executable} export_upload_docs.py --sync-state")
+    print("  (VERSION numbers were updated automatically in version_state.csv.)")
+
+
+# ---------------------------------------------------------------------------
+# Modes
+# ---------------------------------------------------------------------------
+def run_single(args, only_accepted, comments_filter, personas_filter):
+    language = args.language.strip().lower()
+    label, tests = find_tests(language, args.version, personas_filter)
+    if not tests:
+        raise SystemExit(f"No conversation-editable tests found for {language.title()} / {label}.")
+    print(f"Found {len(tests)} test(s) for {language.title()} / {label}:")
+    for tid, desc, n in tests:
+        print(f"  {tid}  ({n} tasks)  {desc}")
+
+    state = load_state()
+    all_drive = drive_all_last_sets()
+    print("\nChecking last uploaded set numbers (state CSV + live Drive listing)...")
+    starts, sources = effective_start_sets(language, state, drive_last_sets_for(language, all_drive))
+    for persona in PERSONA_ORDER:
+        if personas_filter and persona not in personas_filter:
+            continue
+        print(f"  {persona:<22} next set = {starts[persona]:>3}  ({sources[persona]})")
+
+    if args.dry_run:
+        print("\n[DRY RUN] No export, DOCX generation, or upload performed.")
+        return
+
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = os.path.join(RUNS_DIR, f"{language}_{slugify(label)}_{ts}")
+    next_set = dict(starts)
+    print(f"\nExporting + generating (only_accepted={only_accepted}, comments={comments_filter})...")
+    _, written = export_and_build(language, args.version, run_dir, next_set,
+                                  only_accepted, comments_filter, args.chunk_size, personas_filter)
+    if not written:
+        raise SystemExit("No DOCX files were generated (no matching conversations in export).")
+
+    docx_dir = os.path.join(run_dir, "docx")
+    print(f"RUN_DOCX_DIR={docx_dir}")
+    bump_set_state(state, language, written)
+
+    vstate = load_version_state()
+    if str(args.version).isdigit():
+        vstate[language] = max(vstate.get(language, 0), int(args.version))
+
+    if args.no_upload:
+        save_state(state)
+        save_version_state(vstate)
+        print(f"\n--no-upload: DOCX files left in {docx_dir} (arranged Language/Persona).")
+        print(f"Pull to your machine with:\n  scp -r tts-labelstudio:{docx_dir}/* <local_folder>/")
+        next_sync_reminder()
+        return
+
+    print("\nUploading to Google Drive...")
+    service = get_drive_service(args.sa_file)
+    uploaded, skipped, failed = upload_language(service, language, written, state,
+                                                args.create_missing_folders)
+    save_state(state)
+    save_version_state(vstate)
+    print(f"\nDone. Uploaded {len(uploaded)}, skipped {len(skipped)} (already existed), "
+          f"failed {len(failed)}.")
+    if failed:
+        for name, err in failed:
+            print(f"  [FAIL] {name}: {err}")
+        sys.exit(1)
+    print(f"Local copies: {docx_dir}")
+
+
+def run_range(args, only_accepted, comments_filter, personas_filter):
+    # Compose the language list from the selectors (order preserved, de-duplicated):
+    #   --languages a,b,c   explicit list (may include english)
+    #   --all-languages     all non-English DB languages
+    #   --english           add english (sourced from its per-version JSONL dir)
+    languages = []
+    if args.languages:
+        languages += [l.strip().lower() for l in args.languages.split(",") if l.strip()]
+    if args.all_languages:
+        languages += ALL_DB_LANGUAGES
+    if args.english and "english" not in languages:
+        languages.append("english")
+    seen, ordered = set(), []
+    for l in languages:
+        if l not in seen:
+            seen.add(l); ordered.append(l)
+    languages = ordered
+    end_v = args.end_version
+    if end_v < 2:
+        raise SystemExit("--end-version must be >= 2 (versions start at 2; use single mode for base/new).")
+
+    state = load_state()
+    vstate = load_version_state()
+    all_drive = drive_all_last_sets()
+
+    # Plan
+    plan = []  # (language, last_v, [versions])
+    print("Range plan (per language: last uploaded version -> versions to generate):")
+    for language in languages:
+        last_v = vstate.get(language)
+        seeded = last_v is not None
+        if not seeded:
+            last_v = 1
+        versions = list(range(last_v + 1, end_v + 1))
+        note = "" if seeded else "  [WARN no version_state, assuming last=1; edit version_state.csv]"
+        if not versions:
+            print(f"  {language.title():<10} at v{last_v} >= end v{end_v}: SKIP (nothing new){note}")
+        else:
+            print(f"  {language.title():<10} at v{last_v} -> generate v{versions}{note}")
+        plan.append((language, last_v, versions))
+
+    if args.dry_run:
+        print("\n[DRY RUN] next set numbers per language:")
+        for language, _last, versions in plan:
+            if not versions:
+                continue
+            starts, sources = effective_start_sets(language, state, drive_last_sets_for(language, all_drive))
+            for persona in PERSONA_ORDER:
+                if personas_filter and persona not in personas_filter:
+                    continue
+                print(f"  {language.title():<10} {persona:<22} next set = {starts[persona]:>3}  ({sources[persona]})")
+        print("\n[DRY RUN] No export, DOCX generation, or upload performed.")
+        return
+
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = os.path.join(RUNS_DIR, f"range_{ts}")
+    all_written = []  # (language, [(persona,dest,count,set_no)...])
+    any_docs = False
+
+    for language, last_v, versions in plan:
+        if not versions:
+            continue
+        starts, _ = effective_start_sets(language, state, drive_last_sets_for(language, all_drive))
+        next_set = dict(starts)
+        produced = []
+        lang_written = []
+        for v in versions:
+            _, written = export_and_build(language, str(v), run_dir, next_set,
+                                          only_accepted, comments_filter, args.chunk_size, personas_filter)
+            if written:
+                produced.append(v)
+                any_docs = True
+                bump_set_state(state, language, written)
+                lang_written.extend(written)
+            else:
+                print(f"    [none] {language.title()} version {v}: no matching "
+                      f"accepted/comment-free conversations (skipped).")
+        if lang_written:
+            all_written.append((language, lang_written))
+        if produced:
+            vstate[language] = max(last_v, max(produced))
+            print(f"  -> {language.title()} version_state advanced to {vstate[language]}.")
+
+    if not any_docs:
+        raise SystemExit("No DOCX files were generated for any requested language/version.")
+
+    docx_dir = os.path.join(run_dir, "docx")
+    print(f"RUN_DOCX_DIR={docx_dir}")
+
+    if args.no_upload:
+        save_state(state)
+        save_version_state(vstate)
+        print(f"\n--no-upload: DOCX files left in {docx_dir} (arranged Language/Persona).")
+        print(f"Pull to your machine with:\n  scp -r tts-labelstudio:{docx_dir}/* <local_folder>/")
+        next_sync_reminder()
+        return
+
+    print("\nUploading to Google Drive...")
+    service = get_drive_service(args.sa_file)
+    tot_up = tot_skip = tot_fail = 0
+    failures = []
+    for language, written in all_written:
+        up, sk, fl = upload_language(service, language, written, state, args.create_missing_folders)
+        tot_up += len(up); tot_skip += len(sk); tot_fail += len(fl)
+        failures.extend(fl)
+    save_state(state)
+    save_version_state(vstate)
+    print(f"\nDone. Uploaded {tot_up}, skipped {tot_skip} (already existed), failed {tot_fail}.")
+    if failures:
+        for name, err in failures:
+            print(f"  [FAIL] {name}: {err}")
+        sys.exit(1)
+    print(f"Local copies: {docx_dir}")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
     p = argparse.ArgumentParser(
-        description="Export rated conversations for a language+version, build persona "
-                    "DOCX sets (max 30 conversations each) and upload them to Google Drive."
+        description="Export rated conversations and build persona DOCX sets (max 30 each), "
+                    "continuing set numbers, then optionally upload to Google Drive."
     )
-    p.add_argument("--language", "-l", help="e.g. telugu, hindi, odia")
+    p.add_argument("--language", "-l", help="[single mode] one language, e.g. telugu")
     p.add_argument("--version", "-v",
-                   help="e.g. 5, or 'new' (New Version), or 'base' (no version suffix)")
+                   help="[single mode] e.g. 5, 'new' (New Version), or 'base' (no version suffix)")
+    p.add_argument("--languages", help="[range mode] comma-separated languages, e.g. english,odia,hindi")
+    p.add_argument("--all-languages", action="store_true", dest="all_languages",
+                   help="[range mode] process ALL non-English languages "
+                        f"({', '.join(ALL_DB_LANGUAGES)}); add --english to include English too")
+    p.add_argument("--english", action="store_true",
+                   help="[range mode] include English (sourced from its per-version JSONL dir, "
+                        "not the annotation DB)")
+    p.add_argument("--end-version", type=int, dest="end_version",
+                   help="[range mode] target version; each language generates last_version+1..this")
     p.add_argument("--sync-state", action="store_true",
-                   help="Refresh the state CSV from a live Drive listing (all languages) and exit")
+                   help="Refresh the SET-number CSV from a live Drive listing (all languages) and exit")
     p.add_argument("--include-all", action="store_true",
                    help="Include rejected and unrated conversations too "
                         "(default: only conversations marked as accepted)")
@@ -285,159 +653,32 @@ def main():
     p.add_argument("--create-missing-folders", action="store_true",
                    help="Create the Language/Persona folder on Drive if it does not exist")
     p.add_argument("--no-upload", action="store_true",
-                   help="Generate DOCX files but skip Drive upload and CSV state update")
+                   help="Generate DOCX files but skip Drive upload (CSV state is still updated)")
     p.add_argument("--dry-run", action="store_true",
-                   help="Show matched tests and planned set numbers, then exit")
+                   help="Show matched tests, versions and planned set numbers, then exit")
     args = p.parse_args()
 
     if args.sync_state:
         sync_state_from_drive()
         return
-    if not args.language or not args.version:
-        p.error("--language and --version are required (unless using --sync-state)")
 
-    language = args.language.strip().lower()
-    only_accepted = not args.include_all
-    comments_filter = "with" if args.with_comments else ("all" if args.any_comments else "without")
-    personas_filter = None
-    if args.personas:
-        personas_filter = {s.strip().lower() for s in args.personas.split(",") if s.strip()}
-        unknown = personas_filter - set(PERSONA_ORDER)
-        if unknown:
-            raise SystemExit(f"Unknown persona(s): {', '.join(sorted(unknown))}")
+    range_mode = bool(args.languages or args.all_languages or args.english or args.end_version is not None)
+    if range_mode:
+        if not (args.languages or args.all_languages or args.english):
+            p.error("range mode needs a language selector: --languages, --all-languages, and/or --english")
+        if args.end_version is None:
+            p.error("range mode needs --end-version")
+        if args.language or args.version:
+            p.error("use either single mode (-l/-v) or range mode (--languages/--all-languages/--english), not both")
+    else:
+        if not args.language or not args.version:
+            p.error("give -l/-v (single), or --languages/--end-version (range), or --sync-state")
 
-    # 1. Find tests -----------------------------------------------------------
-    label, tests = find_tests(language, args.version, personas_filter)
-    if not tests:
-        raise SystemExit(f"No conversation-editable tests found for {language.title()} / {label}.")
-    print(f"Found {len(tests)} test(s) for {language.title()} / {label}:")
-    for tid, desc, n in tests:
-        print(f"  {tid}  ({n} tasks)  {desc}")
-
-    # 2. Determine next set numbers ------------------------------------------
-    state = load_state()
-    print("\nChecking last uploaded set numbers (state CSV + live Drive listing)...")
-    drive_sets = drive_last_sets(language)
-    starts, sources = effective_start_sets(language, state, drive_sets)
-    for persona in PERSONA_ORDER:
-        if personas_filter and persona not in personas_filter:
-            continue
-        print(f"  {persona:<22} next set = {starts[persona]:>3}  ({sources[persona]})")
-
-    if args.dry_run:
-        print("\n[DRY RUN] No export, DOCX generation, or upload performed.")
-        return
-
-    # 3. Export JSONL ---------------------------------------------------------
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join(RUNS_DIR, f"{language}_{slugify(label)}_{ts}")
-    jsonl_dir = os.path.join(run_dir, "jsonl")
-    docx_dir = os.path.join(run_dir, "docx")
-    os.makedirs(jsonl_dir, exist_ok=True)
-    print(f"\nExporting {len(tests)} test(s) to {jsonl_dir} "
-          f"(only_accepted={only_accepted}, comments={comments_filter})")
-    for tid, desc, _ in tests:
-        out = os.path.join(jsonl_dir, f"{tid}_conversation-editable_{slugify(desc or str(tid))}.jsonl")
-        export_conversation_ratings(tid, out, only_accepted, comments_filter)
-
-    # 4. Generate DOCX sets ---------------------------------------------------
-    print(f"\nGenerating DOCX files (max {args.chunk_size} conversations per set)...")
-    written = build_persona_documents(
-        jsonl_dir,
-        docx_dir,
-        language=language,
-        chunk_size=args.chunk_size,
-        personas_to_process=personas_filter,
-        persona_start_sets=starts,
-    )
-    if not written:
-        raise SystemExit("No DOCX files were generated (no matching conversations in export).")
-
-    # Arrange files in an upload-ready tree: docx/<Language>/<Persona>/<file>.docx
-    lang_title = language.replace("_", " ").title()
-    arranged = []
-    for persona, path, count in written:
-        persona_title = persona.replace("_", " ").title()
-        dest_dir = os.path.join(docx_dir, lang_title, persona_title)
-        os.makedirs(dest_dir, exist_ok=True)
-        dest = os.path.join(dest_dir, os.path.basename(path))
-        os.replace(path, dest)
-        arranged.append((persona, dest, count))
-        print(f"  {lang_title}/{persona_title}/{os.path.basename(dest)}  ({count} conversations)")
-    written = arranged
-    # Stable marker for wrapper scripts (e.g. the local pull-to-laptop launcher)
-    print(f"RUN_DOCX_DIR={docx_dir}")
-
-    def bump_state(state):
-        for persona, path, _ in written:
-            m = DOCX_NAME_RE.match(os.path.basename(path))
-            if m and state.get((language, persona), 0) < int(m.group("num")):
-                state[(language, persona)] = int(m.group("num"))
-        save_state(state)
-
-    if args.no_upload:
-        bump_state(state)
-        print(f"\n--no-upload: DOCX files left in {docx_dir} (arranged Language/Persona).")
-        print(f"State CSV updated to the generated set numbers: {STATE_CSV}")
-        print(f"Pull to your machine with:\n  scp -r tts-labelstudio:{docx_dir}/* <local_folder>/")
-        return
-
-    # 5. Upload to Drive ------------------------------------------------------
-    print("\nUploading to Google Drive...")
-    service = get_drive_service(args.sa_file)
-    lang_id, lang_name, created = find_subfolder(
-        service, DRIVE_ROOT_FOLDER_ID, language, create=args.create_missing_folders
-    )
-    if not lang_id:
-        raise SystemExit(f"Language folder '{language.title()}' not found on Drive. "
-                         "Re-run with --create-missing-folders to create it.")
-    if created:
-        print(f"  Created language folder '{lang_name}' on Drive.")
-
-    persona_folder_cache = {}
-    uploaded, skipped, failed = [], [], []
-    for persona, path, count in written:
-        if persona not in persona_folder_cache:
-            pid, pname, pcreated = find_subfolder(
-                service, lang_id, persona, create=args.create_missing_folders
-            )
-            if pcreated:
-                print(f"  Created persona folder '{pname}' on Drive.")
-            persona_folder_cache[persona] = pid
-        folder_id = persona_folder_cache[persona]
-        name = os.path.basename(path)
-        if not folder_id:
-            failed.append((name, "persona folder missing on Drive (use --create-missing-folders)"))
-            continue
-        try:
-            status, file_id = upload_docx(service, folder_id, path)
-        except Exception as e:
-            failed.append((name, str(e)))
-            continue
-        m = DOCX_NAME_RE.match(name)
-        set_no = int(m.group("num")) if m else None
-        if status == "exists":
-            skipped.append((name, file_id))
-            print(f"  [SKIP] {name} already exists on Drive (id={file_id}) — not overwritten.")
-        else:
-            uploaded.append((name, file_id))
-            print(f"  [OK]   {name} -> {lang_name}/{persona.replace('_', ' ').title()} (id={file_id})")
-        # Advance the CSV either way: the set number is taken on Drive.
-        if set_no is not None:
-            key = (language, persona)
-            if state.get(key, 0) < set_no:
-                state[key] = set_no
-                save_state(state)
-
-    # 6. Summary ---------------------------------------------------------------
-    print(f"\nDone. Uploaded {len(uploaded)}, skipped {len(skipped)} (already existed), "
-          f"failed {len(failed)}.")
-    if failed:
-        for name, err in failed:
-            print(f"  [FAIL] {name}: {err}")
-        sys.exit(1)
-    print(f"Local copies: {docx_dir}")
-    print(f"Set-number state: {STATE_CSV}")
+    only_accepted, comments_filter, personas_filter = build_opts(args)
+    if range_mode:
+        run_range(args, only_accepted, comments_filter, personas_filter)
+    else:
+        run_single(args, only_accepted, comments_filter, personas_filter)
 
 
 if __name__ == "__main__":

@@ -25,17 +25,25 @@ into the Drive docs folder. Done.
 
 ## Use case 2 — "Now make the recording Excels from those docs"
 
-The `saffron_docs.ps1` run printed a line like
-`RUN_DOCX_DIR=/root/saffron/backend/exports/auto_docs/telugu_version_5_.../docx`.
-Feed that path to:
+Easiest: name the set directly and let the server fetch the docx from the
+conversation-docs Drive folder (falls back to the server's own
+`exports/auto_docs` copy if that set was never uploaded to Drive):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\Users\Avnish\saffron_excels.ps1 -l telugu -p storyteller -s 3
+```
+
+Or feed it a server path — the `saffron_docs.ps1` run printed a line like
+`RUN_DOCX_DIR=/root/saffron/backend/exports/auto_docs/telugu_version_5_.../docx`:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File C:\Users\Avnish\saffron_excels.ps1 /root/saffron/backend/exports/auto_docs/telugu_version_5_XXX/docx
 ```
 
-Excels appear in `Downloads\saffron_docs\excels\Telugu\` named
+Either way, Excels appear in `Downloads\saffron_docs\excels\Telugu\` named
 `Telugu_<Persona>_Set<n>.xlsx` (numbering continues from the Excel Drive
-folder — independent of the docx set numbers). IDs inside use the two-letter
+folder — independent of the docx set numbers; `excel_sets_state.csv` on the
+server is updated automatically). IDs inside use the two-letter
 language prefix: `Te_Conv_1_T_1`. Upload to the Excel Drive folder.
 
 ---
@@ -95,8 +103,11 @@ $PY /root/saffron/backend/export_upload_docs.py --sync-state   # docs CSV
 $PY /root/saffron/backend/docx_to_excel.py --sync-state        # excel CSV
 ```
 
-Safe to run anytime — Drive is the source of truth. Numbering also live-checks
-Drive on every run, so a stale CSV can never cause an overwrite.
+Careful: this makes the CSV mirror Drive EXACTLY, so counts for sets that were
+generated on the server but not yet uploaded to Drive are dropped (a CSV being
+ahead of Drive is normal and correct — numbering uses max(CSV, Drive)). Only
+sync after everything generated has actually been uploaded. Numbering also
+live-checks Drive on every run, so a stale CSV can never cause an overwrite.
 
 ---
 

@@ -66,12 +66,27 @@
               </div>
               <div v-if="isEditable">
                 <textarea
+                  v-if="editingKey === 'pre_scene'"
                   v-model="sceneState.pre_scene"
                   v-auto-grow
+                  v-focus
+                  @blur="stopEdit"
                   class="form-control correction-textarea shadow-inner border-2 w-100"
                   rows="2"
                   placeholder="Edit pre-scene narrative..."
                 ></textarea>
+                <div
+                  v-else
+                  class="editable-rendered"
+                  role="textbox"
+                  tabindex="0"
+                  title="Click to edit"
+                  @click="startEdit('pre_scene')"
+                  @focus="startEdit('pre_scene')"
+                >
+                  <span v-if="(sceneState.pre_scene || '').trim()" v-html="renderMath(sceneState.pre_scene)"></span>
+                  <span v-else class="editable-placeholder">Click to edit pre-scene narrative…</span>
+                </div>
                 <div class="d-flex justify-content-between align-items-center mt-2 fs-7">
                   <span v-if="isSceneModified('pre_scene')" class="text-warning">
                     <i class="bi bi-pencil-fill me-1"></i> Modified
@@ -82,7 +97,7 @@
                   <span class="text-muted">{{ sceneState.pre_scene?.length || 0 }} chars</span>
                 </div>
               </div>
-              <p v-else class="mb-0 fs-6 text-dark fw-medium leading-relaxed">{{ currentTest.pre_scene }}</p>
+              <p v-else class="mb-0 fs-6 text-dark fw-medium leading-relaxed" v-html="renderMath(currentTest.pre_scene)"></p>
             </div>
           </div>
         </div>
@@ -162,12 +177,27 @@
               </div>
               <div v-if="isEditable">
                 <textarea
+                  v-if="editingKey === 'turn:' + idx"
                   v-model="turn.text"
                   v-auto-grow
+                  v-focus
+                  @blur="stopEdit"
                   class="form-control correction-textarea shadow-inner border-2 w-100"
                   rows="2"
                   placeholder="Edit dialogue text..."
                 ></textarea>
+                <div
+                  v-else
+                  class="editable-rendered"
+                  role="textbox"
+                  tabindex="0"
+                  title="Click to edit"
+                  @click="startEdit('turn:' + idx)"
+                  @focus="startEdit('turn:' + idx)"
+                >
+                  <span v-if="(turn.text || '').trim()" v-html="renderMath(turn.text)"></span>
+                  <span v-else class="editable-placeholder">Click to edit dialogue text…</span>
+                </div>
                 <div class="d-flex justify-content-between align-items-center mt-2 fs-7">
                   <span v-if="isTurnModified(idx)" class="text-warning">
                     <i class="bi bi-pencil-fill me-1"></i> Modified
@@ -178,7 +208,7 @@
                   <span class="text-muted">{{ turn.text?.length || 0 }} chars</span>
                 </div>
               </div>
-              <p v-else class="mb-0 fs-6 text-dark leading-relaxed">{{ turn.text }}</p>
+              <p v-else class="mb-0 fs-6 text-dark leading-relaxed" v-html="renderMath(turn.text)"></p>
             </div>
           </div>
 
@@ -224,12 +254,27 @@
             </div>
             <div v-if="isEditable">
               <textarea
+                v-if="editingKey === 'post_scene'"
                 v-model="sceneState.post_scene"
                 v-auto-grow
+                v-focus
+                @blur="stopEdit"
                 class="form-control correction-textarea shadow-inner border-2 w-100"
                 rows="2"
                 placeholder="Edit post-scene narrative..."
               ></textarea>
+              <div
+                v-else
+                class="editable-rendered"
+                role="textbox"
+                tabindex="0"
+                title="Click to edit"
+                @click="startEdit('post_scene')"
+                @focus="startEdit('post_scene')"
+              >
+                <span v-if="(sceneState.post_scene || '').trim()" v-html="renderMath(sceneState.post_scene)"></span>
+                <span v-else class="editable-placeholder">Click to edit post-scene narrative…</span>
+              </div>
               <div class="d-flex justify-content-between align-items-center mt-2 fs-7">
                 <span v-if="isSceneModified('post_scene')" class="text-warning">
                   <i class="bi bi-pencil-fill me-1"></i> Modified
@@ -240,7 +285,7 @@
                 <span class="text-muted">{{ sceneState.post_scene?.length || 0 }} chars</span>
               </div>
             </div>
-            <p v-else class="mb-0 fs-6 text-dark fw-medium leading-relaxed">{{ currentTest.post_scene }}</p>
+            <p v-else class="mb-0 fs-6 text-dark fw-medium leading-relaxed" v-html="renderMath(currentTest.post_scene)"></p>
           </div>
         </div>
       </div>
@@ -301,8 +346,14 @@
       </div>
     </div>
 
+    <!-- Read-only preview banner (admin review) -->
+    <div v-if="readonly" class="alert alert-info d-flex align-items-center rounded-4 mb-4">
+      <i class="bi bi-eye-fill me-2"></i>
+      <span>Read-only preview of a submitted annotation.</span>
+    </div>
+
     <!-- Submit / Navigation Bar -->
-    <div class="card border-0 shadow-sm rounded-4 bg-white p-4 mb-5">
+    <div v-if="!readonly" class="card border-0 shadow-sm rounded-4 bg-white p-4 mb-5">
       <div class="d-flex flex-column flex-sm-row justify-content-between align-items-center gap-3">
         
         <!-- Previous Button -->
@@ -398,6 +449,25 @@ const vAutoGrow = {
   }
 }
 
+// Focus (and place the caret at the end of) a textarea the moment it mounts,
+// used by the click-to-edit fields so editing starts on the first click.
+const vFocus = {
+  mounted(el) {
+    el.focus();
+    try {
+      const len = el.value.length;
+      el.setSelectionRange(len, len);
+    } catch (_) { /* non-text inputs */ }
+  }
+}
+
+// Click-to-edit state: a field shows its rendered math/text until clicked, then
+// becomes a raw textarea; on blur it renders again. Only one field edits at a
+// time, keyed by 'pre_scene' | 'post_scene' | 'turn:<idx>'.
+const editingKey = ref(null)
+function startEdit(key) { editingKey.value = key }
+function stopEdit() { editingKey.value = null }
+
 const props = defineProps({
   currentTest: {
     type: Object,
@@ -418,6 +488,12 @@ const props = defineProps({
   currentIndex: {
     type: Number,
     required: true
+  },
+  // When true the component is a read-only preview (admin review): action buttons
+  // are hidden and all submit paths are inert.
+  readonly: {
+    type: Boolean,
+    default: false
   },
   testType: {
     type: String,
@@ -470,7 +546,7 @@ function setupState() {
     _originalText: turn.text || ''
   }))
 
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  window.scrollTo({ top: 0, behavior: 'auto' })
 }
 
 // Helpers
@@ -581,6 +657,7 @@ const isValid = computed(() => {
 
 // Skip Action
 async function handleSkip() {
+  if (props.readonly) return
   if (isSubmitting.value) return
   isSubmitting.value = true
 
@@ -647,6 +724,7 @@ function buildResultsJson() {
 
 // Draft Save
 async function handleSave() {
+  if (props.readonly) return
   if (isSaving.value || isSubmitting.value) return
   isSaving.value = true
 
@@ -698,6 +776,7 @@ async function handleSave() {
 
 // Submission
 async function handleSubmit() {
+  if (props.readonly) return
   if (isSubmitting.value || !isValid.value) return
   isSubmitting.value = true
 
@@ -738,6 +817,7 @@ async function handleSubmit() {
 
 // Shortcuts listener
 function onKeydown(e) {
+  if (props.readonly) return
   // Don't trigger if user is typing in a textarea or input field
   if (document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') {
     // Only intercept Ctrl+Enter or Ctrl+S
@@ -780,9 +860,68 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
 })
+
+// Render $...$ / \(...\) math with KaTeX if present (loaded lazily, safe no-op otherwise).
+function renderMath(s) {
+  const esc = String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+  if (window.katex && window.renderMathInElement) {
+    const div = document.createElement('div'); div.innerHTML = esc
+    try {
+      window.renderMathInElement(div, {
+        delimiters: [
+          { left: '$$', right: '$$', display: true }, { left: '\\[', right: '\\]', display: true },
+          { left: '\\(', right: '\\)', display: false }, { left: '$', right: '$', display: false }
+        ], throwOnError: false
+      })
+      return div.innerHTML
+    } catch (_) { /* fall through */ }
+  }
+  return esc
+}
+
+// True when the string contains any LaTeX math delimiter, so we only show the
+// equation preview for turns/scenes that actually contain math.
+function hasMath(s) {
+  if (!s) return false
+  return /\$[^$]+\$|\\\(|\\\[|\$\$/.test(String(s))
+}
 </script>
 
 <style scoped>
+/* Click-to-edit field: shows rendered math/text, becomes a textarea on click,
+   renders again on blur. Styled to look editable (hover + focus affordance). */
+.editable-rendered {
+  min-height: 2.6rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  background-color: #fff;
+  cursor: text;
+  font-size: 1rem;
+  line-height: 1.7;
+  color: #0f172a;
+  transition: border-color .15s, background-color .15s, box-shadow .15s;
+  overflow-x: auto;
+}
+.editable-rendered:hover {
+  border-color: #0ea5e9;
+  background-color: #f0f9ff;
+}
+.editable-rendered:focus {
+  outline: none;
+  border-color: #0ea5e9;
+  background-color: #f0f9ff;
+  box-shadow: 0 0 0 0.15rem rgba(14, 165, 233, 0.2);
+}
+.editable-placeholder {
+  color: #94a3b8;
+  font-style: italic;
+}
+/* keep KaTeX from overflowing narrow columns */
+.editable-rendered :deep(.katex) {
+  white-space: normal;
+}
+
 /* Gradient and visual card styles */
 .pre-scene-box {
   background-color: #f0f7ff;

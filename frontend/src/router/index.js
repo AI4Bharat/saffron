@@ -6,6 +6,7 @@ import TestView from '@/views/TestView.vue';
 import CompletionView from '@/views/CompletionView.vue';
 import DynamicTestView from '@/views/DynamicTestView.vue';
 import TrackingPageView from '@/views/TrackingPageView.vue';
+import AdminTaskReview from '@/views/AdminTaskReview.vue';
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -57,6 +58,16 @@ const router = createRouter({
       component: TrackingPageView,
       meta: { requiresAuth: true },
     },
+    {
+      // Admin-only review of a task's submitted annotations (per-annotator tabs).
+      // Must be declared before '/:id' would be considered; its 3-segment path
+      // never collides with the single-segment '/:id' route.
+      path: '/admin/task/:id',
+      name: 'AdminTaskReview',
+      component: AdminTaskReview,
+      props: true,
+      meta: { requiresAuth: true },
+    },
   ],
 });
 
@@ -64,9 +75,9 @@ const router = createRouter({
 router.beforeEach((to, from, next) => {
   const authToken = localStorage.getItem('authToken');
 
-  if (to.path === '/tracking') {
+  if (to.path === '/tracking' || to.path.startsWith('/admin/')) {
     if (!authToken) {
-      next('/login');
+      next({ path: '/login', query: { redirect: to.fullPath } });
     } else {
       let isAdmin = false;
       try {
@@ -82,8 +93,9 @@ router.beforeEach((to, from, next) => {
       }
     }
   } else if (to.meta.requiresAuth && !authToken) {
-    // If route requires authentication and authToken is not present, redirect to login
-    next('/login');
+    // Requires auth and not logged in: remember where they were going (including the
+    // query string, e.g. ?task=<id> deep links) so login can send them back there.
+    next({ path: '/login', query: { redirect: to.fullPath } });
   } else {
     // Continue navigation
     next();

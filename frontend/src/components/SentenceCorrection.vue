@@ -110,8 +110,14 @@
           </div>
         </div>
 
+        <!-- Read-only preview banner (admin review) -->
+        <div v-if="readonly" class="alert alert-info d-flex align-items-center rounded-4 mb-4">
+          <i class="bi bi-eye-fill me-2"></i>
+          <span>Read-only preview of a submitted annotation.</span>
+        </div>
+
         <!-- Submit / Navigation -->
-        <div class="card border-0 shadow-sm rounded-4 bg-white p-4 mb-5">
+        <div v-if="!readonly" class="card border-0 shadow-sm rounded-4 bg-white p-4 mb-5">
           <div class="d-flex flex-column flex-sm-row justify-content-between align-items-center gap-3">
             <button
               class="btn btn-outline-secondary px-4 py-2 rounded-pill d-flex align-items-center gap-2"
@@ -176,7 +182,9 @@ const props = defineProps({
   isLastTest: { type: Boolean, default: false },
   test_id: { type: [Number, String], required: true },
   session_id: { type: String, default: null },
-  currentIndex: { type: Number, required: true }
+  currentIndex: { type: Number, required: true },
+  // Read-only preview (admin review): hide actions, disable all submit paths.
+  readonly: { type: Boolean, default: false }
 })
 const emit = defineEmits(['next', 'prev', 'submit-status'])
 
@@ -196,12 +204,13 @@ function setup() {
   startTime.value = Date.now()
   text.value = props.currentTest?.text ?? props.currentTest?.translated ?? ''
   origText.value = text.value
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  window.scrollTo({ top: 0, behavior: 'auto' })
 }
 watch(() => props.currentTest, setup, { immediate: true })
 
 // Keyboard shortcuts: Ctrl/Cmd+Enter = Submit & Next, Ctrl/Cmd+S = Save Draft.
 function onKeydown(e) {
+  if (props.readonly) return
   if (!(e.ctrlKey || e.metaKey)) return
   if (e.key === 'Enter') { e.preventDefault(); handleSubmit() }
   else if (e.key.toLowerCase() === 's') { e.preventDefault(); handleSave() }
@@ -272,6 +281,7 @@ async function post(status) {
 }
 
 async function handleSubmit() {
+  if (props.readonly) return
   if (isSubmitting.value || !isValid.value) return
   isSubmitting.value = true
   try {
@@ -284,6 +294,7 @@ async function handleSubmit() {
 }
 
 async function handleSave() {
+  if (props.readonly) return
   if (isSaving.value || isSubmitting.value) return
   isSaving.value = true
   try {
@@ -300,6 +311,7 @@ async function handleSave() {
 }
 
 async function handleSkip() {
+  if (props.readonly) return
   if (isSubmitting.value) return
   isSubmitting.value = true
   try {

@@ -1,0 +1,46 @@
+{
+  "batch_id": "bench_20260724_050718",
+  "model": "gemini-3.1-pro-preview",
+  "langs": [
+    "mr"
+  ],
+  "domains": [
+    "casual_dialogue",
+    "voice_assistant",
+    "customer_support",
+    "chatbot_longform",
+    "news",
+    "sports_commentary",
+    "weather",
+    "podcast_interview",
+    "audiobook_narration",
+    "advertisement",
+    "education",
+    "stem_scientific",
+    "encyclopedic",
+    "children_content",
+    "finance_banking",
+    "ecommerce_retail",
+    "travel_navigation",
+    "healthcare_medical",
+    "legal_government",
+    "technology_it",
+    "social_media",
+    "emotional_expressive",
+    "religious_devotional",
+    "poetry_literary",
+    "agriculture_rural",
+    "recipes_food",
+    "entertainment_film"
+  ],
+  "per_cell": 35,
+  "stats": {
+    "rows": 297,
+    "rows_failed": 0,
+    "sentences": 945,
+    "requested": 945
+  },
+  "per_lang_written": {
+    "mr": 945
+  }
+}

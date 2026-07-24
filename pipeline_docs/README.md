@@ -11,65 +11,63 @@ cd /root/saffron/backend
 
 ## 1. Conversation Pipeline (export → DOCX → Drive)
 
-One command does it all: finds the tests for a language+version, exports the
-**accepted, comment-free** conversations, builds `<Lang>_<Persona>_SetN.docx`
-files (max 30 conversations per set, numbering continues from the last set on
-Drive/CSV), arranged in an upload-ready `Language/Persona/` folder tree.
+Builds `<Lang>_<Persona>_SetN.docx` files (max 30 conversations per set,
+continuing set numbers from the last set on Drive/CSV), arranged in an
+upload-ready `Language/Persona/` tree. By default only **accepted, comment-free**
+conversations. Non-English is exported from the annotation DB; **English is read
+straight from `conversation_editable_tasks/version_<n>/`** (it is not annotated).
 
-### The only command you normally need (run on your laptop)
+### Range mode (recommended): language selector(s) + one END version
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File C:\Users\Avnish\saffron_docs.ps1 telugu 5
+# from the laptop:
+powershell -File C:\Users\Avnish\saffron_docs.ps1 -AllLanguages -English -EndVersion 6
+powershell -File C:\Users\Avnish\saffron_docs.ps1 -Languages "odia,hindi,telugu" -EndVersion 6
+powershell -File C:\Users\Avnish\saffron_docs.ps1 -AllLanguages -EndVersion 6 -DryRun   # plan only
 ```
-
-- 1st arg language: `hindi kannada marathi odia tamil telugu english`
-- 2nd arg version: `2`..`5`, `new` (= "New Version"), `base` (= no version suffix)
-
-This generates the docs on the server AND automatically transfers them to
-`C:\Users\Avnish\Downloads\saffron_docs\<Language>\<Persona>\` (folders are
-created if absent). Drag-drop the language folder contents into the Drive
-folder — filenames and subfolders already match, nothing gets overwritten.
-
-Pass extra flags with e.g. `-ExtraArgs "--personas storyteller"`.
-
-Server-only alternative (no transfer): run on the server
-`$PY export_upload_docs.py -l telugu -v 5 --no-upload` — it prints the
-output folder and the scp command to pull it later.
-
-### Other useful forms
-
 ```bash
-$PY export_upload_docs.py -l telugu -v 5 --dry-run          # plan only: which tests, next set numbers
-$PY export_upload_docs.py -l odia -v new --no-upload        # "New Version" campaign
-$PY export_upload_docs.py -l telugu -v 5 --personas storyteller,relatable_peer --no-upload
-$PY export_upload_docs.py -l telugu -v 5 --include-all --no-upload    # also rejected + unrated
-$PY export_upload_docs.py -l telugu -v 5 --any-comments --no-upload   # include commented convs too
-$PY export_upload_docs.py --sync-state                      # re-sync the set-number CSV from Drive
+# on the server:
+$PY export_upload_docs.py --all-languages --english --end-version 6 --no-upload
+$PY export_upload_docs.py --languages odia,hindi,telugu --end-version 6 --dry-run
 ```
 
-### Set-number tracking
+Each language generates versions `(its last uploaded + 1) .. end-version`, where
+the last version per language is tracked in **`version_state.csv`** and advanced
+automatically (to the highest version that actually produced docs). Selectors:
+`--languages a,b,c`, `--all-languages` (hindi kannada marathi odia tamil telugu),
+`--english`.
 
-- CSV: `/root/saffron/backend/upload_sets_state.csv` (language, persona, last_set).
-- Updated automatically after every generation/upload.
-- Every run also live-checks the Drive folder, and uses whichever is higher —
-  so numbering never collides even if the CSV is stale.
-- After manually uploading docs to Drive you don't need to do anything;
-  `--sync-state` any time re-reads the truth from Drive.
+### Single mode: one language, one version
+
+```powershell
+powershell -File C:\Users\Avnish\saffron_docs.ps1 telugu 5
+powershell -File C:\Users\Avnish\saffron_docs.ps1 odia new
+```
+```bash
+$PY export_upload_docs.py -l telugu -v 5 --no-upload
+$PY export_upload_docs.py -l odia -v new --dry-run
+```
+2nd arg version: `2`..`N`, `new` (= "New Version"), `base` (= no version suffix).
+
+Docs are transferred to `C:\Users\Avnish\Downloads\saffron_docs\<Language>\<Persona>\`.
+Pass extra flags with e.g. `-ExtraArgs "--personas storyteller"` (or `--include-all`,
+`--any-comments`).
+
+### Set + version tracking
+
+- `upload_sets_state.csv` (language, persona, last_set) — updated automatically;
+  numbering always uses `max(CSV, live Drive)` so it never collides. After a manual
+  upload run `$PY export_upload_docs.py --sync-state` to mirror Drive.
+- `version_state.csv` (language, last_version) — updated automatically on generate.
+  Versions are NOT encoded on Drive, so this CSV is the source of truth; edit it by
+  hand to correct a language's baseline.
 
 ### Direct (automatic) Drive upload — optional
 
-Drop a Google service-account JSON key at
-`config/gdrive_service_account.json`, share the Drive folder with the service
-account email as Editor, then simply omit `--no-upload`:
-
-```bash
-$PY export_upload_docs.py -l telugu -v 5
-```
-
-It uploads into `<Language>/<Persona>/` on Drive, skips (never overwrites)
-existing files, and updates the CSV.
-
----
+Drop a Google service-account JSON key at `config/gdrive_service_account.json`,
+share the Drive folder with the service account email as Editor, then omit
+`--no-upload`. It uploads into `<Language>/<Persona>/`, never overwrites existing
+files, and updates the CSVs.
 
 ## 2. DOCX → Recording Excel Pipeline (docx_to_excel.py)
 
@@ -81,11 +79,21 @@ language **prefix**) and "Conversations" (`ID | Conversation`, IDs like
 ### One command from your laptop (converts on server + pulls here)
 
 ```powershell
+# By Drive set (downloads the docx from the conversation-docs Drive folder):
+powershell -ExecutionPolicy Bypass -File C:\Users\Avnish\saffron_excels.ps1 -l telugu -p storyteller -s 3
+
+# Or by server path (single .docx, folder of docx, or .zip):
 powershell -ExecutionPolicy Bypass -File C:\Users\Avnish\saffron_excels.ps1 <server_docx_path>
 ```
 
-The path can be a single .docx, a folder of docx, or a .zip — e.g. the docx
-folder printed by a `saffron_docs.ps1` run. Excels land in
+With `-l/-p/-s` the server fetches
+`<Language>/<Persona>/<Language>_<Persona>_Set<n>.docx` from the
+conversation-docs Drive folder
+(https://drive.google.com/drive/folders/15NnqyQ4FBqW9Hs7N47mIakCWGvj1_nQk);
+if that set was generated on the server but never uploaded to Drive, it
+automatically falls back to the copy in `backend/exports/auto_docs/*/docx`.
+The path form is unchanged — e.g. the docx folder printed by a
+`saffron_docs.ps1` run. Either way the Excels land in
 `C:\Users\Avnish\Downloads\saffron_docs\excels\<Language>\`.
 
 - Output naming `<Language>_<Persona>_Set<n>.xlsx` continues from the last set
@@ -93,40 +101,71 @@ folder printed by a `saffron_docs.ps1` run. Excels land in
   (https://drive.google.com/drive/folders/1nP_Eu7rtI_R49vd_s4c6JxzyaI-vb8HD),
   tracked in `backend/excel_sets_state.csv` + live Drive listing — same
   mechanism as the docs. Numbering is independent of the source docx set
-  numbers.
-- On the server directly: `$PY docx_to_excel.py <docx|folder|zip>`; reset the
+  numbers, and the CSV is updated automatically on every conversion.
+- On the server directly: `$PY docx_to_excel.py <docx|folder|zip>` or
+  `$PY docx_to_excel.py -l <language> -p <persona> -s <set>`; reset the
   CSV from Drive with `$PY docx_to_excel.py --sync-state`.
+- Note on the state CSVs: both `excel_sets_state.csv` and
+  `upload_sets_state.csv` may legitimately be AHEAD of their Drive folders —
+  they also count sets generated on the server that were not uploaded yet
+  (e.g. runs with `--no-upload`, or xlsx not yet placed in the Excel folder).
+  Next-set numbering always uses max(CSV, Drive), so this never collides.
+  Only run `--sync-state` if you want the CSV to mirror Drive exactly.
 
 ---
 
 ## 3. Audio Segmentation Pipeline (Drive → server → DB)
 
-One command downloads a Drive folder (WAVs + one Excel), fixes "Copy of "
-names, validates WAV↔Excel ID matching, and loads the tasks into the DB:
+The voice actors' recordings live in a Drive folder that contains an
+**`EXPORTED ID`** subfolder (per-turn conversation WAVs named like
+`Conv_10_T_1_En.wav`) plus other things we ignore (e.g. `topic exported`).
+The matching recording Excel lives in the shared Excel Drive folder under
+`<Language>/<persona - actor>/<Language>_<Persona>_Set<n>.xlsx`.
+
+### Two-source mode (recommended) — give the audio link + persona/set
+
+```bash
+$PY load_audio_set.py --audio-link "https://drive.google.com/drive/folders/XXXX" \
+    --persona storyteller --excel-set 2            # --language defaults to english
+```
+
+It downloads **only** the `EXPORTED ID` WAVs (curl direct-download — robust
+against gdown's "too many accesses" rate limit), renames
+`Conv_10_T_1_En.wav → En_Conv_10_T_1.wav` so they match the Excel `ID`
+column, pulls `<Language>_<Persona>_Set<n>.xlsx` from the shared Excel folder,
+validates WAV↔Excel ID matching, picks the next free `audio_segmentation/setN/`,
+and loads a `Test` (`test_type = audio-segmentation`).
+
+- **Each set has its own audio folder.** Set numbering restarts per set, so the
+  same `En_Conv_5_T_1` ID exists in every set with *different* dialogue — never
+  point one audio folder at two different `--excel-set` values.
+- From your laptop: `powershell -File C:\Users\Avnish\saffron_audio.ps1 -AudioLink "<...>" -Persona storyteller -ExcelSet 2`
+- **All languages/sets:** WAV names are read from the Excel ID column (En/Hi/Te/Ta/Od/Gu/Ka/Ma...), so any prefix matches exactly; pass --language <lang> (default english).
+
+### Single-folder mode (original) — one folder holds WAVs + one Excel
 
 ```bash
 $PY load_audio_set.py --link "https://drive.google.com/drive/folders/XXXX"
 ```
 
-- Picks the next free `setN` directory automatically (use `--set set7` to pick one yourself).
-- The Drive link must be shared as "Anyone with the link".
-- Excel must have `ID`, `Speaker`, `Dialogue` columns and be named like
-  `English_Calm_Explainer_Set3.xlsx` (language/persona come from the name).
-
-### Other useful forms
+### Common options
 
 ```bash
-$PY load_audio_set.py --link "..." --no-load          # download + validate only, load later
-$PY load_audio_set.py --set set3 --skip-download      # validate + load an already-downloaded set
+--set setN          # force the local set dir (default: next free setN)
+--no-load           # download + validate only, load later
+--skip-download     # validate + load an already-downloaded set dir
+--id-subfolder STR  # WAV subfolder name in two-source mode (default "EXPORTED ID")
 ```
+
+The Drive links must be shared as "Anyone with the link". The Excel must have
+`ID`, `Speaker`, `Dialogue` columns and be named like
+`English_Storyteller_Set2.xlsx` (language/persona come from the name).
 
 ### Export audio segmentation results
 
 ```bash
 $PY export_all_results.py     # bulk export of all rated results -> exports/*.jsonl
 ```
-
----
 
 ## Where things live
 

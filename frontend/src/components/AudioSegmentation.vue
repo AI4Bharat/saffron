@@ -304,7 +304,7 @@
     </div>
 
     <!-- Submit / Saving Bottom Controls -->
-    <div class="card border-0 shadow-sm rounded-4 bg-white p-4 mb-5">
+    <div v-if="!readonly" class="card border-0 shadow-sm rounded-4 bg-white p-4 mb-5">
       <div class="d-flex flex-column flex-sm-row justify-content-between align-items-center gap-3">
         <!-- Previous Task -->
         <button
@@ -364,7 +364,7 @@
         <div class="card-body p-4 reject-modal-body">
           <p class="text-muted small mb-3">Please check all details that apply for rejecting this audio segment:</p>
           
-          <!-- Checklist grid of 30 reasons -->
+          <!-- Checklist grid of 31 reasons -->
           <div class="row g-2 reasons-grid">
             <div 
               v-for="reason in availableReasons" 
@@ -570,6 +570,11 @@ const props = defineProps({
     type: Number,
     required: true
   },
+  // Read-only preview (admin review): hide actions, disable all submit paths.
+  readonly: {
+    type: Boolean,
+    default: false
+  },
   testType: {
     type: String,
     default: 'audio-segmentation'
@@ -607,13 +612,14 @@ const startTime = ref(Date.now())
 
 // Available rejection reasons from the images
 const availableReasons = [
-  'incorrect_text', 'noise', 'mispronounce', 'weak_emotion', 
-  'incorrect_style', 'mismatch', 'skipping_words', 'not_normalized', 
-  'low_volume', 'noise_beginning', 'noise_end', 'wrong_speaker', 
-  'too_fast', 'fan', 'silence', 'unnatural', 'unclear', 
-  'wrong_language', 'duplicate', 'repeating_content', 'dramatic', 
-  'too_slow', 'page_flip', 'manual', 'flag', 'echo', 
-  'chatter', 'abnormal', 'objectionable_content', 'others'
+  'abnormal', 'artist_issue', 'chatter', 'dramatic',
+  'duplicate', 'echo', 'fan', 'flag',
+  'incorrect_style', 'incorrect_text', 'low_volume', 'manual',
+  'mispronounce', 'mismatch', 'noise', 'noise_beginning',
+  'noise_end', 'not_normalized', 'objectionable_content', 'page_flip',
+  'repeating_content', 'silence', 'skipping_words', 'too_fast',
+  'too_slow', 'truncated_audio', 'unclear', 'unnatural',
+  'weak_emotion', 'wrong_language', 'wrong_speaker'
 ]
 
 // Computed
@@ -679,7 +685,7 @@ function setupState() {
   showRejectModal.value = false
   showQCGuidelinesModal.value = false
 
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  window.scrollTo({ top: 0, behavior: 'auto' })
 }
 
 // Audio logic handlers
@@ -753,6 +759,7 @@ function formatTime(seconds) {
 
 // Evaluation choices and reasoning modal handlers
 function selectEvaluation(val) {
+  if (props.readonly) return
   if (val === 'accept') {
     evaluation.value = 'accept'
     rejectionReasons.value = []
@@ -811,6 +818,7 @@ function buildResultsJson() {
 }
 
 async function handleSave() {
+  if (props.readonly) return
   if (isSaving.value || isSubmitting.value) return
   isSaving.value = true
 
@@ -861,6 +869,7 @@ async function handleSave() {
 }
 
 async function handleSkip() {
+  if (props.readonly) return
   if (isSubmitting.value) return
   isSubmitting.value = true
 
@@ -900,6 +909,7 @@ async function handleSkip() {
 }
 
 async function handleSubmit() {
+  if (props.readonly) return
   if (isSubmitting.value || !isValid.value) return
   isSubmitting.value = true
 
@@ -940,6 +950,7 @@ async function handleSubmit() {
 
 // Global Shortcuts
 function onKeydown(e) {
+  if (props.readonly) return
   // Ignore shortcuts when editing text inputs
   if (document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') {
     // Standard submit combinations: Ctrl/Cmd + Enter

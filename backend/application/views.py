@@ -62,9 +62,33 @@ if not app.debug:
 def unhandled_exception(e):
     from werkzeug.exceptions import HTTPException
     if isinstance(e, HTTPException):
-        return e
-    app.logger.error('Unhandled Exception: %s', (e))
-    return jsonify({'message': 'Internal Server Error'}), 500
+        # Return the error as JSON (never Werkzeug's HTML page) so the SPA can
+        # always parse a `message`. `description` carries the specific reason
+        # (e.g. the abort() text below); `error` is the HTTP status name.
+        payload = {
+            'message': e.description or e.name,
+            'error': e.name,
+            'status': e.code,
+        }
+        return jsonify(payload), e.code
+    # exc_info=True records the full traceback in error.log for real debugging,
+    # while the client only ever sees a generic message (no internals leaked).
+    app.logger.error('Unhandled Exception: %s', e, exc_info=True)
+    return jsonify({'message': 'Something went wrong on our end. Please try again.',
+                    'error': 'Internal Server Error', 'status': 500}), 500
+
+
+def _require_bearer_token():
+    """Return the bearer token from the Authorization header, or abort(401) with a
+    clear JSON message. Replaces the old ``.split()[1]`` pattern that raised an
+    opaque 500 when the header was missing or malformed."""
+    from flask import abort
+    parts = (request.headers.get('Authorization') or '').split()
+    if len(parts) == 2 and parts[0].lower() == 'bearer':
+        return parts[1]
+    if len(parts) == 1 and parts[0]:
+        return parts[0]  # tolerate a bare token without the "Bearer " prefix
+    abort(401, description='Authorization token is missing or malformed.')
 
 
 def token_required(f):
@@ -207,9 +231,76 @@ def login():
         return jsonify({'message': 'Invalid username or password'}), 401
 
 
+# ---------------------------------------------------------------------------
+# Daily signup PIN
+# ---------------------------------------------------------------------------
+# New annotators must enter an 8-digit PIN that the admin shares. The PIN rotates
+# once per day and is stored in backend/signup_key.txt as "YYYY-MM-DD PIN".
+import os  # noqa: E402  (views.py imports os further down; needed at module level here)
+
+# Public base URL used to build deep links into a specific task (see TestView ?task=).
+_SAFFRON_BASE_URL = os.environ.get('SAFFRON_BASE_URL', 'https://tts-saffron.ai4bharat.org')
+
+SIGNUP_KEY_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'signup_key.txt'
+)
+
+
+def _daily_signup_pin():
+    """Return today's 8-digit PIN, generating + persisting a new one if the stored
+    PIN is from a previous day (or the file is missing/corrupt).
+
+    Concurrency: the whole read-check-write runs under an exclusive lock on the key
+    file, so with N gunicorn workers only one can ever be minting a PIN. Any worker
+    that arrives during a rotation blocks on the lock, then re-reads and returns the
+    PIN the winner just wrote -- two workers can never hand out different PINs for
+    the same day, not even on the midnight boundary.
+    """
+    import datetime as _dt
+    import fcntl as _fcntl
+    import secrets as _secrets
+
+    today = _dt.date.today().isoformat()
+    # 'a+' creates the file when missing and lets us read AND rewrite under one lock.
+    with open(SIGNUP_KEY_FILE, 'a+', encoding='utf-8') as fh:
+        _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX)   # released on close, but be explicit
+        try:
+            fh.seek(0)
+            parts = fh.read().split()
+            if (len(parts) >= 2 and parts[0] == today
+                    and len(parts[1]) == 8 and parts[1].isdigit()):
+                return parts[1]
+            pin = ''.join(str(_secrets.randbelow(10)) for _ in range(8))
+            fh.seek(0)
+            fh.truncate()
+            fh.write(f"{today} {pin}\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+            return pin
+        finally:
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
+
+
+@app.route('/api/admin/signup-key', methods=['GET'])
+@token_required
+def get_signup_key(current_user):
+    """Admin-only: today's signup PIN, to share with people who should sign up."""
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    import datetime as _dt
+    return jsonify({'pin': _daily_signup_pin(), 'date': _dt.date.today().isoformat()}), 200
+
+
 @app.route('/api/signup', methods=['POST'])
 def signup():
     data = request.get_json()
+
+    # Require the admin's daily 8-digit signup PIN (blocks anonymous signups).
+    submitted_pin = str(data.get('signup_key') or data.get('signup_pin') or '').strip()
+    if not submitted_pin:
+        return jsonify({'message': 'A signup PIN is required. Please ask the admin for today\'s PIN.'}), 403
+    if submitted_pin != _daily_signup_pin():
+        return jsonify({'message': 'Invalid or expired signup PIN. The PIN changes daily - please ask the admin for today\'s PIN.'}), 403
 
     # Extract data from the request
     name = data.get('name')
@@ -231,7 +322,6 @@ def signup():
 
     # Create a new Rater instance (new user)
     new_user = Rater(
-        id=db.session.query(db.func.max(Rater.id)).scalar() + 1 if db.session.query(db.func.max(Rater.id)).scalar() is not None else 1,
         name=name.strip(),
         age=age,
         gender=gender.strip(),
@@ -260,7 +350,7 @@ def signup():
 @app.route('/api/test/<int:test_id>', methods=['GET'])
 @token_required
 def get_test(current_user, test_id):
-    token = request.headers.get('Authorization').split()[1]
+    token = _require_bearer_token()
     required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
     username = required["username"]
     rater = Rater.query.filter_by(name=username).first()
@@ -360,6 +450,15 @@ def get_test(current_user, test_id):
                     sample_copy['rejection_reasons'] = rating_data['rejection_reasons']
                 if 'custom_rejection_reason' in rating_data:
                     sample_copy['custom_rejection_reason'] = rating_data['custom_rejection_reason']
+                # Benchmark verification: reload the annotator's edited raw_text /
+                # spoken_form and their accept/reject decision so a saved draft or a
+                # completed item re-opens exactly as they left it.
+                if 'raw_text' in rating_data:
+                    sample_copy['raw_text'] = rating_data['raw_text']
+                if 'spoken_form' in rating_data:
+                    sample_copy['spoken_form'] = rating_data['spoken_form']
+                if 'decision' in rating_data:
+                    sample_copy['decision'] = rating_data['decision']
 
                 orig_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in sample_copy and isinstance(sample_copy[k], list)), None)
                 rated_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in rating_data and isinstance(rating_data[k], list)), None)
@@ -391,11 +490,24 @@ def get_test(current_user, test_id):
     })
 
 
+@app.teardown_request
+def _rollback_failed_session(exc=None):
+    # main.py keeps one app context pushed forever, so Flask-SQLAlchemy never
+    # removes the scoped session between requests. If a flush failed and the
+    # view swallowed it, the session stays unusable for every later request on
+    # this worker. Roll it back here so one bad request can't poison the rest.
+    try:
+        if exc is not None or not db.session.is_active:
+            db.session.rollback()
+    except Exception:
+        pass
+
+
 @app.route('/api/ratings', methods=['POST'])
 @token_required
 def create_rating(current_user):
     try:
-        token = request.headers.get('Authorization').split()[1]
+        token = _require_bearer_token()
         required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
         rater = Rater.query.filter_by(name=required["username"]).first()
         if not rater:
@@ -446,7 +558,6 @@ def create_rating(current_user):
             return jsonify({'message': 'Rating updated successfully'}), 200
         else:
             rating = Rating(
-                id=db.session.query(db.func.max(Rating.id)).scalar() + 1 if db.session.query(db.func.max(Rating.id)).scalar() is not None else 1,
                 rater_id=rater.id,
                 test_id=data['test_id'],
                 results_json=data['results_json'],
@@ -458,6 +569,8 @@ def create_rating(current_user):
             db.session.commit()
             return jsonify({'message': 'Rating created successfully'}), 201
     except Exception as e:
+        # Roll back so a failed flush cannot poison this worker's session.
+        db.session.rollback()
         app.logger.error('Error creating rating: %s', e)
         return jsonify({'message': 'Internal Server Error'}), 500
 
@@ -510,7 +623,6 @@ def create_study():
         return jsonify({'message': 'Study already exists'}), 400
 
     new_study = Study(
-        id = db.session.query(db.func.max(Study.id)).scalar() + 1 if db.session.query(db.func.max(Study.id)).scalar() is not None else 1,
         study_id=study_id,
         test_id=test_id,
         completion_url=completion_url
@@ -599,7 +711,6 @@ def get_test_for_prolific_user():
             # method='pbkdf2:sha256'
         )
         rater = Rater(
-            id=db.session.query(db.func.max(Rater.id)).scalar() + 1 if db.session.query(db.func.max(Rater.id)).scalar() is not None else 1,
             name=f"Prolific_{prolific_pid}",
             age=0,  # Default age as it's not collected
             gender="Unknown",  # Default gender
@@ -711,6 +822,15 @@ def get_test_for_prolific_user():
                     sample_copy['rejection_reasons'] = rating_data['rejection_reasons']
                 if 'custom_rejection_reason' in rating_data:
                     sample_copy['custom_rejection_reason'] = rating_data['custom_rejection_reason']
+                # Benchmark verification: reload the annotator's edited raw_text /
+                # spoken_form and their accept/reject decision so a saved draft or a
+                # completed item re-opens exactly as they left it.
+                if 'raw_text' in rating_data:
+                    sample_copy['raw_text'] = rating_data['raw_text']
+                if 'spoken_form' in rating_data:
+                    sample_copy['spoken_form'] = rating_data['spoken_form']
+                if 'decision' in rating_data:
+                    sample_copy['decision'] = rating_data['decision']
 
                 orig_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in sample_copy and isinstance(sample_copy[k], list)), None)
                 rated_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in rating_data and isinstance(rating_data[k], list)), None)
@@ -756,7 +876,7 @@ def get_test_for_prolific_user():
 # add a new point to give consent
 @app.route('/api/prolific/consent/<int:test_id>', methods=['GET'])
 def give_consent(test_id):
-    token = request.headers.get('Authorization').split()[1]
+    token = _require_bearer_token()
     required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
     rater = Rater.query.filter_by(name=required["username"]).first_or_404()
     test = Test.query.filter_by(id=test_id).first_or_404()
@@ -815,7 +935,6 @@ def save_rating():
     })
 
     new_rating = Rating(
-        id = db.session.query(db.func.max(Rating.id)).scalar() + 1 if db.session.query(db.func.max(Rating.id)).scalar() is not None else 1,
         rater_id=rater.id,  # Prolific users are anonymous, no Rater ID
         test_id=test_id,
         results_json=results_json,
@@ -867,7 +986,6 @@ def create_test():
 
         # Create a new Test instance
         new_test = Test(
-            id=db.session.query(db.func.max(Test.id)).scalar() + 1 if db.session.query(db.func.max(Test.id)).scalar() is not None else 1,
             test_type=test_type,
             description=description,
             json_entry=json_entry
@@ -891,7 +1009,7 @@ def get_database():
     Get the contents of the database.
     """
     # Verify token
-    token = request.headers.get('Authorization').split()[1]
+    token = _require_bearer_token()
     if token != "tts_ai4b":
         return jsonify({'message': 'Unauthorized'}), 401
     ratings = Rating.query.all()
@@ -911,7 +1029,7 @@ def get_database():
 @app.route('/api/results/<int:test_id>', methods=['GET'])
 def get_database_test(test_id):
     # check token
-    token = request.headers.get('Authorization').split()[1]
+    token = _require_bearer_token()
     if token != "tts_ai4b":
         return jsonify({'message': 'Unauthorized'}), 401
     rating = Rating.query.filter_by(test_id=test_id).all()
@@ -931,7 +1049,7 @@ def get_database_test(test_id):
 
 @app.route('/api/verify_test/<int:test_id>', methods=['GET'])
 def verify_test(test_id):
-    token = request.headers.get('Authorization').split()[1]
+    token = _require_bearer_token()
     required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
     
     username = required["username"]
@@ -980,7 +1098,7 @@ def verify_test(test_id):
     
 @app.route('/api/tracking', methods=['GET'])
 def get_tracking():
-    token = request.headers.get('Authorization').split()[1]
+    token = _require_bearer_token()
     required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
 
     if not token or required["username"] != "admin":
@@ -1002,7 +1120,11 @@ def get_tracking():
 
             for test_id, completed in test_groups.items():
                 test = Test.query.get(test_id)
-                total = len(test.json_entry) if test and test.json_entry else 0
+                # Ratings can outlive their Test (e.g. a test was deleted). Skip
+                # those orphans instead of crashing the whole endpoint on None.id.
+                if test is None:
+                    continue
+                total = len(test.json_entry) if test.json_entry else 0
                 tracking_data.append({
                     'email': rater.email,
                     'test_id': test.id,
@@ -1060,6 +1182,7 @@ def export_csv(current_user, test_id):
             'Rater Name',
             'Rater Email',
             'Item ID',
+            'Listen (Saffron link)',
             'Completion Status',
             'Time of Submission',
             'Time Taken (seconds)'
@@ -1136,6 +1259,7 @@ def export_csv(current_user, test_id):
                 rater.name if rater else "",
                 rater.email if rater else "",
                 item_id_str,
+                (f"{_SAFFRON_BASE_URL}/{test.id}?task={item_id_str}" if item_id_str else ""),
                 r.completion_status or 'completed',
                 r.time_of_submission.isoformat() if r.time_of_submission else "",
                 r.time_taken_to_submit
@@ -1284,11 +1408,431 @@ def export_csv(current_user, test_id):
         return jsonify({'error': 'Failed to export CSV.'}), 500
 
 
+def _artist_stats_safe(tests, ratings_by_test):
+    """Per-voice-artist rejection rollup; never break the dashboard if it fails."""
+    try:
+        import admin_reports
+        return admin_reports.artist_rejection_stats(tests, ratings_by_test)
+    except Exception as e:
+        print(f"[WARN] artist stats failed: {e}")
+        return {'artists': [], 'overall': {}}
+
+
+@app.route('/api/admin/rater_activity', methods=['GET'])
+@token_required
+def rater_activity(current_user):
+    """Per-annotator work done inside a date window (default: all time).
+
+    ?from=YYYY-MM-DD&to=YYYY-MM-DD  (both inclusive; either may be omitted)
+    Counts DISTINCT completed/skipped task ids, submissions and time spent, so the
+    admin can see "what did this person do last week" instead of only lifetime totals.
+    """
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    from sqlalchemy.orm import defer
+    from datetime import datetime as _dt, timedelta as _td
+
+    def _parse(v):
+        try:
+            return _dt.strptime(v.strip(), '%Y-%m-%d')
+        except Exception:
+            return None
+
+    d_from = _parse(request.args.get('from') or '')
+    d_to = _parse(request.args.get('to') or '')
+
+    q = Rating.query.options(defer(Rating.results_json))
+    if d_from:
+        q = q.filter(Rating.time_of_submission >= d_from)
+    if d_to:
+        q = q.filter(Rating.time_of_submission < d_to + _td(days=1))   # inclusive end day
+    ratings = q.all()
+
+    per = {}
+    for r in ratings:
+        p = per.setdefault(r.rater_id, {'tasks': set(), 'submissions': 0, 'secs': 0.0, 'last': None})
+        p['submissions'] += 1
+        if r.page_no_progress and r.completion_status in ('completed', 'skipped'):
+            p['tasks'].add(str(r.page_no_progress))
+        if r.time_taken_to_submit:
+            secs = r.time_taken_to_submit / 1000.0
+            if 0 < secs < 7200:          # ignore tab-left-open outliers
+                p['secs'] += secs
+        if r.time_of_submission and (p['last'] is None or r.time_of_submission > p['last']):
+            p['last'] = r.time_of_submission
+
+    raters = {x.id: x for x in Rater.query.all()}
+    rows = []
+    for rid, p in per.items():
+        rt = raters.get(rid)
+        rows.append({
+            'rater_id': rid,
+            'name': rt.name if rt else f'Rater {rid}',
+            'email': rt.email if rt else '',
+            'completed_tasks': len(p['tasks']),
+            'submissions': p['submissions'],
+            'hours': round(p['secs'] / 3600.0, 2),
+            'avg_seconds': round(p['secs'] / p['submissions'], 1) if p['submissions'] else 0,
+            'last_active': p['last'].isoformat() if p['last'] else None,
+        })
+    rows.sort(key=lambda x: -x['completed_tasks'])
+    return jsonify({
+        'from': request.args.get('from') or None,
+        'to': request.args.get('to') or None,
+        'raters': rows,
+        'totals': {
+            'completed_tasks': sum(r['completed_tasks'] for r in rows),
+            'submissions': sum(r['submissions'] for r in rows),
+            'hours': round(sum(r['hours'] for r in rows), 2),
+            'active_raters': len(rows),
+        }
+    }), 200
+
+
+@app.route('/api/admin/export_tasks_csv', methods=['GET'])
+@token_required
+def export_tasks_csv(current_user):
+    """CSV of tests: Sr. No. (per language), Language, Task ID, Detail, No. of Task.
+
+    Query params: ?version=6|new|base (optional), ?test_type=conversation-editable (optional)
+    """
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    import admin_reports
+    from flask import Response
+
+    version = request.args.get('version') or None
+    test_type = request.args.get('test_type') or None
+    tests = Test.query.order_by(Test.id).all()
+    csv_text = admin_reports.tasks_export_csv(tests, test_type=test_type, version=version)
+    fname = "tasks_export"
+    if test_type:
+        fname += f"_{test_type}"
+    if version:
+        fname += f"_v{version}"
+    return Response(
+        csv_text, mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={fname}.csv'}
+    )
+
+
+@app.route('/api/admin/export_audio_clips_csv', methods=['GET'])
+@token_required
+def export_audio_clips_csv(current_user):
+    """Clip-level audio-segmentation export with a playable Saffron deep link per clip.
+
+    ?all=1 includes accepted clips too (default: rejected only).
+    """
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    import admin_reports
+    from flask import Response
+
+    # Default: EVERY reviewed clip gets a link. ?rejected_only=1 narrows it.
+    only_rejected = request.args.get('rejected_only') in ('1', 'true', 'yes')
+    tests = Test.query.filter_by(test_type='audio-segmentation').all()
+    seg_ids = [t.id for t in tests]
+    ratings_by_test = {}
+    for r in Rating.query.filter(Rating.test_id.in_(seg_ids)).all():
+        ratings_by_test.setdefault(r.test_id, []).append(r)
+    csv_text = admin_reports.audio_clips_csv(tests, ratings_by_test, only_rejected=only_rejected)
+    name = 'audio_clips_rejected.csv' if only_rejected else 'audio_clips_all.csv'
+    return Response(csv_text, mimetype='text/csv',
+                    headers={'Content-Disposition': f'attachment; filename={name}'})
+
+
+@app.route('/api/admin/export_artist_report_csv', methods=['GET'])
+@token_required
+def export_artist_report_csv(current_user):
+    """Vendor-shareable CSV: per-artist rejection rates + reason breakdown."""
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    import admin_reports
+    from flask import Response
+
+    tests = Test.query.filter_by(test_type='audio-segmentation').all()
+    seg_ids = [t.id for t in tests]
+    ratings_by_test = {}
+    for r in Rating.query.filter(Rating.test_id.in_(seg_ids)).all():
+        ratings_by_test.setdefault(r.test_id, []).append(r)
+    stats = admin_reports.artist_rejection_stats(tests, ratings_by_test)
+    return Response(
+        admin_reports.artist_report_csv(stats), mimetype='text/csv',
+        headers={'Content-Disposition': 'attachment; filename=artist_rejection_report.csv'}
+    )
+
+
+@app.route('/api/admin/export_annotators_csv', methods=['GET'])
+@token_required
+def export_annotators_csv(current_user):
+    """CSV export summarizing annotator work: current pending task ID, working on task ID,
+    no. of tasks done, assigned batches, submissions, hours spent, and status.
+
+    Optional params: ?from=YYYY-MM-DD&to=YYYY-MM-DD
+    """
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    import admin_reports
+    from flask import Response
+    from datetime import datetime as _dt, timedelta as _td
+
+    def _parse(v):
+        try:
+            return _dt.strptime(v.strip(), '%Y-%m-%d')
+        except Exception:
+            return None
+
+    d_from = _parse(request.args.get('from') or '')
+    d_to = _parse(request.args.get('to') or '')
+    if d_to:
+        d_to = d_to + _td(days=1)  # inclusive end day
+
+    rater_id = request.args.get('rater_id', type=int)
+
+    raters = Rater.query.all()
+    tests = Test.query.all()
+    all_ratings = Rating.query.all()
+
+    ratings_by_rater = {}
+    for r in all_ratings:
+        ratings_by_rater.setdefault(r.rater_id, []).append(r)
+
+    csv_text = admin_reports.annotators_export_csv(
+        raters, tests, ratings_by_rater, d_from=d_from, d_to=d_to, rater_id=rater_id
+    )
+    fname = "annotators_report"
+    if rater_id:
+        fname += f"_rater_{rater_id}"
+    if request.args.get('from'):
+        fname += f"_from_{request.args.get('from')}"
+    if request.args.get('to'):
+        fname += f"_to_{request.args.get('to')}"
+
+    return Response(
+        csv_text, mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={fname}.csv'}
+    )
+
+
+@app.route('/api/admin/export_rater_ratings_csv/<int:rater_id>', methods=['GET'])
+@token_required
+def export_rater_ratings_csv(current_user, rater_id):
+    """Detailed line-by-line CSV of all ratings submitted by a specific rater within optional date bounds."""
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    import admin_reports
+    from flask import Response
+    from datetime import datetime as _dt, timedelta as _td
+
+    rater = Rater.query.get(rater_id)
+    if not rater:
+        return jsonify({'message': 'Rater not found'}), 404
+
+    def _parse(v):
+        try:
+            return _dt.strptime(v.strip(), '%Y-%m-%d')
+        except Exception:
+            return None
+
+    d_from = _parse(request.args.get('from') or '')
+    d_to = _parse(request.args.get('to') or '')
+
+    q = Rating.query.filter_by(rater_id=rater_id)
+    if d_from:
+        q = q.filter(Rating.time_of_submission >= d_from)
+    if d_to:
+        q = q.filter(Rating.time_of_submission < d_to + _td(days=1))
+    ratings = q.order_by(Rating.time_of_submission.desc()).all()
+
+    tests = Test.query.all()
+    csv_text = admin_reports.rater_detailed_ratings_csv(rater, tests, ratings)
+
+    r_name = rater.name.replace(' ', '_')
+    fname = f"annotations_rater_{rater_id}_{r_name}"
+    if request.args.get('from'):
+        fname += f"_from_{request.args.get('from')}"
+    if request.args.get('to'):
+        fname += f"_to_{request.args.get('to')}"
+
+    return Response(
+        csv_text, mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={fname}.csv'}
+    )
+
+
+@app.route('/api/admin/export_all_ratings_csv', methods=['GET'])
+@token_required
+def export_all_ratings_csv(current_user):
+    """Detailed line-by-line CSV of all ratings submitted across all raters within optional date bounds."""
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    import admin_reports
+    from flask import Response
+    from datetime import datetime as _dt, timedelta as _td
+
+    def _parse(v):
+        try:
+            return _dt.strptime(v.strip(), '%Y-%m-%d')
+        except Exception:
+            return None
+
+    d_from = _parse(request.args.get('from') or '')
+    d_to = _parse(request.args.get('to') or '')
+
+    q = Rating.query
+    if d_from:
+        q = q.filter(Rating.time_of_submission >= d_from)
+    if d_to:
+        q = q.filter(Rating.time_of_submission < d_to + _td(days=1))
+    ratings = q.order_by(Rating.time_of_submission.desc()).all()
+
+    raters = Rater.query.all()
+    tests = Test.query.all()
+    csv_text = admin_reports.all_detailed_ratings_csv(raters, tests, ratings)
+
+    fname = "all_annotations_report"
+    if request.args.get('from'):
+        fname += f"_from_{request.args.get('from')}"
+    if request.args.get('to'):
+        fname += f"_to_{request.args.get('to')}"
+
+    return Response(
+        csv_text, mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={fname}.csv'}
+    )
+
+
+
+
+
+import json as _json_mod  # noqa: E402
+import tempfile  # noqa: E402
+import time  # noqa: E402
+json = _json_mod
+
+# Dashboard payload cache (shared across gunicorn workers via a temp file).
+_DASHBOARD_CACHE = os.path.join(tempfile.gettempdir(), 'saffron_dashboard_cache.json')
+_DASHBOARD_CACHE_TTL = int(os.environ.get('DASHBOARD_CACHE_TTL', '60'))
+
+
+def _dashboard_cache_read():
+    """Return (payload, age_seconds) if a fresh cache exists, else (None, None)."""
+    try:
+        age = time.time() - os.path.getmtime(_DASHBOARD_CACHE)
+        if age > _DASHBOARD_CACHE_TTL:
+            return None, None
+        with open(_DASHBOARD_CACHE, encoding='utf-8') as fh:
+            return json.load(fh), age
+    except Exception:
+        return None, None
+
+
+def _dashboard_cache_write(payload):
+    try:
+        tmp = _DASHBOARD_CACHE + f'.{os.getpid()}.tmp'
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, _DASHBOARD_CACHE)   # atomic; concurrent workers can't tear it
+    except Exception as e:
+        print(f"[WARN] dashboard cache write failed: {e}")
+
+
+@app.route('/api/admin/task/<int:test_id>/annotations', methods=['GET'])
+@token_required
+def get_task_annotations(current_user, test_id):
+    """Admin-only: the submitted annotations for one task, grouped by annotator.
+
+    Powers the admin "review" view that opens when a task is clicked in the Tasks
+    Overview: instead of the blank annotation page, the admin sees what each
+    annotator actually submitted. When several annotators worked the same task they
+    each get their own tab. Read-only -- never writes to any table.
+    """
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+
+    test = Test.query.filter_by(id=test_id).first_or_404()
+    items = test.json_entry if isinstance(test.json_entry, list) else []
+
+    # Group ratings by rater, keeping the latest submission per (rater, item).
+    ratings = Rating.query.filter_by(test_id=test_id).all()
+    by_rater = {}  # rater_id -> { item_id(str) -> Rating }
+    for r in ratings:
+        item_id = str(r.page_no_progress) if r.page_no_progress is not None else None
+        if item_id is None and isinstance(r.results_json, dict):
+            item_id = str(r.results_json.get('id')) if r.results_json.get('id') is not None else None
+        if item_id is None:
+            continue
+        slot = by_rater.setdefault(r.rater_id, {})
+        prev = slot.get(item_id)
+        if prev is None or r.time_of_submission > prev.time_of_submission:
+            slot[item_id] = r
+
+    # Look up annotator names/emails in one query.
+    rater_ids = list(by_rater.keys())
+    raters = {rt.id: rt for rt in Rater.query.filter(Rater.id.in_(rater_ids)).all()} if rater_ids else {}
+
+    def _verdict(results):
+        """Normalize an accept/reject decision across task types (benchmark uses
+        'decision', conversation/audio use 'evaluation')."""
+        if not isinstance(results, dict):
+            return None
+        v = results.get('decision') or results.get('evaluation')
+        return str(v).strip().lower() if v else None
+
+    annotators = []
+    for rater_id, slot in by_rater.items():
+        rt = raters.get(rater_id)
+        counts = {'completed': 0, 'skipped': 0, 'saved': 0, 'accepted': 0, 'rejected': 0}
+        ratings_out = {}
+        for item_id, r in slot.items():
+            status = r.completion_status or 'completed'
+            if status in counts:
+                counts[status] += 1
+            v = _verdict(r.results_json)
+            if v == 'accept':
+                counts['accepted'] += 1
+            elif v == 'reject':
+                counts['rejected'] += 1
+            ratings_out[item_id] = {
+                'status': status,
+                'verdict': v,
+                'time': r.time_of_submission.isoformat() if r.time_of_submission else None,
+                'results': r.results_json,
+            }
+        annotators.append({
+            'rater_id': rater_id,
+            'name': rt.name if rt else f'Rater #{rater_id}',
+            'email': rt.email if rt else '',
+            'counts': counts,
+            'ratings': ratings_out,
+        })
+
+    # Most-active annotator first.
+    annotators.sort(key=lambda a: a['counts']['completed'] + a['counts']['skipped'], reverse=True)
+
+    return jsonify({
+        'test_id': test.id,
+        'description': test.description,
+        'test_type': test.test_type,
+        'total_items': len(items),
+        'items': items,
+        'annotators': annotators,
+    })
+
+
 @app.route('/api/admin/dashboard', methods=['GET'])
 @token_required
 def get_admin_dashboard(current_user):
     if current_user != "admin":
         return jsonify({'message': 'Unauthorized'}), 401
+
+    if request.args.get('refresh') not in ('1', 'true', 'yes'):
+        _cached, _age = _dashboard_cache_read()
+        if _cached is not None:
+            _cached['_cache'] = {'hit': True, 'age_seconds': round(_age, 1),
+                                 'ttl': _DASHBOARD_CACHE_TTL}
+            return jsonify(_cached)
+
     try:
         from sqlalchemy.orm import defer
         import re
@@ -1297,7 +1841,24 @@ def get_admin_dashboard(current_user):
         raters = Rater.query.all()
         total_registered_users = len(raters)
         
-        all_ratings = Rating.query.all()
+        # results_json is a large JSON blob and is only needed for the audio-segmentation
+        # rollups below; deferring it here takes this query from ~2.9s to ~0.6s.
+        all_ratings = Rating.query.options(defer(Rating.results_json)).all()
+
+        # Only the "evaluation" field of results_json is needed for the per-batch
+        # accept/reject tallies. Pull it straight out in SQL so the deferred blob is
+        # never lazy-loaded (loading all 42k blobs costs ~2.9s; this costs ~0.6s).
+        eval_by_rating = {}
+        try:
+            from sqlalchemy import func as _sqlfunc
+            for _rid, _ev in db.session.query(
+                Rating.id, _sqlfunc.json_extract(Rating.results_json, '$.evaluation')
+            ).all():
+                if _ev:
+                    eval_by_rating[_rid] = str(_ev).strip().lower()
+        except Exception as _e:
+            print(f"[WARN] json_extract(evaluation) failed, falling back to blobs: {_e}")
+            eval_by_rating = None
         
         # Group ratings in memory
         ratings_by_rater = {}
@@ -1435,6 +1996,14 @@ def get_admin_dashboard(current_user):
         total_consents_count = Consent.query.count()
         total_sessions_count = Session.query.count()
 
+        # Audio-segmentation ratings need results_json (evaluation / rejection_reasons).
+        # Fetch just those rows fully instead of every rating in the DB.
+        seg_test_ids = [t.id for t in tests if t.test_type == 'audio-segmentation']
+        seg_ratings_by_test = {}
+        if seg_test_ids:
+            for _r in Rating.query.filter(Rating.test_id.in_(seg_test_ids)).all():
+                seg_ratings_by_test.setdefault(_r.test_id, []).append(_r)
+
         # 3. Audio segmentation: total audio duration per batch + audio hours
         # completed per annotator (durations read from the WAV headers, cached).
         import os as _os
@@ -1478,7 +2047,7 @@ def get_admin_dashboard(current_user):
             eval_by_rater = {}   # rater_id -> [accepted, rejected]
             seg_accepted = 0
             seg_rejected = 0
-            for r in ratings_by_test.get(test.id, []):
+            for r in seg_ratings_by_test.get(test.id, []):
                 if not (r.page_no_progress and r.completion_status in ['completed', 'skipped']):
                     continue
                 done_by_rater.setdefault(r.rater_id, set()).add(str(r.page_no_progress))
@@ -1527,7 +2096,139 @@ def get_admin_dashboard(current_user):
             })
         audio_seg_data.sort(key=lambda x: x['test_id'])
 
-        return jsonify({
+        # 4. Per-task-type overview: for every test type, per-batch progress with
+        #    a per-annotator breakdown. Built entirely from tests_data + the
+        #    ratings already grouped above, so it never touches the deferred
+        #    json_entry column.
+        assigned_by_test = {}
+        for rater in raters:
+            for tid_str in (rater.assigned_tasks or "").split(','):
+                tid_str = tid_str.strip()
+                if tid_str.isdigit():
+                    assigned_by_test.setdefault(int(tid_str), []).append(rater.name)
+
+        task_types_map = {}
+        for td in tests_data:
+            test_ratings = ratings_by_test.get(td['id'], [])
+
+            per_rater = {}
+            batch_accepted = batch_rejected = batch_skipped = batch_saved = 0
+            batch_last = None
+            batch_time_sum = 0.0
+            batch_time_n = 0
+            for r in test_ratings:
+                pr = per_rater.setdefault(r.rater_id, {
+                    'done': set(), 'accepted': 0, 'rejected': 0, 'skipped': 0,
+                    'saved': 0, 'time_sum': 0.0, 'time_n': 0, 'last': None
+                })
+                if batch_last is None or r.time_of_submission > batch_last:
+                    batch_last = r.time_of_submission
+                if pr['last'] is None or r.time_of_submission > pr['last']:
+                    pr['last'] = r.time_of_submission
+                if r.completion_status == 'saved':
+                    batch_saved += 1
+                    pr['saved'] += 1
+                    continue
+                if r.completion_status not in ['completed', 'skipped']:
+                    continue
+                if r.page_no_progress:
+                    pr['done'].add(str(r.page_no_progress))
+                if r.completion_status == 'skipped':
+                    batch_skipped += 1
+                    pr['skipped'] += 1
+                if r.time_taken_to_submit:
+                    secs = r.time_taken_to_submit / 1000.0
+                    if 0 < secs < 7200:  # ignore outliers (left tab open etc.)
+                        batch_time_sum += secs
+                        batch_time_n += 1
+                        pr['time_sum'] += secs
+                        pr['time_n'] += 1
+                if eval_by_rating is not None:
+                    ev = eval_by_rating.get(r.id, '')
+                else:
+                    _rj = r.results_json if isinstance(r.results_json, dict) else {}
+                    ev = str(_rj.get('evaluation') or '').strip().lower()
+                if ev == 'accept':
+                    batch_accepted += 1
+                    pr['accepted'] += 1
+                elif ev == 'reject':
+                    batch_rejected += 1
+                    pr['rejected'] += 1
+
+            annotators = []
+            for rid, pr in per_rater.items():
+                rater = raters_by_id.get(rid)
+                annotators.append({
+                    'rater_id': rid,
+                    'name': rater.name if rater else f"Rater {rid}",
+                    'email': rater.email if rater else "",
+                    'completed': len(pr['done']),
+                    'accepted': pr['accepted'],
+                    'rejected': pr['rejected'],
+                    'skipped': pr['skipped'],
+                    'in_progress': pr['saved'],
+                    'avg_secs': round(pr['time_sum'] / pr['time_n'], 1) if pr['time_n'] else None,
+                    'last_activity': pr['last'].isoformat() if pr['last'] else None
+                })
+            annotators.sort(key=lambda a: -a['completed'])
+
+            batch = {
+                'test_id': td['id'],
+                'description': td['description'],
+                'language': td['language'],
+                'version': td['version'],
+                'total_tasks': td['total_tasks'],
+                'unique_completed': td['unique_completed_tasks'],
+                'total_submissions': td['total_submissions'],
+                'accepted': batch_accepted,
+                'rejected': batch_rejected,
+                'skipped': batch_skipped,
+                'in_progress': batch_saved,
+                'avg_secs': round(batch_time_sum / batch_time_n, 1) if batch_time_n else None,
+                'last_activity': batch_last.isoformat() if batch_last else None,
+                'assigned_to': assigned_by_test.get(td['id'], []),
+                'annotators': annotators
+            }
+
+            tt = task_types_map.setdefault(td['test_type'], {
+                'batches': [],
+                'totals': {
+                    'batches': 0, 'total_tasks': 0, 'unique_completed': 0,
+                    'total_submissions': 0, 'accepted': 0, 'rejected': 0,
+                    'skipped': 0, 'in_progress': 0,
+                    'batches_complete': 0, 'batches_stalled': 0, 'batches_unassigned': 0,
+                    'annotator_ids': set(), 'last_activity': None
+                }
+            })
+            tt['batches'].append(batch)
+            tot = tt['totals']
+            tot['batches'] += 1
+            tot['total_tasks'] += batch['total_tasks']
+            tot['unique_completed'] += batch['unique_completed']
+            tot['total_submissions'] += batch['total_submissions']
+            tot['accepted'] += batch_accepted
+            tot['rejected'] += batch_rejected
+            tot['skipped'] += batch_skipped
+            tot['in_progress'] += batch_saved
+            if batch['total_tasks'] and batch['unique_completed'] >= batch['total_tasks']:
+                tot['batches_complete'] += 1
+            if batch['total_submissions'] == 0:
+                tot['batches_stalled'] += 1
+            if not batch['assigned_to']:
+                tot['batches_unassigned'] += 1
+            tot['annotator_ids'].update(per_rater.keys())
+            if batch_last and (tot['last_activity'] is None or batch_last > tot['last_activity']):
+                tot['last_activity'] = batch_last
+
+        task_types_data = {}
+        for tt_name, tt in task_types_map.items():
+            tt['batches'].sort(key=lambda b: b['test_id'])
+            tot = tt['totals']
+            tot['annotators'] = len(tot.pop('annotator_ids'))
+            tot['last_activity'] = tot['last_activity'].isoformat() if tot['last_activity'] else None
+            task_types_data[tt_name] = tt
+
+        _payload = {
             'stats': {
                 'total_registered_users': total_registered_users,
                 'active_users': active_users_count,
@@ -1542,8 +2243,13 @@ def get_admin_dashboard(current_user):
             'languages': languages_data,
             'tests': tests_data,
             'raters': raters_data,
-            'audio_segmentation': audio_seg_data
-        })
+            'audio_segmentation': audio_seg_data,
+            'audio_seg_artists': _artist_stats_safe(tests, seg_ratings_by_test),
+            'task_types': task_types_data
+        }
+        _dashboard_cache_write(_payload)
+        _payload['_cache'] = {'hit': False, 'ttl': _DASHBOARD_CACHE_TTL}
+        return jsonify(_payload)
         
     except Exception as e:
         app.logger.error(f"Error in admin dashboard endpoint: {e}")
@@ -1554,7 +2260,7 @@ def get_admin_dashboard(current_user):
 @token_required
 def get_assigned_tasks(current_user):
     try:
-        token = request.headers.get('Authorization').split()[1]
+        token = _require_bearer_token()
         required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
         username = required["username"]
         rater = Rater.query.filter_by(name=username).first()

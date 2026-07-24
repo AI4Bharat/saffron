@@ -118,6 +118,23 @@
             </div>
           </div>
 
+          <div class="mb-3">
+            <label for="signupPin" class="form-label">Signup PIN</label>
+            <input
+              type="text"
+              inputmode="numeric"
+              pattern="[0-9]*"
+              maxlength="8"
+              id="signupPin"
+              v-model="signupPin"
+              class="form-control"
+              placeholder="8-digit PIN from the admin"
+              required
+              autocomplete="off"
+            >
+            <div class="form-text">Ask the admin for the PIN.</div>
+          </div>
+
           <div class="mb-4 form-check">
             <input type="checkbox" class="form-check-input" id="acceptTerms" v-model="acceptTerms">
             <label class="form-check-label" for="acceptTerms">
@@ -159,6 +176,7 @@ const gender = ref('')
 const email = ref('')
 const password = ref('')
 const confirmPassword = ref('')
+const signupPin = ref('')
 const showPassword = ref(false)
 const acceptTerms = ref(false)
 
@@ -202,7 +220,8 @@ const handleSubmit = async () => {
       age: age.value,
       gender: gender.value,
       email: email.value,
-      password: password.value
+      password: password.value,
+      signup_key: signupPin.value
     })
   })
 

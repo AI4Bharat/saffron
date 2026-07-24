@@ -51,7 +51,9 @@ def load_jsonl(path):
         for line in f:
             line = line.strip()
             if line:
-                out.append(json.loads(line))
+                pattern = r'(?<!\\)\\(times|theta|tau|to|text|tfrac|triangle|frac|phi|varphi|forall|beta|binom|bar|bullet|bot|begin|tilde|tan|top|textrm|textbf|textit)\b'
+                fixed_line = re.sub(pattern, r'\\\\\1', line)
+                out.append(json.loads(fixed_line))
     return out
 
 

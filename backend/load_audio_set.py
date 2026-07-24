@@ -2,19 +2,35 @@
 """
 load_audio_set.py — one-command audio segmentation set loader.
 
-Given a Google Drive link (folder of WAVs + one Excel), this script:
-  1. Downloads everything into /root/saffron/backend/audio_segmentation/<set>/
-  2. Strips any "Copy of " prefixes Drive adds to filenames.
-  3. Validates the set: exactly one .xlsx, WAV files matched against the Excel ID column.
-  4. Loads the tasks into the DB via the existing load_audio_segmentation_tasks.py.
+TWO ways to use it:
 
-Usage:
-    venv/bin/python load_audio_set.py --link "https://drive.google.com/drive/folders/XXXX"
-    venv/bin/python load_audio_set.py --link "..." --set set5      # explicit set name
-    venv/bin/python load_audio_set.py --link "..." --no-load       # download + validate only
-    venv/bin/python load_audio_set.py --set set3 --skip-download   # (re)validate + load existing dir
+A) Two-source mode (recordings folder + the shared recording-Excel folder)
+   -------------------------------------------------------------------------
+   The voice actors upload their recordings to a Drive folder that contains an
+   "EXPORTED ID" subfolder (the per-turn conversation-ID WAVs, named like
+   `Conv_10_T_1_En.wav`) plus other stuff we ignore (e.g. "topic exported").
+   The matching recording Excel lives in the shared Excel Drive folder under
+   `<Language>/<persona - actor>/<Language>_<Persona>_Set<n>.xlsx`.
 
-If --set is omitted a new setN directory (highest existing N + 1) is created.
+   You only give the audio link + which persona/set it is:
+
+       venv/bin/python load_audio_set.py \
+           --audio-link "https://drive.google.com/drive/folders/XXXX" \
+           --persona storyteller --excel-set 2            # language defaults to english
+
+   The script downloads ONLY the "EXPORTED ID" WAVs, normalises their names
+   (`Conv_10_T_1_En` -> `En_Conv_10_T_1`) so they match the Excel `ID` column,
+   pulls the one matching Excel from the shared Excel folder, validates, loads.
+
+B) Single-folder mode (original) — one Drive folder holding WAVs + one Excel
+   -------------------------------------------------------------------------
+       venv/bin/python load_audio_set.py --link "https://drive.google.com/drive/folders/XXXX"
+
+Common options:
+   --set setN          explicit local set directory (default: next free setN)
+   --no-load           download + validate only; skip the DB load
+   --skip-download     (re)validate + load an already-downloaded local set
+   --id-subfolder STR  name of the WAV subfolder in two-source mode (default "EXPORTED ID")
 """
 
 import argparse
@@ -28,6 +44,17 @@ AUDIO_SEG_BASE_DIR = os.path.join(BACKEND_DIR, "audio_segmentation")
 VENV_PY = os.path.join(BACKEND_DIR, "venv", "bin", "python")
 LOADER = os.path.join(BACKEND_DIR, "load_audio_segmentation_tasks.py")
 
+# Shared "recording Excel" Drive folder (structure: <Language>/<persona - actor>/<Language>_<Persona>_Set<n>.xlsx)
+DEFAULT_EXCEL_DRIVE_FOLDER = "https://drive.google.com/drive/folders/1nP_Eu7rtI_R49vd_s4c6JxzyaI-vb8HD"
+
+def lang_prefix(language):
+    """Two-letter Excel ID prefix — first two letters of the Title-cased language,
+    EXACTLY as docx_to_excel.py generates them:
+      english->En, telugu->Te, hindi->Hi, odia->Od, tamil->Ta, gujarati->Gu,
+      kannada->Ka, marathi->Ma, malayalam->Ma ...
+    Only used as a fallback; the real names come from the Excel's own ID column."""
+    return language.strip().title()[:2]
+
 
 def next_set_name():
     nums = []
@@ -39,6 +66,9 @@ def next_set_name():
     return f"set{max(nums) + 1 if nums else 0}"
 
 
+# --------------------------------------------------------------------------- #
+#  Single-folder mode (original)
+# --------------------------------------------------------------------------- #
 def download(link, dest_dir):
     import gdown
 
@@ -56,6 +86,193 @@ def download(link, dest_dir):
     print(f"[+] Download complete.")
 
 
+# --------------------------------------------------------------------------- #
+#  Two-source mode helpers
+# --------------------------------------------------------------------------- #
+def _list_folder(url):
+    """Return gdown's list of (id, path, local_path) for a public Drive folder, without downloading."""
+    import gdown
+
+    files = gdown.download_folder(url=url, skip_download=True, quiet=True, use_cookies=False)
+    if not files:
+        raise SystemExit(f"[-] Could not list Drive folder (shared as 'Anyone with the link'?): {url}")
+    return files
+
+
+def _curl_download(file_id, output_path):
+    """Direct curl download from Drive by file id (handles the large-file 'confirm' page).
+
+    Far more robust than per-file gdown for hundreds of files — avoids gdown's
+    page-scraping "too many accesses" rate-limit errors.
+    """
+    base = f"https://drive.google.com/uc?export=download&id={file_id}"
+
+    def _run(u):
+        subprocess.run(["curl", "-L", "-s", "-f", "--connect-timeout", "20", u, "-o", output_path],
+                       check=True)
+
+    try:
+        _run(base)
+        # A small response may actually be Google's HTML virus-scan/confirm page.
+        if os.path.exists(output_path) and os.path.getsize(output_path) < 50000:
+            with open(output_path, "rb") as fh:
+                head = fh.read(50000)
+            low = head.lower()
+            if b"confirm=" in low:
+                m = re.search(rb"confirm=([a-zA-Z0-9\-_]+)", head)
+                if m:
+                    _run(f"{base}&confirm={m.group(1).decode()}")
+            elif b"<html" in low:
+                os.remove(output_path)
+                return False
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+    except Exception:
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        return False
+
+
+def _download_by_id(file_id, output_path):
+    """curl first (robust for bulk), fall back to gdown for the odd stubborn file."""
+    if _curl_download(file_id, output_path):
+        return True
+    try:
+        import gdown
+
+        gdown.download(id=file_id, output=output_path, quiet=True, fuzzy=True)
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+    except Exception:
+        return False
+
+
+def conv_core(text):
+    """Pull the `Conv_<n>_T_<m>` core out of a filename or ID, ignoring any language token
+    (handles `Conv_10_T_1_En`, `En_Conv_10_T_1`, `Conv_10_T_1_Telugu`, etc.).
+
+    Blank Excel cells arrive as NaN/NA (pandas >=3 keeps them as floats even after
+    .astype(str)), so coerce anything non-str; those simply won't match and return None.
+    """
+    if not isinstance(text, str):
+        if text is None:
+            return None
+        text = str(text)
+    m = re.search(r"Conv_\d+_T_\d+", text, re.IGNORECASE)
+    return m.group(0) if m else None
+
+
+def normalize_wav_stem(stem, lang_code):
+    """Fallback target name when a WAV can't be matched against the Excel:
+    `Conv_10_T_1_En` / `Conv_10_T_1` -> `<lang_code>_Conv_10_T_1`; odd names pass through."""
+    stem = stem.replace("Copy of ", "").strip()
+    core = conv_core(stem)
+    return f"{lang_code}_{core}" if core else stem
+
+
+def excel_core_index(excel_path):
+    """Map `conv_core` (lowercased) -> the exact Excel ID string, from the recording Excel.
+    This is the authoritative source of WAV target names across all languages/sets."""
+    import pandas as pd
+
+    df = pd.read_excel(excel_path)
+    df.columns = [str(c).strip() for c in df.columns]
+    id_col = "ID" if "ID" in df.columns else df.columns[0]
+    index = {}
+    blanks = 0
+    for raw in df[id_col].dropna():          # dropna: recording Excels can have blank ID rows
+        raw = str(raw).strip()
+        if not raw:
+            blanks += 1
+            continue
+        core = conv_core(raw)
+        if core:
+            index[core.lower()] = raw
+    skipped = len(df) - len(index)
+    if skipped:
+        print(f"    [i] Excel: {len(index)} usable ID(s); skipped {skipped} row(s) "
+              f"without a Conv_N_T_M id (blank/heading rows).")
+    return index
+
+
+def download_id_wavs(audio_link, dest_dir, id_subfolder, lang_code, core_index=None):
+    files = _list_folder(audio_link)
+    wavs = [f for f in files
+            if f.path.lower().endswith(".wav") and id_subfolder.lower() in f.path.lower()]
+    if not wavs:
+        print(f"[!] No WAVs found under a '{id_subfolder}' subfolder; "
+              f"falling back to every .wav in the folder.")
+        wavs = [f for f in files if f.path.lower().endswith(".wav")]
+    if not wavs:
+        raise SystemExit("[-] No .wav files found in the audio folder.")
+
+    print(f"[*] Downloading {len(wavs)} conversation-ID WAV(s) into {dest_dir} ...")
+    os.makedirs(dest_dir, exist_ok=True)
+    got = 0
+    failed = []
+    unmatched = 0
+    for idx, f in enumerate(wavs, 1):
+        raw_stem = os.path.splitext(os.path.basename(f.path))[0].replace("Copy of ", "").strip()
+        core = conv_core(raw_stem)
+        if core_index and core and core.lower() in core_index:
+            stem = core_index[core.lower()]                 # exact Excel ID -> guaranteed match
+        else:
+            stem = normalize_wav_stem(raw_stem, lang_code)  # fallback naming
+            if core_index:
+                unmatched += 1
+        target = os.path.join(dest_dir, stem + ".wav")
+        if os.path.exists(target) and os.path.getsize(target) > 0:
+            got += 1
+        elif _download_by_id(f.id, target):
+            got += 1
+        else:
+            failed.append(os.path.basename(f.path))
+        if idx % 20 == 0:
+            print(f"    ... {idx}/{len(wavs)}")
+    print(f"[+] Downloaded/verified {got}/{len(wavs)} WAV(s).")
+    if failed:
+        print(f"[WARN] {len(failed)} WAV(s) failed to download: "
+              f"{failed[:10]}{' ...' if len(failed) > 10 else ''}")
+    if core_index and unmatched:
+        print(f"[WARN] {unmatched} WAV(s) had no matching Excel ID (named by fallback "
+              f"'{lang_code}_Conv_..'); check the audio folder is for this persona/set.")
+
+
+def download_matching_excel(excel_link, dest_dir, language, persona, excel_set):
+    files = _list_folder(excel_link)
+    want = f"{language}_{persona}_set{excel_set}".lower().replace(" ", "_")
+    matches = []
+    for f in files:
+        if not f.path.lower().endswith(".xlsx") or os.path.basename(f.path).startswith("~$"):
+            continue
+        base = os.path.basename(f.path).replace("Copy of ", "").strip()
+        if os.path.splitext(base)[0].lower() == want:
+            matches.append((f, base))
+    if not matches:
+        avail = sorted({os.path.basename(f.path) for f in files if f.path.lower().endswith(".xlsx")})
+        raise SystemExit(f"[-] No Excel named like '{want}.xlsx' in the Excel folder.\n"
+                         f"    Available: {avail}")
+    f, base = matches[0]
+    target = os.path.join(dest_dir, base)
+    os.makedirs(dest_dir, exist_ok=True)
+
+    # Remember the voice actor: the excel lives in "<Language>/<persona - Recorder>/".
+    # Stored so the UI label can disambiguate two batches of the same excel set.
+    parts = f.path.split("/")
+    if len(parts) >= 2 and " - " in parts[-2]:
+        recorder = parts[-2].split(" - ")[-1].strip()
+        if recorder:
+            with open(os.path.join(dest_dir, "recorder.txt"), "w", encoding="utf-8") as fh:
+                fh.write(recorder + "\n")
+            print(f"[+] Recorder: {recorder}")
+    print(f"[*] Fetching recording Excel '{base}' ...")
+    if not _download_by_id(f.id, target):
+        raise SystemExit(f"[-] Failed to download Excel '{base}'.")
+    print(f"[+] Excel saved: {target}")
+    return target
+
+
+# --------------------------------------------------------------------------- #
+#  Shared post-download steps
+# --------------------------------------------------------------------------- #
 def strip_copy_prefixes(dest_dir):
     renamed = 0
     for root, _, files in os.walk(dest_dir):
@@ -105,7 +322,7 @@ def validate(dest_dir):
             df.columns = [str(c).strip() for c in df.columns]
             if "ID" not in df.columns:
                 df.rename(columns={df.columns[0]: "ID"}, inplace=True)
-            ids = set(df["ID"].astype(str).str.strip())
+            ids = {str(v).strip() for v in df["ID"].dropna()}
             wav_ids = {os.path.splitext(w)[0] for w in wavs}
             unmatched = sorted(wav_ids - ids)
             print(f"  Excel rows: {len(ids)}; WAVs matching an Excel ID: {len(wav_ids & ids)}")
@@ -119,14 +336,30 @@ def validate(dest_dir):
 
 def main():
     p = argparse.ArgumentParser(description="Download an audio segmentation set from Drive and load it into the DB.")
-    p.add_argument("--link", help="Google Drive folder (or file) link, shared as 'Anyone with the link'")
-    p.add_argument("--set", dest="set_name", help="Set directory name, e.g. set5 (default: next free setN)")
-    p.add_argument("--skip-download", action="store_true", help="Use the existing set directory as-is")
+    # single-folder mode
+    p.add_argument("--link", help="[single-folder mode] one Drive folder holding WAVs + one Excel")
+    # two-source mode
+    p.add_argument("--audio-link", dest="audio_link",
+                   help="[two-source mode] Drive folder of recordings (with an 'EXPORTED ID' subfolder)")
+    p.add_argument("--excel-link", dest="excel_link", default=DEFAULT_EXCEL_DRIVE_FOLDER,
+                   help="Drive folder holding the recording Excels (default: the shared Excel folder)")
+    p.add_argument("--language", default="english", help="Language (default: english)")
+    p.add_argument("--persona", help="[two-source mode] persona, e.g. storyteller, calm_explainer")
+    p.add_argument("--excel-set", dest="excel_set",
+                   help="[two-source mode] the Set<n> number of the Excel to fetch, e.g. 2")
+    p.add_argument("--id-subfolder", dest="id_subfolder", default="EXPORTED ID",
+                   help="[two-source mode] WAV subfolder name to pull (default: 'EXPORTED ID')")
+    # shared
+    p.add_argument("--set", dest="set_name", help="Local set directory name, e.g. set5 (default: next free setN)")
+    p.add_argument("--skip-download", action="store_true", help="Use the existing local set directory as-is")
     p.add_argument("--no-load", action="store_true", help="Download and validate only; skip the DB load")
     args = p.parse_args()
 
-    if not args.skip_download and not args.link:
-        p.error("--link is required (or pass --skip-download to use an existing directory)")
+    two_source = bool(args.audio_link)
+    if not args.skip_download and not args.link and not two_source:
+        p.error("give --audio-link (+ --persona --excel-set), or --link, or --skip-download")
+    if two_source and (not args.persona or not args.excel_set):
+        p.error("--audio-link requires --persona and --excel-set")
 
     set_name = (args.set_name or ("" if args.skip_download else next_set_name())).lower().strip()
     if not set_name:
@@ -137,6 +370,18 @@ def main():
         if not os.path.isdir(dest_dir):
             raise SystemExit(f"Set directory not found: {dest_dir}")
         print(f"[*] Using existing directory {dest_dir}")
+    elif two_source:
+        if os.path.isdir(dest_dir) and os.listdir(dest_dir):
+            raise SystemExit(f"Set directory {dest_dir} already exists and is not empty. "
+                             "Pick another --set name, or use --skip-download to load it.")
+        lang = args.language.lower().strip()
+        lang_code = lang_prefix(lang)
+        print(f"[*] Two-source load: language={lang} persona={args.persona} excel-set={args.excel_set} "
+              f"-> local {set_name} (Excel ID prefix '{lang_code}')")
+        # Excel first: its ID column is the authoritative source of WAV names.
+        excel_path = download_matching_excel(args.excel_link, dest_dir, lang, args.persona, args.excel_set)
+        core_index = excel_core_index(excel_path)
+        download_id_wavs(args.audio_link, dest_dir, args.id_subfolder, lang_code, core_index)
     else:
         if os.path.isdir(dest_dir) and os.listdir(dest_dir):
             raise SystemExit(f"Set directory {dest_dir} already exists and is not empty. "
