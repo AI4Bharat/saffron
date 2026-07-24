@@ -19,11 +19,25 @@
           </div>
         </div>
       </div>
-      <!-- Open a fresh, editable blank task in a new tab -->
-      <a v-if="data" :href="`/${data.test_id}`" target="_blank" rel="noopener"
-         class="btn btn-outline-primary rounded-pill px-3" title="Open a fresh empty annotation page in a new tab">
-        <i class="bi bi-box-arrow-up-right me-1"></i> Open fresh empty page
-      </a>
+      <div v-if="data" class="d-flex flex-wrap align-items-center gap-3">
+        <!-- Admin control: open (multi-annotator) vs handoff (hide others' completed) -->
+        <div class="handoff-box d-flex align-items-center gap-2 px-3 py-2 rounded-pill border">
+          <div class="form-check form-switch m-0">
+            <input class="form-check-input" type="checkbox" role="switch" id="handoffSwitch"
+                   :checked="handoffMode" :disabled="savingHandoff"
+                   @change="toggleHandoff($event.target.checked)">
+          </div>
+          <label for="handoffSwitch" class="small fw-semibold text-dark mb-0" style="cursor:pointer">
+            Handoff mode
+            <span class="text-muted fw-normal">— {{ handoffMode ? 'assignees see only leftover items' : 'multiple annotators, all items' }}</span>
+          </label>
+        </div>
+        <!-- Open a fresh, editable blank task in a new tab -->
+        <a :href="`/${data.test_id}`" target="_blank" rel="noopener"
+           class="btn btn-outline-primary rounded-pill px-3" title="Open a fresh empty annotation page in a new tab">
+          <i class="bi bi-box-arrow-up-right me-1"></i> Open fresh empty page
+        </a>
+      </div>
     </div>
 
     <!-- Loading / error -->
@@ -147,6 +161,8 @@ const error = ref(null)
 const activeTab = ref(-1)   // -1 = blank task; 0..n-1 = annotator index
 const currentIndex = ref(0)
 const search = ref('')
+const handoffMode = ref(false)
+const savingHandoff = ref(false)
 
 const COMPONENTS = {
   'translation-correction': TranslationCorrection,
@@ -205,6 +221,28 @@ function goBack() {
   else router.push('/tracking')
 }
 
+async function toggleHandoff(enabled) {
+  savingHandoff.value = true
+  const prev = handoffMode.value
+  try {
+    const token = localStorage.getItem('authToken')
+    const res = await fetch(`${API_BASE_URL}/admin/task/${route.params.id}/handoff`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ enabled }),
+    })
+    if (!res.ok) throw new Error('failed')
+    const d = await res.json()
+    handoffMode.value = !!d.handoff_mode
+  } catch (e) {
+    console.error(e)
+    handoffMode.value = prev            // revert on failure
+    alert('Could not update handoff mode. Please try again.')
+  } finally {
+    savingHandoff.value = false
+  }
+}
+
 watch(currentIndex, () => window.scrollTo({ top: 0, behavior: 'smooth' }))
 
 onMounted(async () => {
@@ -216,6 +254,7 @@ onMounted(async () => {
     if (res.status === 401) { router.push('/login'); return }
     if (!res.ok) throw new Error('Failed to load annotations for this task.')
     data.value = await res.json()
+    handoffMode.value = !!data.value.handoff_mode
     // Default to the first annotator if any submitted; otherwise show the blank task.
     if (data.value.annotators && data.value.annotators.length) selectTab(0)
     else activeTab.value = -1
@@ -246,4 +285,6 @@ onMounted(async () => {
 .text-purple { color: #7e22ce !important; }
 .bg-purple-subtle { background-color: #faf5ff !important; }
 .cursor-pointer { cursor: pointer; }
+.handoff-box { background: #fff; border-color: #e2e8f0 !important; }
+.handoff-box .form-check-input:checked { background-color: #d8661b; border-color: #d8661b; }
 </style>

@@ -397,13 +397,14 @@ def get_test(current_user, test_id):
                     'time': r.time_of_submission
                 }
 
-    # Leftover reassignment / handoff: when this task is ASSIGNED to the current
-    # rater, hide items ANOTHER annotator already COMPLETED, so a batch can be
-    # handed over mid-way (A did 1-100, admin reassigns to B, B sees only 101-N).
-    # Skips are NOT hidden (a skipped item is still open work). For a task only ever
-    # touched by one rater this set is empty, so nothing changes for the normal case.
+    # Leftover reassignment / handoff (ADMIN-CONTROLLED via test.handoff_mode).
+    # OFF (default): open task — every annotator sees every item, nothing hidden, so
+    # a task can intentionally be annotated by multiple annotators. ON: when this task
+    # is ASSIGNED to the current rater, hide items ANOTHER annotator already COMPLETED,
+    # so a batch can be handed over mid-way (A did 1-100 -> B sees only 101-N). Skips
+    # are NOT hidden (still open work). Order is ALWAYS the original json_entry order.
     others_completed_ids = set()
-    if username != "admin" and test_id in my_assigned_ids:
+    if username != "admin" and test_id in my_assigned_ids and bool(getattr(test, 'handoff_mode', False)):
         for r in Rating.query.filter(
             Rating.test_id == test_id,
             Rating.rater_id != rater_id,
@@ -1826,10 +1827,30 @@ def get_task_annotations(current_user, test_id):
         'test_id': test.id,
         'description': test.description,
         'test_type': test.test_type,
+        'handoff_mode': bool(getattr(test, 'handoff_mode', False)),
         'total_items': len(items),
         'items': items,
         'annotators': annotators,
     })
+
+
+@app.route('/api/admin/task/<int:test_id>/handoff', methods=['POST'])
+@token_required
+def set_task_handoff(current_user, test_id):
+    """Admin-only: toggle a task's handoff mode.
+
+    enabled=false (default) -> OPEN: multiple annotators may each annotate every item.
+    enabled=true            -> HANDOFF: an assignee stops seeing items another annotator
+                               already completed, so leftover work can be handed off.
+    Only flips the boolean flag; never touches Rating/annotation data.
+    """
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    test = Test.query.filter_by(id=test_id).first_or_404()
+    data = request.get_json() or {}
+    test.handoff_mode = bool(data.get('enabled'))
+    db.session.commit()
+    return jsonify({'test_id': test.id, 'handoff_mode': bool(test.handoff_mode)}), 200
 
 
 @app.route('/api/admin/dashboard', methods=['GET'])

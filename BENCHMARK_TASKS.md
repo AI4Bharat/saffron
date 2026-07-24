@@ -85,24 +85,33 @@ merges `raw_text`, `spoken_form`, `decision`, and `comments` back into each item
 
 ---
 
-## 3b. Consistent order & reassigning leftover work
+## 3b. Consistent order, multi-annotator vs handoff
 
-**Order is fixed.** Every visit shows the task's items in their **original JSONL order**
-— completed items are marked done in place, never moved to the front (no jumbling).
-An annotator resumes at the first item they haven't finished.
+**Order is fixed.** Every visit shows the task's items in their **original JSONL order** —
+completed items are marked done in place, never moved to the front (no jumbling). An
+annotator resumes at the first item they haven't finished. This is always on.
 
-**Handing a partly-done batch to another annotator.** Say batch `benchmark_hi_batch2`
-(200 items) was assigned to annotator **A**, who finished the first 100 and stopped.
-To give the remaining 100 to **B**:
+**Two modes, controlled by the admin** via a **Handoff mode** switch in the task review
+page (`/admin/task/<id>`, top-right). Backend flag `test.handoff_mode` (default **off**);
+toggle endpoint `POST /api/admin/task/<id>/handoff {enabled}`.
 
-1. Admin dashboard → **Annotators** → open **A**'s *Assign Tasks* modal, **remove** that
-   batch, Save. (Or **Deactivate** A — that frees all her batches and is reversible.)
-2. Open **B**'s *Assign Tasks* modal, **add** that batch, Save.
-3. B opens the batch and sees **only the 100 items A did not complete**, in order.
+- **OFF (default) — open / multi-annotator:** every annotator sees **every** item. Use this
+  when you *want* more than one annotator to independently annotate the same task.
+- **ON — handoff:** an assignee stops seeing items **another** annotator already
+  **completed** (skips stay open, so they carry over). Use this to split a half-done batch.
 
-This works because `get_test` hides items **another** annotator already **completed** from
-an assignee's view (skips are left open, so they carry over too). A's 100 and B's 100 both
-land in the export (latest completed submission per item wins). Nothing is duplicated or lost.
+**Handing a partly-done batch to another annotator** (with Handoff mode **ON**): say
+`benchmark_hi_batch2` (200 items) was assigned to **A**, who finished 100 and stopped.
+
+1. On the task's review page, turn **Handoff mode ON**.
+2. Admin dashboard → **Annotators** → **A**'s *Assign Tasks* modal → **remove** the batch,
+   Save. (Or **Deactivate** A — frees all her batches, reversible.)
+3. **B**'s *Assign Tasks* modal → **add** the batch, Save.
+4. B opens it and sees **only the 100 items A didn't complete**, in order.
+
+Either way A's 100 and B's 100 both land in the export (latest completed submission per item
+wins) — nothing is duplicated or lost. `get_test` only ever hides items; it never edits or
+deletes any Rating.
 
 ## 4. Admin review of submitted annotations
 

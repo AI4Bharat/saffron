@@ -144,6 +144,25 @@ with app.app_context():
                 db.session.rollback()
                 print(f"Database migration info: Column '{col_name}' may already exist.")
 
+    # Self-healing migration for per-task handoff mode (admin toggle). Additive only.
+    for col_ddl_pg, col_ddl_lite, col_name in [
+        ("ALTER TABLE test ADD COLUMN IF NOT EXISTS handoff_mode BOOLEAN DEFAULT FALSE",
+         "ALTER TABLE test ADD COLUMN handoff_mode BOOLEAN DEFAULT 0", "handoff_mode"),
+    ]:
+        try:
+            db.session.execute(db.text(col_ddl_pg))
+            db.session.commit()
+            print(f"Database migration: Successfully verified/added {col_name} column (PostgreSQL)")
+        except Exception:
+            db.session.rollback()
+            try:
+                db.session.execute(db.text(col_ddl_lite))
+                db.session.commit()
+                print(f"Database migration: Successfully added {col_name} column (SQLite)")
+            except Exception:
+                db.session.rollback()
+                print(f"Database migration info: Column '{col_name}' may already exist.")
+
     # One-time backfill: broadcasts sent before broadcast_id existed have one row
     # per annotator with no grouping id. Group the legacy rows by (body, second)
     # and give each group a shared id so the admin can view/edit them as one

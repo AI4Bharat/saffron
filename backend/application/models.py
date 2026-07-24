@@ -30,6 +30,11 @@ class Test(db.Model):
     test_type = db.Column(db.String(512), nullable=False)  # Increased length for PostgreSQL
     description = db.Column(db.Text, nullable=True)
     json_entry = db.Column(db.JSON, nullable=False)  # JSON column for PostgreSQL
+    # Admin-controlled. False (default) = OPEN: multiple annotators may each annotate
+    # every item (nothing hidden), items in original order. True = HANDOFF: an
+    # assignee no longer sees items another annotator already completed, so a
+    # half-done batch can be handed to the next annotator to finish the leftover.
+    handoff_mode = db.Column(db.Boolean, nullable=False, default=False)
 
     ratings = db.relationship('Rating', backref='test', lazy=True)
 
