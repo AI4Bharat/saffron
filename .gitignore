@@ -181,3 +181,10 @@ test_download
 # Run artifacts and bulk task data
 backend/exports/
 backend/conversation_editable_tasks/version_5/
+
+# Timestamped working backups (*.bak_20260711_161458, *.bak.scroll, ...). These are
+# scratch copies made before edits and must never enter the repo.
+*.bak
+*.bak.*
+*.bak_*
+*.BROKEN_DO_NOT_RUN

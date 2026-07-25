@@ -1,0 +1,17 @@
+{
+  "batch_id": "parallel_tx_20260724_164748",
+  "model": "gemini-3.1-pro-preview",
+  "source_count": 770,
+  "langs": [
+    "kn"
+  ],
+  "stats": {
+    "rows": 97,
+    "rows_failed": 19,
+    "sentences": 519,
+    "unmatched": 88
+  },
+  "per_lang_written": {
+    "kn": 519
+  }
+}

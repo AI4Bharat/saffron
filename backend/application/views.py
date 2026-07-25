@@ -434,11 +434,19 @@ def get_test(current_user, test_id):
         for k in ['dialogue', 'conversation', 'turns']:
             if k in sample_copy and isinstance(sample_copy[k], list):
                 sample_copy[k] = [dict(turn) for turn in sample_copy[k]]
+        # Benchmark verification merges the annotator's edits over raw_text /
+        # spoken_form below. Carry the pristine values alongside so the UI can tell
+        # "edited" from "original", and so its Reset button restores the true
+        # original instead of the annotator's own earlier edit.
+        if 'raw_text' in sample_copy:
+            sample_copy['original_raw_text'] = sample_copy['raw_text']
+        if 'spoken_form' in sample_copy:
+            sample_copy['original_spoken_form'] = sample_copy['spoken_form']
         pid = str(sample_copy['id'])
         if pid in latest_ratings:
             rating = latest_ratings[pid]
             sample_copy['completion_status'] = rating.completion_status or 'completed'
-            
+
             # Merge corrected translations and evaluation decisions from results_json
             rating_data = rating.results_json
             if isinstance(rating_data, dict):
@@ -589,9 +597,16 @@ def create_rating(current_user):
 
 
 @app.route('/api/ratings/<int:rating_id>', methods=['PUT'])
-def update_rating(rating_id):
-    data = request.get_json()
+@token_required
+def update_rating(current_user, rating_id):
+    # This endpoint used to be completely unauthenticated: anyone who could reach
+    # the API could overwrite any annotator's submission by id. A rating may now
+    # only be edited by the rater who made it, or by an admin.
+    rater = Rater.query.filter_by(name=current_user).first()
     rating = Rating.query.get_or_404(rating_id)
+    if current_user != "admin" and (not rater or rating.rater_id != rater.id):
+        return jsonify({'message': 'Unauthorized'}), 403
+    data = request.get_json() or {}
     if 'results_json' in data:
         rating.results_json = data['results_json']
     if 'time_taken_to_submit' in data:
@@ -1231,6 +1246,28 @@ def export_csv(current_user, test_id):
                 'Custom Rejection Reason',
                 'Comments'
             ]
+        elif test.test_type in ('benchmark-verification', 'benchmark-parallel'):
+            headers += [
+                'Language',
+                'Suite',
+                'Domain',
+                'Phenomenon Tags',
+                'Probes Axes',
+                'Quota Class',
+                'Length Bucket',
+                'Target Emotion',
+                'Source ID',
+                'English Raw Text',
+                'English Spoken Form',
+                'Original Raw Text',
+                'Corrected Raw Text',
+                'Raw Text Changed',
+                'Original Spoken Form',
+                'Corrected Spoken Form',
+                'Spoken Form Changed',
+                'Decision',
+                'Comments'
+            ]
         elif test.test_type == 'translation-correction':
             headers += [
                 'Original Pre-scene',
@@ -1275,7 +1312,11 @@ def export_csv(current_user, test_id):
                 (f"{_SAFFRON_BASE_URL}/{test.id}?task={item_id_str}" if item_id_str else ""),
                 r.completion_status or 'completed',
                 r.time_of_submission.isoformat() if r.time_of_submission else "",
-                r.time_taken_to_submit
+                # Stored in MILLISECONDS (every frontend sends a Date.now() delta).
+                # This column is headed "seconds" and used to emit the raw ms value,
+                # so every per-task export read 1000x too high. Every other report
+                # (admin_reports.py, rater_activity) already divides by 1000.
+                round((r.time_taken_to_submit or 0.0) / 1000.0, 1)
             ]
             
             if test.test_type == 'sentence-correction':
@@ -1326,6 +1367,36 @@ def export_csv(current_user, test_id):
                     rejection_reasons_str,
                     res_json.get('custom_rejection_reason') or "",
                     res_json.get('comments') or ""
+                ]
+            elif test.test_type in ('benchmark-verification', 'benchmark-parallel'):
+                # The stored item is the pristine source row; the rating carries the
+                # annotator's edit. Emit both so a reviewer sees exactly what changed.
+                orig_raw = orig_item.get('raw_text') or ""
+                orig_spoken = orig_item.get('spoken_form') or ""
+                corr_raw = res_json.get('raw_text', orig_raw)
+                corr_spoken = res_json.get('spoken_form', orig_spoken)
+                tags = orig_item.get('phenomenon_tags')
+                axes = orig_item.get('probes_axes')
+                row += [
+                    orig_item.get('lang') or orig_item.get('language') or "",
+                    orig_item.get('suite') or "",
+                    orig_item.get('domain') or "",
+                    ", ".join(tags) if isinstance(tags, list) else (tags or ""),
+                    ", ".join(axes) if isinstance(axes, list) else (axes or ""),
+                    orig_item.get('quota_class') or "",
+                    orig_item.get('length_bucket') or "",
+                    orig_item.get('target_emotion') or "",
+                    orig_item.get('source_id') or "",
+                    orig_item.get('_ref_source_raw_text') or "",
+                    orig_item.get('_ref_source_spoken_form') or "",
+                    orig_raw,
+                    corr_raw,
+                    "YES" if corr_raw != orig_raw else "no",
+                    orig_spoken,
+                    corr_spoken,
+                    "YES" if corr_spoken != orig_spoken else "no",
+                    res_json.get('decision') or "",
+                    res_json.get('comments') or res_json.get('comment') or ""
                 ]
             elif test.test_type == 'translation-correction':
                 orig_pre = orig_item.get('pre_scene_en') or orig_item.get('pre_scene') or ""

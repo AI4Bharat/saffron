@@ -171,6 +171,7 @@ const COMPONENTS = {
   'conversation-editable': ConversationEvaluation,
   'audio-segmentation': AudioSegmentation,
   'benchmark-verification': BenchmarkVerification,
+  'benchmark-parallel': BenchmarkVerification,
 }
 
 const currentComponent = computed(() => COMPONENTS[data.value?.test_type] || null)
@@ -185,10 +186,18 @@ const testData = computed(() => {
   const items = data.value?.items || []
   const ann = currentAnnotator.value
   return items.map((item) => {
-    if (!ann) return { ...item, completion_status: 'uncompleted' }
+    // The annotator's results overwrite raw_text / spoken_form, so carry the
+    // pristine values alongside — that is what the task component compares
+    // against to show "Edited" and to power its Reset / Compare controls.
+    const base = {
+      ...item,
+      original_raw_text: item.raw_text,
+      original_spoken_form: item.spoken_form,
+    }
+    if (!ann) return { ...base, completion_status: 'uncompleted' }
     const rec = ann.ratings[String(item.id)]
-    if (!rec) return { ...item, completion_status: 'uncompleted' }
-    return { ...item, ...(rec.results || {}), completion_status: rec.status || 'completed' }
+    if (!rec) return { ...base, completion_status: 'uncompleted' }
+    return { ...base, ...(rec.results || {}), completion_status: rec.status || 'completed' }
   })
 })
 

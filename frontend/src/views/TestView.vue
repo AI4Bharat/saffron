@@ -276,6 +276,7 @@ const currentTestComponent = computed(() => {
     'conversation-editable': ConversationEvaluation,
     'audio-segmentation': AudioSegmentation,
     'benchmark-verification': BenchmarkVerification,
+    'benchmark-parallel': BenchmarkVerification,
   }
 
   return testComponents[data.value.test_type]
