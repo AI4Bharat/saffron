@@ -126,8 +126,9 @@ reads a word of it:
 - **English source** — the sentence this was translated from, in a highlighted
   callout, with its spoken form when it differs. Only shown when present, so round-1
   tasks simply don't render it.
-- **Domain, suite, length bucket, quota class, target emotion, probes axes,
-  source id, generator model** in a compact grid.
+- **Domain, suite, length bucket, quota class, target emotion, probes axes and
+  source id** in a compact grid. The generator model is deliberately not shown —
+  it is not something the annotator should be judging the sentence against.
 - The header keeps the item id, language, domain and a tag count visible even when
   the panel is collapsed, and the open/closed state persists as you move between items.
 

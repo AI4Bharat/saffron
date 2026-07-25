@@ -448,7 +448,6 @@ const metaFields = computed(() => {
     { label: 'Target emotion', value: t.target_emotion ? formatTag(t.target_emotion) : '—' },
     { label: 'Probes axes', value: axes.length ? axes.map(formatTag).join(', ') : '—' },
     { label: 'Source ID', value: t.source_id || '—' },
-    { label: 'Generator', value: t.model || '—' },
   ].filter(m => m.value !== '')
 })
 

@@ -400,7 +400,7 @@ DATABASE_URI='sqlite:////tmp/t/instance/database.db' venv/bin/python export_benc
   duplicate-id validation), `export_benchmark_parallel_jsonl.py` (with a
   domain/phenomenon `--summary`), `export_benchmark_excel.py` (8-sheet workbook for
   both rounds).
-- **UI** — reference panel (phenomenon tags, English source, full metadata grid),
+- **UI** — reference panel (phenomenon tags, English source, metadata grid),
   per-field Compare against the original, quick rejection-reason chips, a required
   comment on reject, and an `R` shortcut.
 - **Bug fixes** —
