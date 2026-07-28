@@ -161,6 +161,157 @@
           </div>
         </div>
 
+        <!-- ==========================================================
+             Audio hours — audio-segmentation annotators only.
+             Hidden entirely for everyone else (audioStats.enabled === false).
+             ========================================================== -->
+        <div v-if="audioStats?.enabled" class="card border-0 shadow-sm rounded-4 mb-5 overflow-hidden hours-card">
+          <div class="card-header bg-white border-0 pt-4 px-4 pb-0">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+              <div>
+                <h5 class="mb-1 d-flex align-items-center gap-2 fw-bold text-dark">
+                  <span class="hours-icon"><i class="bi bi-soundwave"></i></span>
+                  <span>Your audio segmentation hours</span>
+                </h5>
+                <p class="text-muted small mb-0">
+                  Audio you have reviewed, cumulative to date and day by day.
+                  Days are counted in {{ audioStats.timezone }}.
+                </p>
+              </div>
+              <button
+                class="btn btn-sm btn-light rounded-pill px-3 border"
+                :disabled="isLoadingAudioStats"
+                title="Refresh hours"
+                @click="loadAudioStats"
+              >
+                <i :class="['bi bi-arrow-clockwise', isLoadingAudioStats ? 'animate-spin' : '']"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="card-body p-4">
+            <!-- KPI row -->
+            <div class="row g-3 mb-4">
+              <div class="col-6 col-lg-3">
+                <div class="hours-tile hours-tile-primary h-100">
+                  <span class="hours-tile-label">Total to date</span>
+                  <span class="hours-tile-value">{{ audioStats.total.label }}</span>
+                  <span class="hours-tile-sub">{{ audioStats.total.clips }} clips reviewed</span>
+                </div>
+              </div>
+              <div class="col-6 col-lg-3">
+                <div class="hours-tile h-100">
+                  <span class="hours-tile-label">Today</span>
+                  <span class="hours-tile-value">{{ audioStats.today.label }}</span>
+                  <span class="hours-tile-sub">{{ audioStats.today.clips }} clips</span>
+                </div>
+              </div>
+              <div class="col-6 col-lg-3">
+                <div class="hours-tile h-100">
+                  <span class="hours-tile-label">Last 7 days</span>
+                  <span class="hours-tile-value">{{ audioStats.last_7_days.label }}</span>
+                  <span class="hours-tile-sub">{{ audioStats.last_7_days.clips }} clips</span>
+                </div>
+              </div>
+              <div class="col-6 col-lg-3">
+                <div class="hours-tile h-100">
+                  <span class="hours-tile-label">Daily average</span>
+                  <span class="hours-tile-value">{{ audioStats.avg_per_active_day.label }}</span>
+                  <span class="hours-tile-sub">over {{ audioStats.active_days }} active {{ audioStats.active_days === 1 ? 'day' : 'days' }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 14-day trend -->
+            <div class="hours-panel mb-4">
+              <div class="d-flex justify-content-between align-items-baseline mb-3">
+                <h6 class="fw-bold text-dark mb-0 fs-7">Last 14 days</h6>
+                <span class="text-muted fs-9">Peak {{ chartPeakLabel }}</span>
+              </div>
+              <div v-if="chartDays.length" class="hours-chart">
+                <div
+                  v-for="d in chartDays"
+                  :key="d.date"
+                  class="hours-chart-col"
+                  :title="`${d.date} · ${d.label} · ${d.clips} clips`"
+                >
+                  <div class="hours-chart-track">
+                    <div
+                      class="hours-chart-bar"
+                      :class="{ 'is-today': d.date === audioStats.today_date, 'is-empty': !d.seconds }"
+                      :style="{ height: chartHeight(d) }"
+                    ></div>
+                  </div>
+                  <span class="hours-chart-day">{{ shortDay(d.date) }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="row g-4">
+              <!-- Daily breakdown -->
+              <div class="col-12 col-xl-7">
+                <h6 class="fw-bold text-dark mb-2 fs-7">Daily breakdown</h6>
+                <div v-if="!audioStats.daily_history.length" class="text-muted small py-3">
+                  No clips reviewed yet — your hours will appear here after your first submission.
+                </div>
+                <div v-else class="table-responsive hours-scroll">
+                  <table class="table table-sm align-middle mb-0 hours-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th class="text-end">Clips</th>
+                        <th class="text-end">Audio</th>
+                        <th style="width: 34%"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="d in audioStats.daily_history" :key="d.date">
+                        <td class="fw-semibold text-dark">
+                          {{ longDay(d.date) }}
+                          <span v-if="d.date === audioStats.today_date" class="badge rounded-pill hours-today-badge ms-1">Today</span>
+                        </td>
+                        <td class="text-end text-muted">{{ d.clips }}</td>
+                        <td class="text-end fw-bold text-dark">{{ d.label }}</td>
+                        <td>
+                          <div class="progress hours-progress">
+                            <div class="progress-bar" :style="{ width: dayShare(d) + '%' }"></div>
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Per batch -->
+              <div class="col-12 col-xl-5">
+                <h6 class="fw-bold text-dark mb-2 fs-7">By batch</h6>
+                <div class="table-responsive hours-scroll">
+                  <table class="table table-sm align-middle mb-0 hours-table">
+                    <thead>
+                      <tr>
+                        <th>Batch</th>
+                        <th class="text-end">Clips</th>
+                        <th class="text-end">Audio</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="b in audioStats.batches" :key="b.test_id">
+                        <td>
+                          <div class="fw-semibold text-dark text-truncate-2" :title="b.description">{{ b.description }}</div>
+                          <span class="text-muted fs-9">#{{ b.test_id }} · {{ b.clips }} / {{ b.total_clips }} clips done</span>
+                        </td>
+                        <td class="text-end text-muted">{{ b.clips }}</td>
+                        <td class="text-end fw-bold text-dark">{{ b.label }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Filter and Search Row -->
         <div class="row g-3 align-items-center justify-content-between mb-4">
           <div class="col-12 col-lg-5">
@@ -330,6 +481,10 @@ const unreadCount = ref(0)
 const isMarkingRead = ref(false)
 let msgPollTimer = null
 
+// Audio-segmentation hours (this annotator only; null / {enabled:false} hides the panel)
+const audioStats = ref(null)
+const isLoadingAudioStats = ref(false)
+
 // Filtering & Search
 const searchQuery = ref('')
 const selectedLanguage = ref('')
@@ -390,6 +545,75 @@ const loadTasks = async () => {
   } finally {
     isLoading.value = false
   }
+}
+
+// Audio-segmentation hours for the signed-in annotator. The backend answers
+// { enabled: false } for anyone with no audio-segmentation batch, which keeps the
+// whole panel off other annotators' dashboards.
+const loadAudioStats = async () => {
+  if (isAdmin.value) return
+  isLoadingAudioStats.value = true
+  try {
+    const token = localStorage.getItem('authToken')
+    if (!token) return
+    const res = await fetch(`${API_BASE_URL}/rater/audio_stats`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    if (!res.ok) throw new Error('Failed to load audio stats')
+    const data = await res.json()
+    audioStats.value = data?.enabled ? data : null
+  } catch (err) {
+    // Never block the task list on this panel — just leave it hidden.
+    console.error('Error fetching audio stats:', err)
+    audioStats.value = null
+  } finally {
+    isLoadingAudioStats.value = false
+  }
+}
+
+// Oldest -> newest, so the chart reads left to right like a calendar.
+const chartDays = computed(() => {
+  const s = audioStats.value?.daily_series || []
+  return [...s].slice(0, 14).reverse()
+})
+
+const chartPeak = computed(() =>
+  chartDays.value.reduce((m, d) => Math.max(m, d.seconds || 0), 0)
+)
+
+const chartPeakLabel = computed(() => {
+  const peak = chartDays.value.find(d => d.seconds === chartPeak.value)
+  return chartPeak.value ? peak.label : '—'
+})
+
+const chartHeight = (d) => {
+  if (!chartPeak.value || !d.seconds) return '3px'
+  // Floor at 6% so a short but real day is still visible next to a long one.
+  return Math.max(6, Math.round((d.seconds / chartPeak.value) * 100)) + '%'
+}
+
+const dayShare = (d) => {
+  const peak = (audioStats.value?.daily_history || [])
+    .reduce((m, x) => Math.max(m, x.seconds || 0), 0)
+  if (!peak || !d.seconds) return 0
+  return Math.max(4, Math.round((d.seconds / peak) * 100))
+}
+
+// 'YYYY-MM-DD' is already an IST calendar date from the backend; format it as a
+// plain date so no browser timezone can shift it back a day.
+const parseDay = (iso) => {
+  const [y, m, d] = (iso || '').split('-').map(Number)
+  return new Date(y, (m || 1) - 1, d || 1)
+}
+
+const shortDay = (iso) => {
+  const dt = parseDay(iso)
+  return dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+}
+
+const longDay = (iso) => {
+  const dt = parseDay(iso)
+  return dt.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 // Actions
@@ -580,6 +804,7 @@ onMounted(() => {
   loadTasks()
   if (!isAdmin.value) {
     loadMessages()
+    loadAudioStats()
     // Light polling so new admin messages appear without a manual refresh.
     msgPollTimer = setInterval(loadMessages, 30000)
   }
@@ -843,4 +1068,135 @@ onUnmounted(() => {
 .inbox-body { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
 .min-w-0 { min-width: 0; }
 .fs-9 { font-size: 0.7rem; }
+
+/* ---------- Audio segmentation hours panel ---------- */
+.hours-card { border: 1px solid rgba(15, 23, 42, 0.06) !important; }
+
+.hours-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 0.95rem;
+  background: linear-gradient(135deg, #6366f1, #4338ca);
+}
+
+.hours-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid #e9eef5;
+}
+
+.hours-tile-primary {
+  background: linear-gradient(135deg, #4f46e5, #4338ca);
+  border-color: transparent;
+}
+
+.hours-tile-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.hours-tile-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.15;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+
+.hours-tile-sub { font-size: 0.72rem; color: #94a3b8; }
+
+.hours-tile-primary .hours-tile-label { color: rgba(255, 255, 255, 0.75); }
+.hours-tile-primary .hours-tile-value { color: #fff; }
+.hours-tile-primary .hours-tile-sub { color: rgba(255, 255, 255, 0.8); }
+
+.hours-panel {
+  padding: 18px;
+  border-radius: 14px;
+  border: 1px solid #e9eef5;
+  background: #fff;
+}
+
+.hours-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 130px;
+}
+
+.hours-chart-col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+}
+
+.hours-chart-track {
+  flex: 1 1 auto;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.hours-chart-bar {
+  width: 100%;
+  max-width: 26px;
+  border-radius: 6px 6px 3px 3px;
+  background: linear-gradient(180deg, #818cf8, #4f46e5);
+  transition: height 0.25s ease, filter 0.15s ease;
+}
+
+.hours-chart-bar.is-today { background: linear-gradient(180deg, #34d399, #059669); }
+.hours-chart-bar.is-empty { background: #e9eef5; }
+.hours-chart-col:hover .hours-chart-bar { filter: brightness(1.08); }
+
+.hours-chart-day {
+  margin-top: 8px;
+  font-size: 0.62rem;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+.hours-scroll { max-height: 340px; overflow-y: auto; }
+
+.hours-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f8fafc;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #64748b;
+  border-bottom: 1px solid #e9eef5;
+}
+
+.hours-table td { font-size: 0.8rem; border-color: #f1f5f9; }
+.hours-table tbody tr:hover td { background: #f8fafc; }
+
+.hours-progress { height: 6px; background: #f1f5f9; border-radius: 99px; }
+.hours-progress .progress-bar { background: #6366f1; border-radius: 99px; }
+
+.hours-today-badge {
+  background: #d1fae5;
+  color: #047857;
+  font-size: 0.6rem;
+  font-weight: 700;
+  vertical-align: middle;
+}
 </style>

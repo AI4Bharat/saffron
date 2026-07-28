@@ -934,9 +934,17 @@
           <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
             <div>
               <h3 class="fw-bold text-dark m-0 fs-5"><i class="bi bi-mic text-primary me-2"></i>Voice Artist QC</h3>
-              <div class="text-muted text-xs">Audio-segmentation rejection rate per artist, and why clips were rejected.</div>
+              <div class="text-muted text-xs">Audio-segmentation rejection rate per artist, what is still pending review, and why clips were rejected.</div>
             </div>
-            <div class="d-flex gap-2">
+            <div class="d-flex flex-wrap gap-2 align-items-center">
+              <!-- Language filter: narrows every number and every export below. -->
+              <div class="d-flex align-items-center gap-1">
+                <i class="bi bi-translate text-muted"></i>
+                <select v-model="qualityLanguage" class="form-select form-select-sm w-auto">
+                  <option value="">All languages</option>
+                  <option v-for="l in qualityLanguageOptions" :key="l" :value="l">{{ l }}</option>
+                </select>
+              </div>
               <button class="btn btn-outline-success btn-sm" @click="downloadArtistReport">
                 <i class="bi bi-file-earmark-spreadsheet me-1"></i>Export for vendor (CSV)
               </button>
@@ -949,8 +957,39 @@
             </div>
           </div>
 
+          <!-- Review progress for the current language selection -->
+          <div v-if="artistStats.artists.length" class="row g-2 mb-3">
+            <div class="col-6 col-md-3">
+              <div class="border rounded-3 p-2 h-100 bg-light">
+                <div class="text-muted text-xs text-uppercase fw-bold">Total clips</div>
+                <div class="fs-5 fw-bold text-dark">{{ artistStats.overall.clips || 0 }}</div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="border rounded-3 p-2 h-100 bg-light">
+                <div class="text-muted text-xs text-uppercase fw-bold">Reviewed</div>
+                <div class="fs-5 fw-bold text-dark">{{ artistStats.overall.total || 0 }}</div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="border rounded-3 p-2 h-100 bg-warning-subtle">
+                <div class="text-muted text-xs text-uppercase fw-bold">Pending review</div>
+                <div class="fs-5 fw-bold text-warning-emphasis">{{ artistStats.overall.pending || 0 }}</div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="border rounded-3 p-2 h-100 bg-light">
+                <div class="text-muted text-xs text-uppercase fw-bold">Review progress</div>
+                <div class="fs-5 fw-bold text-dark">{{ artistStats.overall.reviewed_rate || 0 }}%</div>
+                <div class="progress mt-1" style="height:5px">
+                  <div class="progress-bar bg-success" :style="{ width: (artistStats.overall.reviewed_rate || 0) + '%' }"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div v-if="!artistStats.artists || !artistStats.artists.length" class="text-muted text-center py-3">
-            No audio-segmentation submissions yet.
+            {{ qualityLanguage ? 'No audio-segmentation batches for ' + qualityLanguage + '.' : 'No audio-segmentation submissions yet.' }}
           </div>
 
           <div v-else class="row g-4">
@@ -962,9 +1001,11 @@
                   <thead class="table-light">
                     <tr>
                       <th class="text-xs">Artist</th>
+                      <th class="text-xs text-end">Clips</th>
                       <th class="text-xs text-end">Reviewed</th>
                       <th class="text-xs text-end">Accepted</th>
                       <th class="text-xs text-end">Rejected</th>
+                      <th class="text-xs text-end">Pending</th>
                       <th class="text-xs text-end">Rejection %</th>
                     </tr>
                   </thead>
@@ -975,16 +1016,23 @@
                         {{ a.artist }}
                         <span class="text-muted">({{ a.batch_count }} batch{{ a.batch_count === 1 ? '' : 'es' }})</span>
                       </td>
+                      <td class="text-end text-xs text-muted">{{ a.clips }}</td>
                       <td class="text-end text-xs">{{ a.total }}</td>
                       <td class="text-end text-xs text-success">{{ a.accepted }}</td>
                       <td class="text-end text-xs text-danger">{{ a.rejected }}</td>
+                      <td class="text-end text-xs" :class="a.pending ? 'text-warning-emphasis fw-semibold' : 'text-muted'"
+                          :title="a.pending + ' of ' + a.clips + ' clips still awaiting review'">
+                        {{ a.pending }}
+                      </td>
                       <td class="text-end fw-bold text-xs">{{ a.rejection_rate }}%</td>
                     </tr>
                     <tr class="border-top">
                       <td class="fw-bold text-xs">OVERALL</td>
+                      <td class="text-end fw-bold text-xs text-muted">{{ artistStats.overall.clips }}</td>
                       <td class="text-end fw-bold text-xs">{{ artistStats.overall.total }}</td>
                       <td class="text-end fw-bold text-xs text-success">{{ artistStats.overall.accepted }}</td>
                       <td class="text-end fw-bold text-xs text-danger">{{ artistStats.overall.rejected }}</td>
+                      <td class="text-end fw-bold text-xs text-warning-emphasis">{{ artistStats.overall.pending }}</td>
                       <td class="text-end fw-bold text-xs">{{ artistStats.overall.rejection_rate }}%</td>
                     </tr>
                   </tbody>
@@ -1014,6 +1062,404 @@
               <div class="text-muted text-xs mt-2">% = share of that selection's rejected clips citing the reason (a clip can cite several).</div>
             </div>
           </div>
+
+          <!-- Where the remaining review work sits, per language -->
+          <div v-if="!qualityLanguage && languageStats.length > 1" class="mt-4 pt-3 border-top">
+            <h6 class="fw-bold text-secondary text-xs text-uppercase mb-2">Pending review by language</h6>
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <thead class="table-light">
+                  <tr>
+                    <th class="text-xs">Language</th>
+                    <th class="text-xs text-end">Clips</th>
+                    <th class="text-xs text-end">Reviewed</th>
+                    <th class="text-xs text-end">Pending</th>
+                    <th class="text-xs" style="width:28%">Progress</th>
+                    <th class="text-xs text-end">Rejection %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="l in languageStats" :key="l.language">
+                    <td class="fw-semibold text-dark text-xs">
+                      <a href="#" class="text-decoration-none" @click.prevent="qualityLanguage = l.language">{{ l.language }}</a>
+                    </td>
+                    <td class="text-end text-xs text-muted">{{ l.clips }}</td>
+                    <td class="text-end text-xs">{{ l.total }}</td>
+                    <td class="text-end text-xs" :class="l.pending ? 'text-warning-emphasis fw-semibold' : 'text-muted'">{{ l.pending }}</td>
+                    <td>
+                      <div class="progress" style="height:6px">
+                        <div class="progress-bar bg-success" :style="{ width: l.reviewed_rate + '%' }"></div>
+                      </div>
+                      <span class="text-muted text-xs">{{ l.reviewed_rate }}% reviewed</span>
+                    </td>
+                    <td class="text-end fw-bold text-xs">{{ l.rejection_rate }}%</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- =====================================================================
+             Clips still carrying a rejection reason the UI no longer offers.
+             The reason cannot be un-picked from a report, only re-annotated, so
+             each row links straight to that clip.
+             ===================================================================== -->
+        <div v-if="retiredClips.total" class="bg-white p-4 rounded shadow-sm border border-warning-subtle mb-4">
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <div>
+              <h3 class="fw-bold text-dark m-0 fs-5">
+                <i class="bi bi-exclamation-triangle-fill text-warning me-2"></i>Retired rejection reasons
+                <span class="badge rounded-pill bg-warning text-dark ms-1">{{ retiredClips.total }}</span>
+              </h3>
+              <div class="text-muted text-xs">
+                These clips were rejected with a reason that is no longer offered
+                ({{ retiredClips.by_reason.map(r => r.label + ' × ' + r.count).join(', ') }}).
+                Open each one, uncheck the retired reason and pick a current one — the
+                row disappears once it is re-submitted.
+              </div>
+            </div>
+            <button class="btn btn-outline-secondary btn-sm" @click="copyRetiredList">
+              <i class="bi bi-clipboard me-1"></i>{{ retiredCopied ? 'Copied!' : 'Copy list for annotator' }}
+            </button>
+          </div>
+
+          <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th class="text-xs">Annotator</th>
+                  <th class="text-xs">Batch</th>
+                  <th class="text-xs">Clip</th>
+                  <th class="text-xs">Retired reason</th>
+                  <th class="text-xs">What they wrote</th>
+                  <th class="text-xs text-end">Submitted</th>
+                  <th class="text-xs text-end"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="c in retiredClips.clips" :key="c.rating_id">
+                  <td class="fw-semibold text-dark text-xs">{{ c.rater_name }}</td>
+                  <td class="text-xs">
+                    <span class="text-dark">#{{ c.test_id }}</span>
+                    <div class="text-muted" style="font-size:0.72rem">{{ c.persona }}</div>
+                  </td>
+                  <td class="text-xs font-monospace text-secondary">{{ c.clip_id }}</td>
+                  <td class="text-xs">
+                    <span v-for="s in c.retired_reasons" :key="s"
+                          class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle me-1">
+                      {{ s }}
+                    </span>
+                  </td>
+                  <td class="text-xs text-secondary" style="max-width:340px">
+                    <div class="text-truncate" :title="c.custom_reason || c.comments">
+                      {{ c.custom_reason || c.comments || '—' }}
+                    </div>
+                  </td>
+                  <td class="text-end text-xs text-muted">{{ formatDate(c.submitted) }}</td>
+                  <td class="text-end">
+                    <a :href="c.link" target="_blank" rel="noopener"
+                       class="btn btn-sm btn-outline-primary py-0 px-2 text-xs">
+                      Open <i class="bi bi-box-arrow-up-right"></i>
+                    </a>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- =====================================================================
+             Annotation hours — audio segmentation only. How much AUDIO each
+             annotator has reviewed: cumulative to date and per IST day.
+             ===================================================================== -->
+        <div class="bg-white p-4 rounded shadow-sm border mb-4">
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <div>
+              <h3 class="fw-bold text-dark m-0 fs-5"><i class="bi bi-hourglass-split text-primary me-2"></i>Annotation Hours</h3>
+              <div class="text-muted text-xs">
+                Audio reviewed per annotator on audio-segmentation batches — cumulative to date and day by day.
+                Days are counted in {{ audioHours.timezone }}; skipped clips are excluded.
+              </div>
+            </div>
+            <div class="d-flex flex-wrap gap-2 align-items-center">
+              <div class="btn-group btn-group-sm" role="group" aria-label="Hours range">
+                <button
+                  v-for="r in hoursRanges"
+                  :key="r.days"
+                  type="button"
+                  class="btn"
+                  :class="hoursRange === r.days ? 'btn-primary' : 'btn-outline-primary'"
+                  @click="hoursRange = r.days"
+                >{{ r.label }}</button>
+              </div>
+              <button class="btn btn-outline-success btn-sm" @click="downloadAudioHours">
+                <i class="bi bi-file-earmark-spreadsheet me-1"></i>Export hours (CSV)
+              </button>
+            </div>
+          </div>
+
+          <div v-if="!audioHours.annotators.length && !audioHours.by_artist.length"
+               class="text-muted text-center py-3">
+            No audio-segmentation work recorded yet.
+          </div>
+
+          <template v-else>
+            <!-- Headline numbers -->
+            <div class="row g-2 mb-3">
+              <div class="col-6 col-md-3">
+                <div class="border rounded-3 p-2 h-100 bg-primary-subtle">
+                  <div class="text-muted text-xs text-uppercase fw-bold">Total audio reviewed</div>
+                  <div class="fs-5 fw-bold text-primary-emphasis">{{ audioHours.totals.label }}</div>
+                  <div class="text-muted text-xs">{{ audioHours.totals.clips }} clips</div>
+                </div>
+              </div>
+              <div class="col-6 col-md-3">
+                <div class="border rounded-3 p-2 h-100 bg-light">
+                  <div class="text-muted text-xs text-uppercase fw-bold">Today</div>
+                  <div class="fs-5 fw-bold text-dark">{{ audioHours.today.label }}</div>
+                  <div class="text-muted text-xs">{{ audioHours.today.clips }} clips</div>
+                </div>
+              </div>
+              <div class="col-6 col-md-3">
+                <div class="border rounded-3 p-2 h-100 bg-light">
+                  <div class="text-muted text-xs text-uppercase fw-bold">Last 7 days</div>
+                  <div class="fs-5 fw-bold text-dark">{{ audioHours.last_7_days.label }}</div>
+                  <div class="text-muted text-xs">{{ audioHours.last_7_days.clips }} clips</div>
+                </div>
+              </div>
+              <div class="col-6 col-md-3">
+                <div class="border rounded-3 p-2 h-100 bg-light">
+                  <div class="text-muted text-xs text-uppercase fw-bold">Working today</div>
+                  <div class="fs-5 fw-bold text-dark">{{ audioHours.active_today }} / {{ audioHours.annotators.length }}</div>
+                  <div class="text-muted text-xs">annotators active</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Team trend -->
+            <div class="border rounded-3 p-3 mb-3">
+              <div class="d-flex justify-content-between align-items-baseline mb-2">
+                <h6 class="fw-bold text-secondary text-xs text-uppercase mb-0">Team output · last {{ hoursRange }} days</h6>
+                <span class="text-muted text-xs">Peak {{ teamPeakLabel }}</span>
+              </div>
+              <div class="ah-chart">
+                <div
+                  v-for="d in teamSeries"
+                  :key="d.date"
+                  class="ah-chart-col"
+                  :title="`${d.date} · ${d.label} · ${d.clips} clips`"
+                >
+                  <div class="ah-chart-track">
+                    <div
+                      class="ah-chart-bar"
+                      :class="{ 'is-today': d.date === audioHours.today_date, 'is-empty': !d.seconds }"
+                      :style="{ height: teamBarHeight(d) }"
+                    ></div>
+                  </div>
+                  <span v-if="teamSeries.length <= 14" class="ah-chart-day">{{ shortDay(d.date) }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Hours by voice artist / persona: how much of the audio each ARTIST
+                 recorded has been QC'd (vs. who did the reviewing, below). -->
+            <div class="row g-4 mb-4">
+              <div class="col-12 col-xl-7">
+                <h6 class="fw-bold text-secondary text-xs text-uppercase mb-2">
+                  Hours completed per voice artist
+                </h6>
+                <div class="table-responsive">
+                  <table class="table table-sm align-middle mb-0">
+                    <thead class="table-light">
+                      <tr>
+                        <th class="text-xs">Voice artist</th>
+                        <th class="text-xs">Persona</th>
+                        <th class="text-xs text-end">Total audio</th>
+                        <th class="text-xs text-end">Hours completed</th>
+                        <th class="text-xs text-end">Pending</th>
+                        <th class="text-xs text-end">Today</th>
+                        <th class="text-xs" style="width:18%">Progress</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="a in audioHours.by_artist" :key="a.artist">
+                        <td class="fw-semibold text-dark text-xs">
+                          {{ a.artist }}
+                          <div class="text-muted fw-normal" style="font-size:0.72rem">
+                            {{ a.batches }} batch{{ a.batches === 1 ? '' : 'es' }} · {{ a.total_clips }} clips
+                          </div>
+                        </td>
+                        <td class="text-xs text-secondary">{{ a.personas.join(', ') || '—' }}</td>
+                        <td class="text-end text-xs text-muted">{{ a.total_label }}</td>
+                        <td class="text-end text-xs fw-bold text-dark">{{ a.label }}</td>
+                        <td class="text-end text-xs" :class="a.pending_seconds ? 'text-warning-emphasis fw-semibold' : 'text-muted'">
+                          {{ a.pending_seconds ? a.pending_label : '—' }}
+                        </td>
+                        <td class="text-end text-xs" :class="a.today_seconds ? 'text-success fw-semibold' : 'text-muted'">
+                          {{ a.today_seconds ? a.today_label : '—' }}
+                        </td>
+                        <td>
+                          <div class="progress" style="height:6px">
+                            <div class="progress-bar bg-success" :style="{ width: a.progress + '%' }"></div>
+                          </div>
+                          <span class="text-muted text-xs">{{ a.progress }}%</span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="col-12 col-xl-5">
+                <h6 class="fw-bold text-secondary text-xs text-uppercase mb-2">
+                  Hours completed per persona
+                </h6>
+                <div class="table-responsive">
+                  <table class="table table-sm align-middle mb-0">
+                    <thead class="table-light">
+                      <tr>
+                        <th class="text-xs">Persona</th>
+                        <th class="text-xs text-end">Total</th>
+                        <th class="text-xs text-end">Completed</th>
+                        <th class="text-xs" style="width:26%">Progress</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="p in audioHours.by_persona" :key="p.persona">
+                        <td class="fw-semibold text-dark text-xs">
+                          {{ p.persona }}
+                          <div class="text-muted fw-normal" style="font-size:0.72rem">
+                            {{ p.artists.join(', ') || '—' }}
+                          </div>
+                        </td>
+                        <td class="text-end text-xs text-muted">{{ p.total_label }}</td>
+                        <td class="text-end text-xs fw-bold text-dark">{{ p.label }}</td>
+                        <td>
+                          <div class="progress" style="height:6px">
+                            <div class="progress-bar bg-success" :style="{ width: p.progress + '%' }"></div>
+                          </div>
+                          <span class="text-muted text-xs">{{ p.progress }}%</span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="text-muted text-xs mt-2">
+                  "Hours completed" = audio that has been QC'd at least once, counted
+                  per recorded clip (never double-counted when two annotators review
+                  the same clip).
+                </div>
+              </div>
+            </div>
+
+            <!-- Per annotator -->
+            <h6 class="fw-bold text-secondary text-xs text-uppercase mb-2">Hours per annotator <span class="text-muted fw-normal text-lowercase">— who did the reviewing</span></h6>
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <thead class="table-light">
+                  <tr>
+                    <th class="text-xs">Annotator</th>
+                    <th class="text-xs text-end">Clips</th>
+                    <th class="text-xs text-end">Total audio</th>
+                    <th class="text-xs text-end">Today</th>
+                    <th class="text-xs text-end">Last 7 days</th>
+                    <th class="text-xs text-end">Avg / active day</th>
+                    <th class="text-xs" style="width: 18%">Share of total</th>
+                    <th class="text-xs text-end">Last activity</th>
+                    <th class="text-xs text-end"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template v-for="a in audioHours.annotators" :key="a.rater_id">
+                    <tr :class="{ 'table-light': !a.is_active }">
+                      <td class="fw-semibold text-dark text-xs">
+                        {{ a.name }}
+                        <span v-if="!a.is_active" class="badge bg-secondary-subtle text-secondary-emphasis ms-1">inactive</span>
+                        <div class="text-muted fw-normal" style="font-size:0.72rem">
+                          {{ a.email }} · {{ a.batches }} batch{{ a.batches === 1 ? '' : 'es' }}
+                        </div>
+                      </td>
+                      <td class="text-end text-xs text-muted">{{ a.clips }}</td>
+                      <td class="text-end text-xs fw-bold text-dark">{{ a.label }}</td>
+                      <td class="text-end text-xs" :class="a.today.seconds ? 'text-success fw-semibold' : 'text-muted'">
+                        {{ a.today.seconds ? a.today.label : '—' }}
+                      </td>
+                      <td class="text-end text-xs">{{ a.last_7_days.seconds ? a.last_7_days.label : '—' }}</td>
+                      <td class="text-end text-xs text-muted">{{ a.avg_per_active_day.label }}</td>
+                      <td>
+                        <div class="progress" style="height:6px">
+                          <div class="progress-bar bg-primary" :style="{ width: hoursShare(a) + '%' }"></div>
+                        </div>
+                        <span class="text-muted text-xs">{{ hoursShare(a) }}%</span>
+                      </td>
+                      <td class="text-end text-xs text-muted" :title="formatDate(a.last_activity)">{{ timeAgo(a.last_activity) }}</td>
+                      <td class="text-end">
+                        <button
+                          class="btn btn-sm btn-link p-0 text-decoration-none text-xs"
+                          @click="toggleHoursRow(a.rater_id)"
+                        >
+                          {{ expandedHours === a.rater_id ? 'Hide' : 'Daily' }}
+                          <i class="bi" :class="expandedHours === a.rater_id ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+                        </button>
+                      </td>
+                    </tr>
+
+                    <!-- Per-day detail for one annotator -->
+                    <tr v-if="expandedHours === a.rater_id">
+                      <td colspan="9" class="bg-light-subtle">
+                        <div class="p-2">
+                          <div class="fw-bold text-secondary text-xs text-uppercase mb-2">
+                            {{ a.name }} · daily audio ({{ hoursRange }} days)
+                          </div>
+                          <div v-if="!workedDays(a).length" class="text-muted text-xs">
+                            No clips reviewed in this window.
+                          </div>
+                          <div v-else class="table-responsive ah-scroll">
+                            <table class="table table-sm mb-0">
+                              <thead>
+                                <tr>
+                                  <th class="text-xs">Date</th>
+                                  <th class="text-xs text-end">Clips</th>
+                                  <th class="text-xs text-end">Audio</th>
+                                  <th class="text-xs" style="width:45%"></th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <tr v-for="d in workedDays(a)" :key="d.date">
+                                  <td class="text-xs fw-semibold text-dark">
+                                    {{ longDay(d.date) }}
+                                    <span v-if="d.date === audioHours.today_date" class="badge bg-success-subtle text-success-emphasis ms-1">Today</span>
+                                  </td>
+                                  <td class="text-end text-xs text-muted">{{ d.clips }}</td>
+                                  <td class="text-end text-xs fw-bold text-dark">{{ d.label }}</td>
+                                  <td>
+                                    <div class="progress" style="height:6px">
+                                      <div class="progress-bar bg-primary"
+                                           :style="{ width: dayShareOf(d, a) + '%' }"></div>
+                                    </div>
+                                  </td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  </template>
+
+                  <tr class="border-top">
+                    <td class="fw-bold text-xs">OVERALL</td>
+                    <td class="text-end fw-bold text-xs text-muted">{{ audioHours.totals.clips }}</td>
+                    <td class="text-end fw-bold text-xs">{{ audioHours.totals.label }}</td>
+                    <td class="text-end fw-bold text-xs">{{ audioHours.today.label }}</td>
+                    <td class="text-end fw-bold text-xs">{{ audioHours.last_7_days.label }}</td>
+                    <td colspan="4"></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
         </div>
 
       </div>
@@ -1651,20 +2097,199 @@ async function fetchRaterActivity() {
   }
 }
 const artistReasonFilter = ref('')
+// Quality tab language filter — drives the tables, the stats and the CSV exports.
+const qualityLanguage = ref('')
 const exportTestType = ref('conversation-editable')
 const exportVersion = ref('')
 const exportVersionOptions = ['2', '3', '4', '5', '6', 'new', 'base']
 
-const artistStats = computed(() => {
+// Raw payload from /admin/dashboard: artists carry a by_language breakdown so the
+// language filter below is applied client-side, with no extra round trip.
+const rawArtistStats = computed(() => {
   const d = dashboardData.value.audio_seg_artists || {}
-  return { artists: d.artists || [], overall: d.overall || {} }
+  return {
+    artists: d.artists || [],
+    overall: d.overall || {},
+    languages: d.languages || [],
+    all_languages: d.all_languages || [],
+  }
 })
+
+const qualityLanguageOptions = computed(() => {
+  const d = rawArtistStats.value
+  if (d.all_languages.length) return d.all_languages
+  return d.languages.map(l => l.language)
+})
+
+const languageStats = computed(() =>
+  [...rawArtistStats.value.languages].sort((a, b) => b.pending - a.pending || b.clips - a.clips)
+)
+
+const EMPTY_BUCKET = {
+  clips: 0, total: 0, accepted: 0, rejected: 0, pending: 0, batch_count: 0,
+  rejection_rate: 0, pending_rate: 0, reviewed_rate: 0, reasons: [],
+}
+
+function rollUp(buckets) {
+  const out = { ...EMPTY_BUCKET, reasons: [] }
+  const reasons = {}
+  for (const b of buckets) {
+    out.clips += b.clips || 0
+    out.total += b.total || 0
+    out.accepted += b.accepted || 0
+    out.rejected += b.rejected || 0
+    out.pending += b.pending || 0
+    out.batch_count += b.batch_count || 0
+    for (const r of b.reasons || []) {
+      const e = reasons[r.reason] || (reasons[r.reason] = { reason: r.reason, label: r.label, count: 0 })
+      e.count += r.count
+    }
+  }
+  const pct = (n, d) => (d ? Math.round((1000 * n) / d) / 10 : 0)
+  out.rejection_rate = pct(out.rejected, out.total)
+  out.pending_rate = pct(out.pending, out.clips)
+  out.reviewed_rate = pct(out.clips - out.pending, out.clips)
+  out.reasons = Object.values(reasons)
+    .map(r => ({ ...r, pct_of_rejections: pct(r.count, out.rejected) }))
+    .sort((a, b) => b.count - a.count)
+  return out
+}
+
+// Artist rollups narrowed to the selected language (all languages when unset).
+const artistStats = computed(() => {
+  const d = rawArtistStats.value
+  if (!qualityLanguage.value) return { artists: d.artists, overall: d.overall }
+  const artists = []
+  for (const a of d.artists) {
+    const b = (a.by_language || {})[qualityLanguage.value]
+    if (!b) continue
+    artists.push({ ...rollUp([b]), artist: a.artist })
+  }
+  artists.sort((x, y) => y.rejection_rate - x.rejection_rate)
+  const lang = d.languages.find(l => l.language === qualityLanguage.value)
+  return { artists, overall: lang || rollUp(artists) }
+})
+
+// ---------------------------------------------------------------------------
+// Annotation hours (audio segmentation only) — Quality tab
+// ---------------------------------------------------------------------------
+const EMPTY_HOURS_BUCKET = { clips: 0, skipped: 0, seconds: 0, hours: 0, label: '0s' }
+const EMPTY_AUDIO_HOURS = {
+  timezone: 'IST (UTC+5:30)', today_date: '', annotators: [], daily_series: [],
+  totals: EMPTY_HOURS_BUCKET, today: EMPTY_HOURS_BUCKET,
+  last_7_days: EMPTY_HOURS_BUCKET, active_today: 0,
+  by_artist: [], by_persona: [],
+}
+
+const hoursRanges = [{ days: 7, label: '7d' }, { days: 14, label: '14d' }, { days: 30, label: '30d' }]
+const hoursRange = ref(14)
+const expandedHours = ref(null)
+
+// Clips still stored with a rejection reason the UI has retired.
+const retiredCopied = ref(false)
+const retiredClips = computed(() => {
+  const d = dashboardData.value?.retired_reason_clips
+  if (!d || !Array.isArray(d.clips)) return { clips: [], total: 0, by_reason: [] }
+  return d
+})
+
+// Plain-text list the admin can paste into a message to the annotator.
+async function copyRetiredList() {
+  const lines = retiredClips.value.clips.map(
+    c => `${c.rater_name} · batch ${c.test_id} · clip ${c.clip_id} · reason "${c.retired_reasons.join(', ')}" · ${c.link}`
+  )
+  const text = `Please re-do these ${lines.length} clip(s) — the rejection reason used is no longer available, `
+    + `so open each one, uncheck it and pick a current reason:\n\n` + lines.join('\n')
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch (e) {
+    // Clipboard API needs a secure context / permission; fall back to a prompt.
+    window.prompt('Copy the list below:', text)
+  }
+  retiredCopied.value = true
+  setTimeout(() => { retiredCopied.value = false }, 2000)
+}
+
+const audioHours = computed(() => {
+  const d = dashboardData.value?.audio_hours
+  if (!d || !Array.isArray(d.annotators)) return EMPTY_AUDIO_HOURS
+  return { ...EMPTY_AUDIO_HOURS, ...d }
+})
+
+// The backend sends 30 dense days newest-first; slice to the picked range and flip
+// so the chart reads left (oldest) to right (today).
+const teamSeries = computed(() =>
+  [...(audioHours.value.daily_series || [])].slice(0, hoursRange.value).reverse()
+)
+
+const teamPeak = computed(() =>
+  teamSeries.value.reduce((m, d) => Math.max(m, d.seconds || 0), 0)
+)
+
+const teamPeakLabel = computed(() => {
+  const p = teamSeries.value.find(d => d.seconds === teamPeak.value)
+  return teamPeak.value ? p.label : '—'
+})
+
+function teamBarHeight(d) {
+  if (!teamPeak.value || !d.seconds) return '3px'
+  return Math.max(6, Math.round((d.seconds / teamPeak.value) * 100)) + '%'
+}
+
+function hoursShare(a) {
+  const total = audioHours.value.totals.seconds || 0
+  if (!total || !a.seconds) return 0
+  return Math.round((a.seconds / total) * 100)
+}
+
+// Only the days this annotator actually worked, inside the picked range.
+function workedDays(a) {
+  return (a.daily_series || []).slice(0, hoursRange.value).filter(d => d.clips)
+}
+
+function dayShareOf(d, a) {
+  const peak = workedDays(a).reduce((m, x) => Math.max(m, x.seconds || 0), 0)
+  if (!peak || !d.seconds) return 0
+  return Math.max(4, Math.round((d.seconds / peak) * 100))
+}
+
+function toggleHoursRow(raterId) {
+  expandedHours.value = expandedHours.value === raterId ? null : raterId
+}
+
+// 'YYYY-MM-DD' is already an IST calendar date — parse it as a local date so no
+// browser timezone can shift the label back a day.
+function parseDay(iso) {
+  const [y, m, d] = (iso || '').split('-').map(Number)
+  return new Date(y, (m || 1) - 1, d || 1)
+}
+
+function shortDay(iso) {
+  return parseDay(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+}
+
+function longDay(iso) {
+  return parseDay(iso).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function downloadAudioHours() {
+  downloadCsv('/admin/export_audio_hours_csv?days=' + hoursRange.value,
+              'audio_hours_last_' + hoursRange.value + 'd.csv')
+}
 
 // Reasons for the selected artist, or the overall breakdown when none is picked.
 const activeReasons = computed(() => {
   if (!artistReasonFilter.value) return artistStats.value.overall.reasons || []
   const a = artistStats.value.artists.find(x => x.artist === artistReasonFilter.value)
   return a ? a.reasons : []
+})
+
+// A filtered-out artist must not leave a stale reason breakdown on screen.
+watch(qualityLanguage, () => {
+  if (artistReasonFilter.value &&
+      !artistStats.value.artists.some(a => a.artist === artistReasonFilter.value)) {
+    artistReasonFilter.value = ''
+  }
 })
 
 async function downloadCsv(path, filename) {
@@ -1698,14 +2323,25 @@ function downloadTasksExport() {
   downloadCsv('/admin/export_tasks_csv' + (qs ? '?' + qs : ''), name)
 }
 
+// Suffix the downloaded filename with the language so the vendor can tell the
+// per-language exports apart.
+function qualitySuffix() {
+  return qualityLanguage.value ? '_' + qualityLanguage.value.replace(/[^A-Za-z0-9_-]/g, '') : ''
+}
+
 function downloadAudioClips(onlyRejected) {
-  const qs = onlyRejected ? '?rejected_only=1' : ''
-  const name = onlyRejected ? 'audio_clips_rejected.csv' : 'audio_clips_all.csv'
-  downloadCsv('/admin/export_audio_clips_csv' + qs, name)
+  const params = new URLSearchParams()
+  if (onlyRejected) params.set('rejected_only', '1')
+  if (qualityLanguage.value) params.set('language', qualityLanguage.value)
+  const qs = params.toString()
+  // "All clips" also carries the not-yet-reviewed clips (evaluation = pending).
+  const name = (onlyRejected ? 'audio_clips_rejected' : 'audio_clips_all') + qualitySuffix() + '.csv'
+  downloadCsv('/admin/export_audio_clips_csv' + (qs ? '?' + qs : ''), name)
 }
 
 function downloadArtistReport() {
-  downloadCsv('/admin/export_artist_report_csv', 'artist_rejection_report.csv')
+  const qs = qualityLanguage.value ? '?language=' + encodeURIComponent(qualityLanguage.value) : ''
+  downloadCsv('/admin/export_artist_report_csv' + qs, 'artist_rejection_report' + qualitySuffix() + '.csv')
 }
 
 function downloadAnnotatorsReport() {
@@ -3068,6 +3704,52 @@ onUnmounted(() => {
 }
 .seg-stat-pill.total .lbl,
 .seg-stat-pill.total .val { color: #175cd3; }
+
+/* ---------- Annotation hours (Quality tab) ---------- */
+.ah-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+  height: 120px;
+}
+
+.ah-chart-col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+}
+
+.ah-chart-track {
+  flex: 1 1 auto;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.ah-chart-bar {
+  width: 100%;
+  max-width: 24px;
+  border-radius: 5px 5px 2px 2px;
+  background: linear-gradient(180deg, #7ba7f5, #2563eb);
+  transition: height 0.25s ease, filter 0.15s ease;
+}
+
+.ah-chart-bar.is-today { background: linear-gradient(180deg, #34d399, #059669); }
+.ah-chart-bar.is-empty { background: #e9eef5; }
+.ah-chart-col:hover .ah-chart-bar { filter: brightness(1.08); }
+
+.ah-chart-day {
+  margin-top: 6px;
+  font-size: 0.62rem;
+  color: #98a2b3;
+  white-space: nowrap;
+}
+
+.ah-scroll { max-height: 300px; overflow-y: auto; }
 
 /* Helper Text styles */
 .text-xs {

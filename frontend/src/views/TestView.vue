@@ -297,17 +297,27 @@ const handlePrev = () => {
   }
 }
 
+// Fields a submission writes straight back onto the local task, mirroring what
+// GET /api/test/<id> merges in on a fresh load. Without this the list kept the
+// values from page load, so re-opening a task the annotator had just RE-submitted
+// (e.g. after replacing a rejection reason) showed the OLD answer and made the
+// resubmission look like it had not been saved.
+const RESULT_ECHO_FIELDS = [
+  'pre_scene', 'post_scene', 'text', 'transcript', 'evaluation', 'comments',
+  'rejection_reasons', 'custom_rejection_reason', 'raw_text', 'spoken_form', 'decision'
+]
+
 const updateTaskStatus = ({ index, status, results }) => {
   if (testData.value[index]) {
     testData.value[index].completion_status = status
     if (results) {
-      if ('pre_scene' in results) {
-        testData.value[index].pre_scene = results.pre_scene
+      for (const key of RESULT_ECHO_FIELDS) {
+        if (key in results) {
+          const val = results[key]
+          testData.value[index][key] = Array.isArray(val) ? [...val] : val
+        }
       }
-      if ('post_scene' in results) {
-        testData.value[index].post_scene = results.post_scene
-      }
-      
+
       const dialogueKey = 'dialogue' in testData.value[index] ? 'dialogue' : ('turns' in testData.value[index] ? 'turns' : 'conversation')
       if (dialogueKey in results && Array.isArray(results[dialogueKey])) {
         const origTurns = testData.value[index][dialogueKey]

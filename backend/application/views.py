@@ -51,6 +51,100 @@ def _wav_duration_seconds(filepath):
     _WAV_DURATION_CACHE[filepath] = (mtime, dur)
     return dur
 
+
+# ---------------------------------------------------------------------------
+# Audio-segmentation "hours done" helpers
+# ---------------------------------------------------------------------------
+# Every annotator on this project works in India and reads "today" as an IST day,
+# but time_of_submission is stored in UTC (datetime.utcnow). Every day bucket in
+# the hour reports below is therefore computed on UTC + 5:30 so a clip reviewed at
+# 09:00 IST lands on the same date the annotator sees on their own clock.
+_IST_OFFSET = timedelta(hours=5, minutes=30)
+
+# Hours are credited for CLIPS THE ANNOTATOR ACTUALLY REVIEWED. A skipped clip was
+# handed back without a verdict, so it is counted and reported separately and never
+# added to the hours total.
+_SEG_HOURS_STATUS = 'completed'
+
+
+def _ist_date_str(dt):
+    """UTC datetime -> 'YYYY-MM-DD' in IST, or None."""
+    if not dt:
+        return None
+    return (dt + _IST_OFFSET).date().isoformat()
+
+
+def _ist_today_str():
+    return _ist_date_str(datetime.utcnow())
+
+
+def _audio_root():
+    import os as _os
+    return _os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+        'audio_segmentation'
+    )
+
+
+def _seg_durations_for_test(test, audio_root=None):
+    """{task_id (str): clip duration in seconds} for one audio-segmentation Test.
+
+    Durations come from the WAV headers and are memoised per (path, mtime), so the
+    files are only opened once per worker no matter how often this runs."""
+    import os as _os
+    audio_root = audio_root or _audio_root()
+    out = {}
+    for item in (test.json_entry if isinstance(test.json_entry, list) else []):
+        task_id = str(item.get('id') or '')
+        filename = item.get('audio_filename')
+        if not task_id or not filename:
+            continue
+        out[task_id] = _wav_duration_seconds(_os.path.join(audio_root, filename))
+    return out
+
+
+def _hms(seconds):
+    """3725.4 -> '1h 2m'. Short-form label used by every hours widget."""
+    seconds = int(round(seconds or 0))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
+def _hours_bucket():
+    return {'clips': 0, 'seconds': 0.0, 'skipped': 0}
+
+
+def _bucket_summary(b):
+    return {
+        'clips': b['clips'],
+        'skipped': b['skipped'],
+        'seconds': round(b['seconds'], 1),
+        'hours': round(b['seconds'] / 3600.0, 2),
+        'label': _hms(b['seconds']),
+    }
+
+
+def _daily_series(daily_map, days=30, end_date=None):
+    """Dense, newest-first list of the last `days` IST days from {date_str: bucket}.
+
+    Dense (zero-filled) so the UI can draw a real trend instead of silently closing
+    the gap over days the annotator did not work."""
+    end = end_date or (datetime.utcnow() + _IST_OFFSET).date()
+    out = []
+    for i in range(days):
+        d = (end - timedelta(days=i)).isoformat()
+        b = daily_map.get(d) or _hours_bucket()
+        row = _bucket_summary(b)
+        row['date'] = d
+        out.append(row)
+    return out
+
+
 # Set up logging
 if not app.debug:
     handler = RotatingFileHandler('error.log', maxBytes=10000, backupCount=1)
@@ -1499,7 +1593,7 @@ def _artist_stats_safe(tests, ratings_by_test):
         return admin_reports.artist_rejection_stats(tests, ratings_by_test)
     except Exception as e:
         print(f"[WARN] artist stats failed: {e}")
-        return {'artists': [], 'overall': {}}
+        return {'artists': [], 'overall': {}, 'languages': [], 'all_languages': []}
 
 
 @app.route('/api/admin/rater_activity', methods=['GET'])
@@ -1606,44 +1700,180 @@ def export_audio_clips_csv(current_user):
     """Clip-level audio-segmentation export with a playable Saffron deep link per clip.
 
     ?all=1 includes accepted clips too (default: rejected only).
+    ?language=Hindi restricts the export to one language.
+    ?include_pending=0 drops the not-yet-reviewed clips (they are included by default).
     """
     if current_user != "admin":
         return jsonify({'message': 'Unauthorized'}), 401
     import admin_reports
+    import re
     from flask import Response
 
     # Default: EVERY reviewed clip gets a link. ?rejected_only=1 narrows it.
     only_rejected = request.args.get('rejected_only') in ('1', 'true', 'yes')
+    include_pending = request.args.get('include_pending', '1') not in ('0', 'false', 'no')
+    language = request.args.get('language') or None
     tests = Test.query.filter_by(test_type='audio-segmentation').all()
     seg_ids = [t.id for t in tests]
     ratings_by_test = {}
     for r in Rating.query.filter(Rating.test_id.in_(seg_ids)).all():
         ratings_by_test.setdefault(r.test_id, []).append(r)
-    csv_text = admin_reports.audio_clips_csv(tests, ratings_by_test, only_rejected=only_rejected)
-    name = 'audio_clips_rejected.csv' if only_rejected else 'audio_clips_all.csv'
+    csv_text = admin_reports.audio_clips_csv(
+        tests, ratings_by_test, only_rejected=only_rejected,
+        language=language, include_pending=include_pending
+    )
+    name = 'audio_clips_rejected' if only_rejected else 'audio_clips_all'
+    if language:
+        name += '_' + re.sub(r'[^A-Za-z0-9_-]', '', language)
     return Response(csv_text, mimetype='text/csv',
-                    headers={'Content-Disposition': f'attachment; filename={name}'})
+                    headers={'Content-Disposition': f'attachment; filename={name}.csv'})
 
 
 @app.route('/api/admin/export_artist_report_csv', methods=['GET'])
 @token_required
 def export_artist_report_csv(current_user):
-    """Vendor-shareable CSV: per-artist rejection rates + reason breakdown."""
+    """Vendor-shareable CSV: per-artist rejection rates, pending counts + reasons.
+
+    ?language=Hindi restricts the report to a single language.
+    """
     if current_user != "admin":
         return jsonify({'message': 'Unauthorized'}), 401
     import admin_reports
+    import re
     from flask import Response
 
+    language = request.args.get('language') or None
     tests = Test.query.filter_by(test_type='audio-segmentation').all()
     seg_ids = [t.id for t in tests]
     ratings_by_test = {}
     for r in Rating.query.filter(Rating.test_id.in_(seg_ids)).all():
         ratings_by_test.setdefault(r.test_id, []).append(r)
-    stats = admin_reports.artist_rejection_stats(tests, ratings_by_test)
+    stats = admin_reports.artist_rejection_stats(tests, ratings_by_test, language=language)
+    name = 'artist_rejection_report'
+    if language:
+        name += '_' + re.sub(r'[^A-Za-z0-9_-]', '', language)
     return Response(
         admin_reports.artist_report_csv(stats), mimetype='text/csv',
-        headers={'Content-Disposition': 'attachment; filename=artist_rejection_report.csv'}
+        headers={'Content-Disposition': f'attachment; filename={name}.csv'}
     )
+
+
+@app.route('/api/admin/export_audio_hours_csv', methods=['GET'])
+@token_required
+def export_audio_hours_csv(current_user):
+    """CSV: audio-segmentation hours per annotator per IST day, plus a totals row.
+
+    ?days=30 sets how many days back the per-day rows go (default 30, max 365).
+    Only reviewed ('completed') clips are credited; skipped clips are reported in
+    their own column and never add hours. Read-only.
+    """
+    if current_user != "admin":
+        return jsonify({'message': 'Unauthorized'}), 401
+    import io
+    import csv
+    from flask import Response
+
+    try:
+        days = max(1, min(int(request.args.get('days', 30)), 365))
+    except (TypeError, ValueError):
+        days = 30
+
+    try:
+        import admin_reports as _ar
+    except Exception:
+        _ar = None
+
+    tests = Test.query.filter_by(test_type='audio-segmentation').all()
+    seg_ids = [t.id for t in tests]
+    raters_by_id = {r.id: r for r in Rater.query.all()}
+    audio_root = _audio_root()
+
+    per_rater = {}     # rater_id -> {'total': bucket, 'daily': {date: bucket}}
+    per_artist = {}    # artist -> coverage bucket
+    per_persona = {}
+    if seg_ids:
+        ratings_by_test = {}
+        for r in Rating.query.filter(Rating.test_id.in_(seg_ids)).all():
+            ratings_by_test.setdefault(r.test_id, []).append(r)
+        for test in tests:
+            dur_by_task = _seg_durations_for_test(test, audio_root)
+            entries = test.json_entry if isinstance(test.json_entry, list) else []
+            set_dir = str(entries[0].get('audio_filename', '')).split('/')[0] if entries else ''
+            artist = _ar._recorder_for(set_dir) if (_ar and set_dir) else 'Unknown'
+            persona = (entries[0].get('persona') if entries else None) or 'Unknown'
+            reviewed_ids = set()
+            for r in ratings_by_test.get(test.id, []):
+                if not r.page_no_progress:
+                    continue
+                agg = per_rater.setdefault(r.rater_id, {'total': _hours_bucket(), 'daily': {}})
+                if r.completion_status == 'skipped':
+                    agg['total']['skipped'] += 1
+                    continue
+                if r.completion_status != _SEG_HOURS_STATUS:
+                    continue
+                secs = dur_by_task.get(str(r.page_no_progress), 0.0)
+                agg['total']['clips'] += 1
+                agg['total']['seconds'] += secs
+                day = agg['daily'].setdefault(_ist_date_str(r.time_of_submission), _hours_bucket())
+                day['clips'] += 1
+                day['seconds'] += secs
+                reviewed_ids.add(str(r.page_no_progress))
+
+            rev_secs = sum(dur_by_task.get(t, 0.0) for t in reviewed_ids)
+            tot_secs = sum(dur_by_task.values())
+            for key, store in ((artist, per_artist), (persona, per_persona)):
+                b = store.setdefault(key, {'batches': 0, 'total_clips': 0,
+                                           'total_seconds': 0.0, 'clips': 0,
+                                           'seconds': 0.0, 'tags': set()})
+                b['batches'] += 1
+                b['total_clips'] += len(dur_by_task)
+                b['total_seconds'] += tot_secs
+                b['clips'] += len(reviewed_ids)
+                b['seconds'] += rev_secs
+                b['tags'].add(persona if store is per_artist else artist)
+
+    out = io.StringIO()
+    w = csv.writer(out)
+
+    # Sheet 1 — who did the reviewing, per day.
+    w.writerow(['ANNOTATOR HOURS (who reviewed the audio)'])
+    w.writerow(['Annotator', 'Email', 'Date (IST)', 'Clips reviewed', 'Audio (hh:mm)',
+                'Audio (hours)', 'Audio (seconds)'])
+    for rid, agg in sorted(per_rater.items(), key=lambda kv: -kv[1]['total']['seconds']):
+        rt = raters_by_id.get(rid)
+        name = rt.name if rt else f"Rater {rid}"
+        email = rt.email if rt else ""
+        for d in _daily_series(agg['daily'], days=days):
+            if not d['clips']:
+                continue          # only days actually worked
+            w.writerow([name, email, d['date'], d['clips'], d['label'], d['hours'],
+                        d['seconds']])
+        t = _bucket_summary(agg['total'])
+        w.writerow([name, email, 'TOTAL (all time)', t['clips'], t['label'], t['hours'],
+                    t['seconds']])
+
+    # Sheets 2 & 3 — whose audio it was: QC coverage per artist and per persona.
+    for title, store, label, tag_label in (
+        ('VOICE ARTIST HOURS (whose audio was reviewed)', per_artist, 'Voice artist', 'Persona(s)'),
+        ('PERSONA HOURS (whose audio was reviewed)', per_persona, 'Persona', 'Artist(s)'),
+    ):
+        w.writerow([])
+        w.writerow([title])
+        w.writerow([label, tag_label, 'Batches', 'Total clips', 'Total audio',
+                    'Clips reviewed', 'Audio reviewed', 'Hours reviewed',
+                    'Audio pending', 'Progress %'])
+        for name, b in sorted(store.items(), key=lambda kv: -kv[1]['total_seconds']):
+            pending = max(0.0, b['total_seconds'] - b['seconds'])
+            w.writerow([
+                name, ', '.join(sorted(x for x in b['tags'] if x)), b['batches'],
+                b['total_clips'], _hms(b['total_seconds']), b['clips'],
+                _hms(b['seconds']), round(b['seconds'] / 3600.0, 2), _hms(pending),
+                round(100.0 * b['seconds'] / b['total_seconds'], 1) if b['total_seconds'] else 0.0,
+            ])
+
+    return Response(out.getvalue(), mimetype='text/csv',
+                    headers={'Content-Disposition':
+                             f'attachment; filename=audio_hours_last_{days}d.csv'})
 
 
 @app.route('/api/admin/export_annotators_csv', methods=['GET'])
@@ -2117,6 +2347,24 @@ def get_admin_dashboard(current_user):
         )
         raters_by_id = {r.id: r for r in raters}
         audio_seg_data = []
+        # Per-annotator audio hours (cumulative + per IST day), accumulated as the
+        # loop below already has each batch's clip durations in hand.
+        hours_by_rater = {}
+        hours_daily_all = {}
+        # Per voice-artist / per persona audio hours: of the audio THIS ARTIST
+        # recorded, how much has been QC'd. Different question from hours_by_rater
+        # (who did the reviewing), and the one the vendor conversation needs.
+        hours_by_artist = {}
+        hours_by_persona = {}
+        # Clips whose stored rejection reason is no longer offered in the UI (e.g.
+        # the retired 'others'). Surfaced so the admin can send the annotator
+        # straight back to them instead of the dead reason sitting in the reports.
+        retired_clips = []
+        try:
+            import admin_reports as _ar
+        except Exception as _e:
+            print(f"[WARN] admin_reports unavailable for artist hours: {_e}")
+            _ar = None
         for test in tests:
             if test.test_type != 'audio-segmentation':
                 continue
@@ -2151,9 +2399,36 @@ def get_admin_dashboard(current_user):
             eval_by_rater = {}   # rater_id -> [accepted, rejected]
             seg_accepted = 0
             seg_rejected = 0
+            # Clip ids REVIEWED at least once, deduped: two annotators reviewing the
+            # same clip must not make the artist look twice as far along.
+            seg_reviewed_ids = set()
+            seg_reviewed_today_ids = set()
             for r in seg_ratings_by_test.get(test.id, []):
                 if not (r.page_no_progress and r.completion_status in ['completed', 'skipped']):
                     continue
+                # --- audio hours (reviewed clips only; skips carry no hours) ---
+                hb = hours_by_rater.setdefault(r.rater_id, {
+                    'total': _hours_bucket(), 'daily': {}, 'last': None,
+                    'batches': set(), 'accepted': 0, 'rejected': 0,
+                })
+                _secs = dur_by_task.get(str(r.page_no_progress), 0.0)
+                if r.completion_status == 'skipped':
+                    hb['total']['skipped'] += 1
+                else:
+                    hb['total']['clips'] += 1
+                    hb['total']['seconds'] += _secs
+                    hb['batches'].add(test.id)
+                    _d = _ist_date_str(r.time_of_submission)
+                    for _tgt in (hb['daily'].setdefault(_d, _hours_bucket()),
+                                 hours_daily_all.setdefault(_d, _hours_bucket())):
+                        _tgt['clips'] += 1
+                        _tgt['seconds'] += _secs
+                    if hb['last'] is None or r.time_of_submission > hb['last']:
+                        hb['last'] = r.time_of_submission
+                    seg_reviewed_ids.add(str(r.page_no_progress))
+                    if _d == _ist_today_str():
+                        seg_reviewed_today_ids.add(str(r.page_no_progress))
+
                 done_by_rater.setdefault(r.rater_id, set()).add(str(r.page_no_progress))
                 rj = r.results_json if isinstance(r.results_json, dict) else {}
                 ev = str(rj.get('evaluation') or '').strip().lower()
@@ -2161,9 +2436,31 @@ def get_admin_dashboard(current_user):
                 if ev == 'accept':
                     seg_accepted += 1
                     tally[0] += 1
+                    hb['accepted'] += 1
                 elif ev == 'reject':
                     seg_rejected += 1
                     tally[1] += 1
+                    hb['rejected'] += 1
+                    # Flag a reason the UI no longer offers, so it can be re-done.
+                    _retired = _ar.retired_reasons_of(rj) if _ar else []
+                    if _retired:
+                        _rt = raters_by_id.get(r.rater_id)
+                        retired_clips.append({
+                            'rating_id': r.id,
+                            'rater_id': r.rater_id,
+                            'rater_name': _rt.name if _rt else f"Rater {r.rater_id}",
+                            'rater_email': _rt.email if _rt else "",
+                            'test_id': test.id,
+                            'description': test.description or "No description",
+                            'clip_id': str(r.page_no_progress),
+                            'retired_reasons': _retired,
+                            'all_reasons': _ar._reasons_of(rj) if _ar else [],
+                            'custom_reason': rj.get('custom_rejection_reason') or "",
+                            'comments': rj.get('comments') or "",
+                            'persona': seg_persona,
+                            'submitted': r.time_of_submission.isoformat() if r.time_of_submission else None,
+                            'link': f"{_SAFFRON_BASE_URL}/{test.id}?task={r.page_no_progress}",
+                        })
 
             unique_done = set().union(*done_by_rater.values()) if done_by_rater else set()
             annotators = []
@@ -2198,7 +2495,150 @@ def get_admin_dashboard(current_user):
                 'total_submissions': seg_accepted + seg_rejected,
                 'annotators': annotators
             })
+
+            # --- roll this batch into its voice artist + persona ---
+            _set_dir = str(entries[0].get('audio_filename', '')).split('/')[0] if entries else ''
+            _artist = _ar._recorder_for(_set_dir) if (_ar and _set_dir) else 'Unknown'
+            _rev_secs = sum(dur_by_task.get(t, 0.0) for t in seg_reviewed_ids)
+            _today_secs = sum(dur_by_task.get(t, 0.0) for t in seg_reviewed_today_ids)
+            for _key, _store in ((_artist, hours_by_artist), (seg_persona, hours_by_persona)):
+                _b = _store.setdefault(_key, {
+                    'batches': 0, 'total_clips': 0, 'total_seconds': 0.0,
+                    'clips': 0, 'seconds': 0.0, 'today_clips': 0, 'today_seconds': 0.0,
+                    'accepted': 0, 'rejected': 0, 'personas': set(), 'artists': set(),
+                    'languages': set(), 'test_ids': [],
+                })
+                _b['batches'] += 1
+                _b['total_clips'] += len(dur_by_task)
+                _b['total_seconds'] += total_secs
+                _b['clips'] += len(seg_reviewed_ids)
+                _b['seconds'] += _rev_secs
+                _b['today_clips'] += len(seg_reviewed_today_ids)
+                _b['today_seconds'] += _today_secs
+                _b['accepted'] += seg_accepted
+                _b['rejected'] += seg_rejected
+                _b['personas'].add(seg_persona)
+                _b['artists'].add(_artist)
+                _b['languages'].add(seg_language)
+                _b['test_ids'].append(test.id)
+
         audio_seg_data.sort(key=lambda x: x['test_id'])
+
+        # 3b. Audio hours per annotator: cumulative to date + per IST day, for the
+        #     Quality tab. Days are dense (zero-filled) so the trend is honest about
+        #     days nobody worked.
+        _today = _ist_today_str()
+        _hours_annotators = []
+        _grand = _hours_bucket()
+        for _rid, hb in hours_by_rater.items():
+            if not (hb['total']['clips'] or hb['total']['skipped']):
+                continue
+            _rt = raters_by_id.get(_rid)
+            _series = _daily_series(hb['daily'], days=30)
+            _week = _hours_bucket()
+            for _d in _series[:7]:
+                _week['clips'] += _d['clips']
+                _week['seconds'] += _d['seconds']
+            _active = sum(1 for b in hb['daily'].values() if b['clips'])
+            _row = _bucket_summary(hb['total'])
+            _row.update({
+                'rater_id': _rid,
+                'name': _rt.name if _rt else f"Rater {_rid}",
+                'email': _rt.email if _rt else "",
+                'is_active': bool(_rt.is_active) if _rt else True,
+                'batches': len(hb['batches']),
+                'accepted': hb['accepted'],
+                'rejected': hb['rejected'],
+                'today': _bucket_summary(hb['daily'].get(_today) or _hours_bucket()),
+                'last_7_days': _bucket_summary(_week),
+                'active_days': _active,
+                'avg_per_active_day': _bucket_summary({
+                    'clips': round(hb['total']['clips'] / _active) if _active else 0,
+                    'seconds': (hb['total']['seconds'] / _active) if _active else 0.0,
+                    'skipped': 0,
+                }),
+                'daily_series': _series,
+                'last_activity': hb['last'].isoformat() if hb['last'] else None,
+            })
+            _hours_annotators.append(_row)
+            _grand['clips'] += hb['total']['clips']
+            _grand['seconds'] += hb['total']['seconds']
+            _grand['skipped'] += hb['total']['skipped']
+        _hours_annotators.sort(key=lambda a: -a['seconds'])
+
+        _all_series = _daily_series(hours_daily_all, days=30)
+        _all_week = _hours_bucket()
+        for _d in _all_series[:7]:
+            _all_week['clips'] += _d['clips']
+            _all_week['seconds'] += _d['seconds']
+
+        def _coverage_rows(store, name_key, other_key):
+            """Serialise an artist/persona bucket: how much of the audio that this
+            artist (or persona) recorded has been QC'd, and how much is left."""
+            rows = []
+            for _name, b in store.items():
+                pending_clips = max(0, b['total_clips'] - b['clips'])
+                pending_secs = max(0.0, b['total_seconds'] - b['seconds'])
+                rows.append({
+                    name_key: _name,
+                    other_key: sorted(x for x in b[other_key] if x),
+                    'languages': sorted(x for x in b['languages'] if x),
+                    'batches': b['batches'],
+                    'total_clips': b['total_clips'],
+                    'total_seconds': round(b['total_seconds'], 1),
+                    'total_label': _hms(b['total_seconds']),
+                    # "hours completed" = audio actually reviewed
+                    'clips': b['clips'],
+                    'seconds': round(b['seconds'], 1),
+                    'hours': round(b['seconds'] / 3600.0, 2),
+                    'label': _hms(b['seconds']),
+                    'pending_clips': pending_clips,
+                    'pending_seconds': round(pending_secs, 1),
+                    'pending_label': _hms(pending_secs),
+                    'today_clips': b['today_clips'],
+                    'today_label': _hms(b['today_seconds']),
+                    'today_seconds': round(b['today_seconds'], 1),
+                    'accepted': b['accepted'],
+                    'rejected': b['rejected'],
+                    'rejection_rate': round(
+                        100.0 * b['rejected'] / (b['accepted'] + b['rejected']), 1
+                    ) if (b['accepted'] + b['rejected']) else 0.0,
+                    'progress': round(
+                        100.0 * b['seconds'] / b['total_seconds'], 1
+                    ) if b['total_seconds'] else 0.0,
+                    'test_ids': sorted(b['test_ids']),
+                })
+            rows.sort(key=lambda x: -x['total_seconds'])
+            return rows
+
+        audio_hours_data = {
+            'timezone': 'IST (UTC+5:30)',
+            'today_date': _today,
+            'totals': _bucket_summary(_grand),
+            'today': _bucket_summary(hours_daily_all.get(_today) or _hours_bucket()),
+            'last_7_days': _bucket_summary(_all_week),
+            'active_today': sum(1 for a in _hours_annotators if a['today']['clips']),
+            'annotators': _hours_annotators,
+            'daily_series': _all_series,
+            'by_artist': _coverage_rows(hours_by_artist, 'artist', 'personas'),
+            'by_persona': _coverage_rows(hours_by_persona, 'persona', 'artists'),
+        }
+
+        # Clips still carrying a rejection reason the UI has retired.
+        retired_clips.sort(key=lambda c: (c['rater_name'], c['test_id'], c['clip_id']))
+        _retired_counts = {}
+        for _c in retired_clips:
+            for _s in _c['retired_reasons']:
+                _retired_counts[_s] = _retired_counts.get(_s, 0) + 1
+        retired_reason_data = {
+            'clips': retired_clips,
+            'total': len(retired_clips),
+            'by_reason': sorted(
+                ({'reason': k, 'label': k.replace('_', ' ').title(), 'count': v}
+                 for k, v in _retired_counts.items()),
+                key=lambda x: -x['count']
+            ),
+        }
 
         # 4. Per-task-type overview: for every test type, per-batch progress with
         #    a per-annotator breakdown. Built entirely from tests_data + the
@@ -2348,6 +2788,8 @@ def get_admin_dashboard(current_user):
             'tests': tests_data,
             'raters': raters_data,
             'audio_segmentation': audio_seg_data,
+            'audio_hours': audio_hours_data,
+            'retired_reason_clips': retired_reason_data,
             'audio_seg_artists': _artist_stats_safe(tests, seg_ratings_by_test),
             'task_types': task_types_data
         }
@@ -2425,6 +2867,133 @@ def get_assigned_tasks(current_user):
     except Exception as e:
         app.logger.error(f"Error in get_assigned_tasks: {e}")
         return jsonify({'error': 'Failed to load assigned tasks.'}), 500
+
+
+@app.route('/api/rater/audio_stats', methods=['GET'])
+@token_required
+def get_rater_audio_stats(current_user):
+    """The signed-in annotator's own audio-segmentation workload, in hours.
+
+    AUDIO-SEGMENTATION ONLY -- every other task type is ignored, and an annotator
+    with no audio-segmentation batch assigned gets `enabled: false` so the UI can
+    hide the panel entirely.
+
+    Reports the total audio reviewed to date plus a per-day (IST) breakdown, where
+    a clip's contribution is the duration of its WAV file. Read-only.
+    """
+    try:
+        token = _require_bearer_token()
+        required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
+        rater = Rater.query.filter_by(name=required["username"]).first()
+        if not rater:
+            return jsonify({'message': 'Rater not found'}), 404
+
+        assigned_ids = [int(x.strip()) for x in (rater.assigned_tasks or "").split(',')
+                        if x.strip().isdigit()]
+
+        # A batch counts if it is assigned now OR the annotator has already worked on
+        # it, so hours never disappear from their own history when a finished batch
+        # is unassigned.
+        worked_ids = [tid for (tid,) in db.session.query(Rating.test_id)
+                      .filter(Rating.rater_id == rater.id).distinct().all()]
+        candidate_ids = set(assigned_ids) | set(worked_ids)
+        if not candidate_ids:
+            return jsonify({'enabled': False, 'reason': 'no-audio-tasks'}), 200
+
+        seg_tests = Test.query.filter(
+            Test.id.in_(list(candidate_ids)), Test.test_type == 'audio-segmentation'
+        ).all()
+        if not seg_tests:
+            return jsonify({'enabled': False, 'reason': 'no-audio-tasks'}), 200
+
+        seg_test_ids = [t.id for t in seg_tests]
+        assigned_set = set(assigned_ids)
+        audio_root = _audio_root()
+
+        total = _hours_bucket()
+        daily = {}                      # 'YYYY-MM-DD' -> bucket
+        batches = []
+        last_activity = None
+
+        ratings = Rating.query.filter(
+            Rating.rater_id == rater.id, Rating.test_id.in_(seg_test_ids)
+        ).all()
+        ratings_by_test = {}
+        for r in ratings:
+            ratings_by_test.setdefault(r.test_id, []).append(r)
+
+        for test in seg_tests:
+            dur_by_task = _seg_durations_for_test(test, audio_root)
+            batch = _hours_bucket()
+            batch_last = None
+            for r in ratings_by_test.get(test.id, []):
+                if not r.page_no_progress:
+                    continue
+                secs = dur_by_task.get(str(r.page_no_progress), 0.0)
+                if r.completion_status == 'skipped':
+                    total['skipped'] += 1
+                    batch['skipped'] += 1
+                    continue
+                if r.completion_status != _SEG_HOURS_STATUS:
+                    continue          # drafts ('saved') are not finished work
+                total['clips'] += 1
+                total['seconds'] += secs
+                batch['clips'] += 1
+                batch['seconds'] += secs
+                day = daily.setdefault(_ist_date_str(r.time_of_submission), _hours_bucket())
+                day['clips'] += 1
+                day['seconds'] += secs
+                if batch_last is None or r.time_of_submission > batch_last:
+                    batch_last = r.time_of_submission
+                if last_activity is None or r.time_of_submission > last_activity:
+                    last_activity = r.time_of_submission
+
+            row = _bucket_summary(batch)
+            row.update({
+                'test_id': test.id,
+                'description': test.description or "No description",
+                'total_clips': len(dur_by_task),
+                'total_seconds': round(sum(dur_by_task.values()), 1),
+                'assigned': test.id in assigned_set,
+                'last_activity': batch_last.isoformat() if batch_last else None,
+            })
+            batches.append(row)
+
+        batches.sort(key=lambda b: (-b['seconds'], b['test_id']))
+
+        today_str = _ist_today_str()
+        series = _daily_series(daily, days=30)
+        week = _hours_bucket()
+        for d in series[:7]:
+            week['clips'] += d['clips']
+            week['seconds'] += d['seconds']
+
+        # Only the days actually worked, newest first -- the table the annotator reads.
+        history = [dict(_bucket_summary(b), date=d) for d, b in daily.items() if b['clips']]
+        history.sort(key=lambda x: x['date'], reverse=True)
+
+        active_days = len(history)
+        return jsonify({
+            'enabled': True,
+            'timezone': 'IST (UTC+5:30)',
+            'today_date': today_str,
+            'total': _bucket_summary(total),
+            'today': _bucket_summary(daily.get(today_str) or _hours_bucket()),
+            'last_7_days': _bucket_summary(week),
+            'daily_series': series,          # dense, zero-filled, newest first
+            'daily_history': history,        # only days with work, newest first
+            'active_days': active_days,
+            'avg_per_active_day': _bucket_summary({
+                'clips': round(total['clips'] / active_days) if active_days else 0,
+                'seconds': (total['seconds'] / active_days) if active_days else 0.0,
+                'skipped': 0,
+            }),
+            'batches': batches,
+            'last_activity': last_activity.isoformat() if last_activity else None,
+        }), 200
+    except Exception as e:
+        app.logger.error(f"Error in get_rater_audio_stats: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to load your audio statistics.'}), 500
 
 
 @app.route('/api/admin/rater/<int:rater_id>/assign_tasks', methods=['POST', 'PUT'])

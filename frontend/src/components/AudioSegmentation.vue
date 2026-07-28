@@ -364,16 +364,16 @@
         <div class="card-body p-4 reject-modal-body">
           <p class="text-muted small mb-3">Please check all details that apply for rejecting this audio segment:</p>
           
-          <!-- Checklist grid of 31 reasons -->
+          <!-- Checklist grid of reasons (retired ones appended so they stay removable) -->
           <div class="row g-2 reasons-grid">
-            <div 
-              v-for="reason in availableReasons" 
+            <div
+              v-for="reason in modalReasons"
               :key="reason"
               class="col-12 col-sm-6"
             >
-              <div 
+              <div
                 class="reason-checkbox-card p-2.5 rounded-3 border d-flex align-items-center cursor-pointer transition-all"
-                :class="{ 'reason-checked': tempReasons.includes(reason) }"
+                :class="{ 'reason-checked': tempReasons.includes(reason), 'reason-retired': legacyReasons.includes(reason) }"
                 @click="toggleReason(reason)"
               >
                 <div class="form-check m-0 d-flex align-items-center">
@@ -384,12 +384,13 @@
                     :checked="tempReasons.includes(reason)"
                     @click.stop="toggleReason(reason)"
                   />
-                  <label 
-                    class="form-check-label cursor-pointer fw-semibold text-dark-emphasis fs-8-5" 
+                  <label
+                    class="form-check-label cursor-pointer fw-semibold text-dark-emphasis fs-8-5"
                     :for="`reason_${reason}`"
                     @click.stop
                   >
                     {{ formatReasonLabel(reason) }}
+                    <span v-if="legacyReasons.includes(reason)" class="retired-tag ms-1">retired &mdash; uncheck to remove</span>
                   </label>
                 </div>
               </div>
@@ -622,6 +623,24 @@ const availableReasons = [
   'weak_emotion', 'wrong_language', 'wrong_speaker'
 ]
 
+// Reasons that were retired from the list above (e.g. the old free-text "others")
+// can still be sitting on clips annotated before the change. Without this, such a
+// reason has no checkbox in the modal, so the annotator can never UNCHECK it: they
+// could only add a second reason on top of it, and re-submitting looked like it had
+// no effect. Render every stored reason, retired ones included, so an old decision
+// can be cleared and replaced.
+const legacyReasons = computed(() => {
+  const stored = Array.isArray(props.currentTest?.rejection_reasons)
+    ? props.currentTest.rejection_reasons
+    : []
+  const seen = new Set([...stored, ...rejectionReasons.value, ...tempReasons.value])
+  return [...seen].filter(r => r && !availableReasons.includes(r))
+})
+
+// What the modal actually lists: the current reasons + any retired one still on
+// this clip (shown last, flagged as retired).
+const modalReasons = computed(() => [...availableReasons, ...legacyReasons.value])
+
 // Computed
 const audioUrl = computed(() => {
   if (!props.currentTest?.audio_filename) return ''
@@ -673,8 +692,14 @@ function setupState() {
   comments.value = props.currentTest.comments || ''
   transcript.value = props.currentTest.transcript || ''
   originalTranscript.value = props.currentTest._originalTranscript || props.currentTest.transcript || ''
-  rejectionReasons.value = props.currentTest.rejection_reasons || []
+  // Copy, never alias: rejectionReasons is mutated locally and must not write
+  // through into the task list the parent holds.
+  rejectionReasons.value = Array.isArray(props.currentTest.rejection_reasons)
+    ? [...props.currentTest.rejection_reasons]
+    : []
   customRejectionReason.value = props.currentTest.custom_rejection_reason || ''
+  tempReasons.value = [...rejectionReasons.value]
+  tempCustomReason.value = customRejectionReason.value
 
   // Cache original transcript locally for reset protection if not cached already
   if (!props.currentTest._originalTranscript) {
@@ -1300,6 +1325,23 @@ onUnmounted(() => {
 .reason-checked {
   background-color: #fef2f2;
   border-color: #fca5a5;
+}
+
+/* A reason that has been retired from the list but is still stored on this clip.
+   Shown so it can be unchecked; styled so nobody picks it as a new reason. */
+.reason-retired {
+  background-color: #fffbeb;
+  border-style: dashed;
+  border-color: #fcd34d;
+}
+
+.retired-tag {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #b45309;
+  white-space: nowrap;
 }
 
 .form-check-input:checked {

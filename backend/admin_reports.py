@@ -18,16 +18,26 @@ import re
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 AUDIO_DIR = os.path.join(BACKEND_DIR, "audio_segmentation")
 
-# The 31 reasons offered in AudioSegmentation.vue (keep in sync with availableReasons).
+# The 31 reasons currently OFFERED in AudioSegmentation.vue — keep in sync with its
+# `availableReasons`. Anything an old submission stores that is not in here counts as
+# RETIRED: it can no longer be picked, so the admin dashboard flags those clips for
+# re-review instead of letting a dead reason sit in the reports unnoticed.
 REJECTION_REASONS = [
-    'incorrect_text', 'noise', 'mispronounce', 'weak_emotion',
-    'incorrect_style', 'mismatch', 'skipping_words', 'not_normalized',
-    'low_volume', 'noise_beginning', 'noise_end', 'wrong_speaker',
-    'too_fast', 'fan', 'silence', 'unnatural', 'unclear',
-    'wrong_language', 'duplicate', 'repeating_content', 'dramatic',
-    'too_slow', 'page_flip', 'manual', 'flag', 'echo',
-    'chatter', 'abnormal', 'objectionable_content', 'truncated_audio', 'others',
+    'abnormal', 'artist_issue', 'chatter', 'dramatic',
+    'duplicate', 'echo', 'fan', 'flag',
+    'incorrect_style', 'incorrect_text', 'low_volume', 'manual',
+    'mispronounce', 'mismatch', 'noise', 'noise_beginning',
+    'noise_end', 'not_normalized', 'objectionable_content', 'page_flip',
+    'repeating_content', 'silence', 'skipping_words', 'too_fast',
+    'too_slow', 'truncated_audio', 'unclear', 'unnatural',
+    'weak_emotion', 'wrong_language', 'wrong_speaker',
 ]
+ACTIVE_REASONS = frozenset(REJECTION_REASONS)
+
+
+def retired_reasons_of(results_json):
+    """Stored rejection reasons that the UI no longer offers (e.g. the old 'others')."""
+    return [s for s in _reasons_of(results_json) if s not in ACTIVE_REASONS]
 
 
 def reason_label(slug):
@@ -54,6 +64,57 @@ def _recorder_for(set_dir, _cache={}):
     return name
 
 
+def _batch_language(entries):
+    """Language of a batch: the most common 'language' across its items."""
+    counts = {}
+    for item in entries or []:
+        lang = (item or {}).get("language") if isinstance(item, dict) else None
+        if lang:
+            counts[lang] = counts.get(lang, 0) + 1
+    return max(counts, key=counts.get) if counts else "Unknown"
+
+
+def _empty_bucket():
+    return {"clips": 0, "total": 0, "accepted": 0, "rejected": 0,
+            "pending": 0, "batch_count": 0, "_reasons": {}}
+
+
+def _merge_bucket(dst, src):
+    for k in ("clips", "total", "accepted", "rejected", "pending", "batch_count"):
+        dst[k] += src[k]
+    for slug, cnt in src["_reasons"].items():
+        dst["_reasons"][slug] = dst["_reasons"].get(slug, 0) + cnt
+
+
+def _finish_bucket(b):
+    """Turn an accumulator into the public shape (rates + sorted reasons)."""
+    reasons = sorted(
+        [
+            {
+                "reason": slug,
+                "label": reason_label(slug),
+                "count": cnt,
+                # share of THIS bucket's rejections that cite the reason
+                "pct_of_rejections": round(100.0 * cnt / b["rejected"], 1) if b["rejected"] else 0.0,
+            }
+            for slug, cnt in b["_reasons"].items()
+        ],
+        key=lambda x: -x["count"],
+    )
+    return {
+        "clips": b["clips"],
+        "total": b["total"],
+        "accepted": b["accepted"],
+        "rejected": b["rejected"],
+        "pending": b["pending"],
+        "batch_count": b["batch_count"],
+        "rejection_rate": round(100.0 * b["rejected"] / b["total"], 1) if b["total"] else 0.0,
+        "pending_rate": round(100.0 * b["pending"] / b["clips"], 1) if b["clips"] else 0.0,
+        "reviewed_rate": round(100.0 * (b["clips"] - b["pending"]) / b["clips"], 1) if b["clips"] else 0.0,
+        "reasons": reasons,
+    }
+
+
 def _reasons_of(results_json):
     """Normalise rejection_reasons (list | dict | str) to a list of slugs."""
     rr = results_json.get("rejection_reasons")
@@ -66,17 +127,27 @@ def _reasons_of(results_json):
     return []
 
 
-def artist_rejection_stats(tests, ratings_by_test):
+def artist_rejection_stats(tests, ratings_by_test, language=None):
     """Per-artist QC rollup for audio-segmentation.
 
     tests            : iterable of Test rows
     ratings_by_test  : {test_id: [Rating, ...]}
+    language         : keep only batches of this language (None = every language)
 
-    Returns {'artists': [...], 'overall': {...}} where each artist has:
-      artist, batches, total, accepted, rejected, rejection_rate,
-      reasons: [{reason, label, count, pct_of_rejections}]
+    Returns {'artists': [...], 'overall': {...}, 'languages': [...]} where each
+    artist has:
+      artist, batches, clips, total, accepted, rejected, pending, rejection_rate,
+      reasons: [{reason, label, count, pct_of_rejections}],
+      by_language: {lang: {clips, total, accepted, rejected, pending,
+                           rejection_rate, reasons: [...]}}
+
+    'total' stays the number of REVIEWED clips (accepted + rejected) so existing
+    consumers keep working; 'clips' is everything in the artist's batches and
+    'pending' is what nobody has reviewed yet.
     """
+    want_lang = (language or "").strip().lower() or None
     per_artist = {}
+    lang_seen = {}          # every language present, even when filtered out
 
     for test in tests:
         if test.test_type != "audio-segmentation":
@@ -84,14 +155,16 @@ def artist_rejection_stats(tests, ratings_by_test):
         entries = test.json_entry if isinstance(test.json_entry, list) else []
         set_dir = _set_dir_of(entries)
         artist = _recorder_for(set_dir)
-        language = (entries[0].get("language") if entries else None) or "Unknown"
+        language_name = _batch_language(entries)
         persona = (entries[0].get("persona") if entries else None) or "Unknown"
+        lang_seen[language_name.lower()] = language_name
+        if want_lang and language_name.lower() != want_lang:
+            continue
 
-        a = per_artist.setdefault(artist, {
-            "artist": artist, "batches": [], "total": 0, "accepted": 0,
-            "rejected": 0, "_reasons": {},
-        })
-        b_total = b_acc = b_rej = 0
+        clips = len(entries)
+        b_acc = b_rej = 0
+        b_reasons = {}
+        reviewed_ids = set()
 
         for r in ratings_by_test.get(test.id, []):
             if not (r.page_no_progress and r.completion_status in ("completed", "skipped")):
@@ -100,80 +173,80 @@ def artist_rejection_stats(tests, ratings_by_test):
             ev = str(rj.get("evaluation") or "").strip().lower()
             if ev == "accept":
                 b_acc += 1
-                b_total += 1
+                reviewed_ids.add(str(r.page_no_progress))
             elif ev == "reject":
                 b_rej += 1
-                b_total += 1
+                reviewed_ids.add(str(r.page_no_progress))
                 for slug in _reasons_of(rj):
-                    a["_reasons"][slug] = a["_reasons"].get(slug, 0) + 1
+                    b_reasons[slug] = b_reasons.get(slug, 0) + 1
 
-        if b_total:
-            a["total"] += b_total
-            a["accepted"] += b_acc
-            a["rejected"] += b_rej
-            a["batches"].append({
-                "test_id": test.id,
-                "description": test.description or "",
-                "language": language,
-                "persona": persona,
-                "set_dir": set_dir,
-                "total": b_total,
-                "accepted": b_acc,
-                "rejected": b_rej,
-                "rejection_rate": round(100.0 * b_rej / b_total, 1),
-            })
+        b_total = b_acc + b_rej
+        # A clip counts as pending until somebody has reviewed it; two annotators
+        # reviewing the same clip must not make it look like two clips are done.
+        b_pending = max(0, clips - len(reviewed_ids))
+        if not clips and not b_total:
+            continue
+
+        a = per_artist.setdefault(artist, {"artist": artist, "batches": [], "langs": {}})
+        bucket = a["langs"].setdefault(language_name, _empty_bucket())
+        bucket["clips"] += clips
+        bucket["total"] += b_total
+        bucket["accepted"] += b_acc
+        bucket["rejected"] += b_rej
+        bucket["pending"] += b_pending
+        bucket["batch_count"] += 1
+        for slug, cnt in b_reasons.items():
+            bucket["_reasons"][slug] = bucket["_reasons"].get(slug, 0) + cnt
+
+        a["batches"].append({
+            "test_id": test.id,
+            "description": test.description or "",
+            "language": language_name,
+            "persona": persona,
+            "set_dir": set_dir,
+            "clips": clips,
+            "total": b_total,
+            "accepted": b_acc,
+            "rejected": b_rej,
+            "pending": b_pending,
+            "rejection_rate": round(100.0 * b_rej / b_total, 1) if b_total else 0.0,
+        })
 
     artists = []
-    overall_reasons = {}
-    o_total = o_acc = o_rej = 0
+    overall = _empty_bucket()
+    per_language = {}
     for a in per_artist.values():
-        if not a["total"]:
+        artist_bucket = _empty_bucket()
+        by_language = {}
+        for lang, bucket in a["langs"].items():
+            _merge_bucket(artist_bucket, bucket)
+            _merge_bucket(overall, bucket)
+            _merge_bucket(per_language.setdefault(lang, _empty_bucket()), bucket)
+            by_language[lang] = _finish_bucket(bucket)
+        if not artist_bucket["clips"] and not artist_bucket["total"]:
             continue
-        reasons = [
-            {
-                "reason": slug,
-                "label": reason_label(slug),
-                "count": cnt,
-                # share of THIS artist's rejections that cite this reason
-                "pct_of_rejections": round(100.0 * cnt / a["rejected"], 1) if a["rejected"] else 0.0,
-            }
-            for slug, cnt in a["_reasons"].items()
-        ]
-        reasons.sort(key=lambda x: -x["count"])
-        for slug, cnt in a["_reasons"].items():
-            overall_reasons[slug] = overall_reasons.get(slug, 0) + cnt
-        o_total += a["total"]; o_acc += a["accepted"]; o_rej += a["rejected"]
 
         a["batches"].sort(key=lambda b: -b["rejection_rate"])
-        artists.append({
-            "artist": a["artist"],
-            "total": a["total"],
-            "accepted": a["accepted"],
-            "rejected": a["rejected"],
-            "rejection_rate": round(100.0 * a["rejected"] / a["total"], 1),
-            "batch_count": len(a["batches"]),
-            "batches": a["batches"],
-            "reasons": reasons,
-        })
+        artists.append(dict(
+            _finish_bucket(artist_bucket),
+            artist=a["artist"],
+            batches=a["batches"],
+            by_language=by_language,
+        ))
     artists.sort(key=lambda x: -x["rejection_rate"])
 
-    overall = {
-        "total": o_total,
-        "accepted": o_acc,
-        "rejected": o_rej,
-        "rejection_rate": round(100.0 * o_rej / o_total, 1) if o_total else 0.0,
-        "reasons": sorted(
-            [
-                {
-                    "reason": s, "label": reason_label(s), "count": c,
-                    "pct_of_rejections": round(100.0 * c / o_rej, 1) if o_rej else 0.0,
-                }
-                for s, c in overall_reasons.items()
-            ],
-            key=lambda x: -x["count"],
-        ),
+    languages = sorted(
+        (dict(_finish_bucket(b), language=lang) for lang, b in per_language.items()),
+        key=lambda x: x["language"],
+    )
+    return {
+        "artists": artists,
+        "overall": _finish_bucket(overall),
+        "languages": languages,
+        # Every language on record, so a UI filter can offer them all.
+        "all_languages": sorted(lang_seen.values()),
+        "language_filter": language or None,
     }
-    return {"artists": artists, "overall": overall}
 
 
 # ---------------------------------------------------------------------------
@@ -245,16 +318,45 @@ def tasks_export_csv(tests, test_type=None, version=None):
     return buf.getvalue()
 
 
+_ARTIST_HEADERS = ["Artist", "Batches", "Total Clips", "Total Reviewed", "Accepted",
+                   "Rejected", "Pending", "Rejection Rate %", "Pending %"]
+
+
+def _artist_csv_cells(name, b):
+    return [name, b["batch_count"], b["clips"], b["total"], b["accepted"],
+            b["rejected"], b["pending"], b["rejection_rate"], b["pending_rate"]]
+
+
 def artist_report_csv(stats):
-    """Vendor-shareable CSV: per-artist rates, then per-artist reason breakdown."""
+    """Vendor-shareable CSV: per-artist rates (incl. pending), a per-language
+    rollup, then the per-artist reason breakdown."""
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["Artist", "Batches", "Total Reviewed", "Accepted", "Rejected", "Rejection Rate %"])
+    if stats.get("language_filter"):
+        w.writerow([f"Language filter: {stats['language_filter']}"])
+        w.writerow([])
+    w.writerow(_ARTIST_HEADERS)
     for a in stats["artists"]:
-        w.writerow([a["artist"], a["batch_count"], a["total"], a["accepted"],
-                    a["rejected"], a["rejection_rate"]])
+        w.writerow(_artist_csv_cells(a["artist"], a))
     o = stats["overall"]
-    w.writerow(["OVERALL", "", o["total"], o["accepted"], o["rejected"], o["rejection_rate"]])
+    w.writerow(_artist_csv_cells("OVERALL", o))
+    w.writerow([])
+
+    # Per-artist × language, so the vendor can see which language is lagging.
+    w.writerow(["Artist", "Language", "Batches", "Total Clips", "Total Reviewed",
+                "Accepted", "Rejected", "Pending", "Rejection Rate %", "Pending %"])
+    for a in stats["artists"]:
+        for lang in sorted(a.get("by_language", {})):
+            b = a["by_language"][lang]
+            w.writerow([a["artist"], lang, b["batch_count"], b["clips"], b["total"],
+                        b["accepted"], b["rejected"], b["pending"],
+                        b["rejection_rate"], b["pending_rate"]])
+    w.writerow([])
+
+    w.writerow(["Language", "Batches", "Total Clips", "Total Reviewed", "Accepted",
+                "Rejected", "Pending", "Rejection Rate %", "Pending %"])
+    for l in stats.get("languages", []):
+        w.writerow(_artist_csv_cells(l["language"], l))
     w.writerow([])
     w.writerow(["Artist", "Rejection Reason", "Count", "% of that artist's rejections"])
     for a in stats["artists"]:
@@ -279,9 +381,16 @@ def task_link(test_id, task_id):
     return f"{SAFFRON_BASE_URL}/{test_id}?task={task_id}"
 
 
-def audio_clips_rows(tests, ratings_by_test, only_rejected=True):
-    """One row per reviewed audio clip: who recorded it, the verdict, why, and a link
-    that opens the clip in Saffron so the vendor can listen to it."""
+def audio_clips_rows(tests, ratings_by_test, only_rejected=True, language=None,
+                     include_pending=True):
+    """One row per audio clip: who recorded it, the verdict, why, and a link that
+    opens the clip in Saffron so the vendor can listen to it.
+
+    include_pending adds the clips nobody has reviewed yet (evaluation 'pending'),
+    so the export shows the whole batch instead of only the finished part. It is
+    ignored when only_rejected is set.
+    """
+    want_lang = (language or "").strip().lower() or None
     rows = []
     for test in tests:
         if test.test_type != "audio-segmentation":
@@ -290,7 +399,9 @@ def audio_clips_rows(tests, ratings_by_test, only_rejected=True):
         by_id = {str(it.get("id")): it for it in entries}
         set_dir = _set_dir_of(entries)
         artist = _recorder_for(set_dir)
-        language = (entries[0].get("language") if entries else None) or ""
+        language_name = _batch_language(entries)
+        if want_lang and language_name.lower() != want_lang:
+            continue
         persona = (entries[0].get("persona") if entries else None) or ""
         # excel set label, e.g. 'Set2' -- from the description tail
         set_label = ""
@@ -298,19 +409,22 @@ def audio_clips_rows(tests, ratings_by_test, only_rejected=True):
         if len(parts) >= 4:
             set_label = parts[3]
 
+        reviewed_ids = set()
         for r in ratings_by_test.get(test.id, []):
             if not (r.page_no_progress and r.completion_status in ("completed", "skipped")):
                 continue
             rj = r.results_json if isinstance(r.results_json, dict) else {}
             ev = str(rj.get("evaluation") or "").strip().lower()
+            task_id = str(rj.get("id") or r.page_no_progress or "")
+            if ev in ("accept", "reject"):
+                reviewed_ids.add(task_id)
             if only_rejected and ev != "reject":
                 continue
-            task_id = str(rj.get("id") or r.page_no_progress or "")
             item = by_id.get(task_id, {})
             reasons = [reason_label(x) for x in _reasons_of(rj)]
             rows.append({
                 "artist": artist,
-                "language": language,
+                "language": language_name,
                 "persona": persona,
                 "set": set_label,
                 "test_id": test.id,
@@ -323,12 +437,36 @@ def audio_clips_rows(tests, ratings_by_test, only_rejected=True):
                 "transcript": (item.get("transcript") or "")[:400],
                 "link": task_link(test.id, task_id),
             })
+
+        if only_rejected or not include_pending:
+            continue
+        for idx, item in enumerate(entries):
+            task_id = str(item.get("id") if isinstance(item, dict) and "id" in item else (idx + 1))
+            if task_id in reviewed_ids:
+                continue
+            rows.append({
+                "artist": artist,
+                "language": language_name,
+                "persona": persona,
+                "set": set_label,
+                "test_id": test.id,
+                "task_id": task_id,
+                "speaker": item.get("speaker", "") if isinstance(item, dict) else "",
+                "evaluation": "pending",
+                "rejection_reasons": "",
+                "custom_reason": "",
+                "annotator": "",
+                "transcript": ((item.get("transcript") if isinstance(item, dict) else "") or "")[:400],
+                "link": task_link(test.id, task_id),
+            })
     rows.sort(key=lambda x: (x["artist"], x["set"], x["task_id"]))
     return rows
 
 
-def audio_clips_csv(tests, ratings_by_test, only_rejected=True):
-    rows = audio_clips_rows(tests, ratings_by_test, only_rejected)
+def audio_clips_csv(tests, ratings_by_test, only_rejected=True, language=None,
+                    include_pending=True):
+    rows = audio_clips_rows(tests, ratings_by_test, only_rejected, language=language,
+                            include_pending=include_pending)
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["Artist", "Language", "Persona", "Set", "Test ID", "Task ID", "Speaker",
