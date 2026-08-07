@@ -876,13 +876,13 @@
               </p>
             </div>
             <div class="d-flex gap-2 align-items-center">
-              <select v-model.number="activityDays" class="form-select form-select-sm w-auto" @change="loadActivity">
+              <select v-model.number="activityDays" class="form-select form-select-sm w-auto" @change="loadActivity(1)">
                 <option :value="1">Last 24 hours</option>
                 <option :value="7">Last 7 days</option>
                 <option :value="30">Last 30 days</option>
                 <option :value="365">Everything</option>
               </select>
-              <button class="btn btn-sm btn-outline-secondary" @click="loadActivity">
+              <button class="btn btn-sm btn-outline-secondary" title="Refresh" @click="loadActivity(actPage)">
                 <i class="bi bi-arrow-clockwise"></i>
               </button>
               <button class="btn btn-sm btn-outline-secondary"
@@ -892,30 +892,141 @@
             </div>
           </div>
 
-          <div v-if="activityLoading" class="text-center py-5"><span class="spinner-border text-secondary"></span></div>
+          <!-- What happened in this window — each chip is also a filter -->
+          <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+            <button type="button" class="act-chip"
+                    :class="{ active: !actFilters.event }" @click="setActEvent('')">
+              All <b>{{ actSummaryTotal.toLocaleString() }}</b>
+            </button>
+            <button v-for="ev in actEventTypes" :key="ev" type="button"
+                    class="act-chip" :class="{ active: actFilters.event === ev }"
+                    @click="setActEvent(ev)">
+              <span class="badge" :class="eventBadge(ev)">{{ ev }}</span>
+              <b>{{ (actSummary[ev] || 0).toLocaleString() }}</b>
+            </button>
+          </div>
+
+          <div class="filter-bar border-top border-bottom py-2 mb-3">
+            <div class="d-flex flex-wrap gap-2 align-items-center">
+              <select v-model="actFilters.annotator" class="form-select form-select-sm w-auto" @change="loadActivity(1)">
+                <option value="">Any annotator</option>
+                <option v-for="a in annotators" :key="a.rater_id" :value="String(a.rater_id)">{{ a.name }}</option>
+              </select>
+              <select v-model="actFilters.language" class="form-select form-select-sm w-auto" @change="loadActivity(1)">
+                <option value="">All languages</option>
+                <option v-for="L in languages" :key="L.language" :value="L.language">{{ L.language }}</option>
+              </select>
+              <div class="position-relative">
+                <input v-model="actFilters.q" class="form-control form-control-sm" style="width:230px"
+                       placeholder="Prompt ID, task, annotator, detail…" @keyup.enter="loadActivity(1)">
+              </div>
+              <button class="btn btn-sm btn-outline-secondary" @click="loadActivity(1)"><i class="bi bi-search"></i></button>
+              <button v-if="actFiltersDirty" class="btn btn-sm btn-outline-secondary" @click="resetActFilters">Clear</button>
+              <span class="ms-auto text-xs text-muted">
+                {{ actTotal.toLocaleString() }} event(s)<span v-if="actPages > 1"> · page {{ actPage }} of {{ actPages }}</span>
+              </span>
+            </div>
+          </div>
+
+          <div v-if="actLoading" class="text-center py-5"><span class="spinner-border text-secondary"></span></div>
           <div v-else-if="!activity.length" class="text-center text-muted py-5">
-            <i class="bi bi-clock-history d-block fs-3 mb-2"></i>Nothing has happened in this window yet.
+            <i class="bi bi-clock-history d-block fs-3 mb-2"></i>
+            {{ actFiltersDirty ? 'Nothing matches those filters.' : 'Nothing has happened in this window yet.' }}
           </div>
-          <div v-else class="table-responsive">
-            <table class="table table-sm table-hover align-middle">
-              <thead class="table-light">
-                <tr><th>When (IST)</th><th>Event</th><th>Annotator</th><th>Prompt</th>
-                    <th>Language</th><th>Class</th><th>Detail</th><th class="text-end">Seconds</th></tr>
-              </thead>
-              <tbody>
-                <tr v-for="(e, i) in activity" :key="i" class="cursor-pointer" @click="openItem(e.item_id)">
-                  <td class="text-nowrap text-muted text-xs">{{ e.when_ist }}</td>
-                  <td><span class="badge" :class="eventBadge(e.event)">{{ e.event }}</span></td>
-                  <td>{{ e.annotator || '—' }}</td>
-                  <td class="text-muted">#{{ e.item_id }}</td>
-                  <td>{{ e.language }}</td>
-                  <td>{{ e.class }}</td>
-                  <td class="text-xs text-muted">{{ e.detail }}</td>
-                  <td class="text-end text-xs">{{ e.seconds != null ? e.seconds : '' }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <template v-else>
+            <div class="d-flex justify-content-end mb-2">
+              <div class="btn-group btn-group-sm">
+                <button :class="actView === 'grouped' ? 'btn btn-dark' : 'btn btn-outline-secondary'"
+                        @click="actView = 'grouped'"><i class="bi bi-collection me-1"></i>Grouped</button>
+                <button :class="actView === 'flat' ? 'btn btn-dark' : 'btn btn-outline-secondary'"
+                        @click="actView = 'flat'"><i class="bi bi-list me-1"></i>Flat</button>
+              </div>
+            </div>
+
+            <!-- Grouped: one section per day; bursts of the same kind collapse to a single row -->
+            <div v-if="actView === 'grouped'">
+              <div v-for="day in groupedActivity" :key="day.date" class="act-day">
+                <div class="act-day-head">
+                  <i class="bi bi-calendar3"></i>
+                  <span class="fw-bold">{{ dayLabel(day.date) }}</span>
+                  <span class="text-muted text-xs">{{ day.count }} event(s)</span>
+                </div>
+                <div class="act-day-body">
+                  <template v-for="g in day.groups" :key="g.id">
+                    <div v-if="g.items.length > 1" class="act-group">
+                      <button type="button" class="act-group-row" @click="toggleActGroup(g.id)">
+                        <i class="bi text-secondary" :class="expandedActGroups.includes(g.id) ? 'bi-chevron-down' : 'bi-chevron-right'"></i>
+                        <span class="badge" :class="eventBadge(g.event)">{{ g.event }}</span>
+                        <b class="act-count">× {{ g.items.length }}</b>
+                        <span class="fw-semibold text-dark">{{ g.annotator || '—' }}</span>
+                        <span class="text-muted text-xs">{{ g.language }} · Class {{ g.class }}</span>
+                        <span v-if="groupSeconds(g)" class="text-muted text-xs">· {{ groupSeconds(g) }} spent</span>
+                        <span class="ms-auto text-xs text-muted text-nowrap">{{ groupTimeRange(g) }}</span>
+                      </button>
+                      <div v-if="expandedActGroups.includes(g.id)" class="act-group-items">
+                        <table class="table table-sm table-hover align-middle mb-0">
+                          <tbody>
+                            <tr v-for="(e, i) in g.items" :key="i" class="cursor-pointer" @click="openItem(e.item_id)">
+                              <td style="width:70px" class="text-xs text-muted">{{ e.when_ist.slice(11, 16) }}</td>
+                              <td style="width:90px" class="text-muted">#{{ e.item_id }}</td>
+                              <td class="text-xs text-muted">{{ e.detail }}</td>
+                              <td style="width:80px" class="text-end text-xs">{{ e.seconds != null ? e.seconds + 's' : '' }}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                    <div v-else class="act-single cursor-pointer" @click="openItem(g.items[0].item_id)">
+                      <span class="text-xs text-muted act-time">{{ g.items[0].when_ist.slice(11, 16) }}</span>
+                      <span class="badge" :class="eventBadge(g.event)">{{ g.event }}</span>
+                      <span class="fw-semibold text-dark">{{ g.annotator || '—' }}</span>
+                      <span class="text-muted">#{{ g.items[0].item_id }}</span>
+                      <span class="text-muted text-xs">{{ g.language }} · Class {{ g.class }}</span>
+                      <span v-if="g.items[0].detail" class="text-xs text-muted text-truncate" style="max-width: 260px;">{{ g.items[0].detail }}</span>
+                      <span v-if="g.items[0].seconds != null" class="ms-auto text-xs text-muted">{{ g.items[0].seconds }}s</span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+
+            <!-- Flat: the classic table -->
+            <div v-else class="table-responsive">
+              <table class="table table-sm table-hover align-middle">
+                <thead class="table-light">
+                  <tr><th>When (IST)</th><th>Event</th><th>Annotator</th><th>Prompt</th>
+                      <th>Language</th><th>Class</th><th>Detail</th><th class="text-end">Seconds</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(e, i) in activity" :key="i" class="cursor-pointer" @click="openItem(e.item_id)">
+                    <td class="text-nowrap text-muted text-xs">{{ e.when_ist }}</td>
+                    <td><span class="badge" :class="eventBadge(e.event)">{{ e.event }}</span></td>
+                    <td>{{ e.annotator || '—' }}</td>
+                    <td class="text-muted">#{{ e.item_id }}</td>
+                    <td>{{ e.language }}</td>
+                    <td>{{ e.class }}</td>
+                    <td class="text-xs text-muted">{{ e.detail }}</td>
+                    <td class="text-end text-xs">{{ e.seconds != null ? e.seconds : '' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="actPages > 1" class="d-flex justify-content-center align-items-center gap-2 mt-2 flex-wrap">
+              <button class="btn btn-sm btn-outline-secondary" :disabled="actPage <= 1" @click="loadActivity(1)"
+                      title="First page"><i class="bi bi-chevron-double-left"></i></button>
+              <button class="btn btn-sm btn-outline-secondary" :disabled="actPage <= 1" @click="loadActivity(actPage - 1)">Previous</button>
+              <span class="text-xs text-muted px-2">Page {{ actPage }} of {{ actPages }}</span>
+              <button class="btn btn-sm btn-outline-secondary" :disabled="actPage >= actPages" @click="loadActivity(actPage + 1)">Next</button>
+              <button class="btn btn-sm btn-outline-secondary" :disabled="actPage >= actPages" @click="loadActivity(actPages)"
+                      title="Last page"><i class="bi bi-chevron-double-right"></i></button>
+              <select :value="actPerPage" class="form-select form-select-sm w-auto ms-2"
+                      @change="actPerPage = Number($event.target.value); loadActivity(1)">
+                <option :value="50">50 / page</option>
+                <option :value="100">100 / page</option>
+                <option :value="200">200 / page</option>
+              </select>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -977,17 +1088,21 @@
 
           <div class="col-12 col-lg-6">
             <div class="bg-white p-4 rounded shadow-sm border h-100">
-              <h5 class="fw-bold text-dark mb-2"><i class="bi bi-cloud-upload me-2 text-primary"></i>Uploads</h5>
-              <table class="table table-sm mb-0">
-                <tbody>
-                  <tr v-for="u in uploads" :key="u.id">
-                    <td class="text-dark">{{ u.name }}</td>
-                    <td class="text-end">{{ u.item_count.toLocaleString() }}</td>
-                    <td class="text-xs text-muted">{{ fmtDate(u.created_at) }}</td>
-                  </tr>
-                  <tr v-if="!uploads.length"><td class="text-muted small">No uploads recorded.</td></tr>
-                </tbody>
-              </table>
+              <h5 class="fw-bold text-dark mb-2"><i class="bi bi-cloud-upload me-2 text-primary"></i>Uploads
+                <span v-if="uploads.length" class="badge bg-light text-secondary border ms-1">{{ uploads.length }}</span>
+              </h5>
+              <div class="table-responsive" style="max-height: 280px; overflow-y: auto;">
+                <table class="table table-sm mb-0">
+                  <tbody>
+                    <tr v-for="u in uploads" :key="u.id">
+                      <td class="text-dark">{{ u.name }}</td>
+                      <td class="text-end">{{ u.item_count.toLocaleString() }}</td>
+                      <td class="text-xs text-muted text-nowrap">{{ fmtDate(u.created_at) }}</td>
+                    </tr>
+                    <tr v-if="!uploads.length"><td class="text-muted small">No uploads recorded.</td></tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>
@@ -1998,6 +2113,78 @@ const todayIst = ref('')
 
 const activity = ref([])
 const activityDays = ref(7)
+const actLoading = ref(false)
+const actFilters = reactive({ event: '', annotator: '', language: '', q: '' })
+const actPage = ref(1)
+const actPages = ref(1)
+const actTotal = ref(0)
+const actPerPage = ref(50)
+const actSummary = ref({})
+const actEventTypes = ['pulled', 'labelled', 'edited & labelled', 'flagged']
+const actSummaryTotal = computed(() =>
+  Object.values(actSummary.value).reduce((s, n) => s + n, 0))
+const actFiltersDirty = computed(() =>
+  !!(actFilters.event || actFilters.annotator || actFilters.language || actFilters.q))
+const actView = ref('grouped')
+const expandedActGroups = ref([])
+
+/** Day sections; inside a day, consecutive events of the same kind by the same
+ *  annotator (a pull of 40 prompts, a labelling run) fold into one group. */
+const groupedActivity = computed(() => {
+  const days = []
+  let day = null
+  let group = null
+  for (const e of activity.value) {
+    const dkey = (e.when_ist || '').slice(0, 10)
+    if (!day || day.date !== dkey) {
+      day = { date: dkey, groups: [], count: 0 }
+      days.push(day)
+      group = null
+    }
+    const gkey = `${e.event}|${e.annotator}|${e.language}|${e.class}`
+    if (!group || group.key !== gkey) {
+      group = { key: gkey, id: `${dkey}#${day.groups.length}`, event: e.event,
+                annotator: e.annotator, language: e.language, class: e.class, items: [] }
+      day.groups.push(group)
+    }
+    group.items.push(e)
+    day.count += 1
+  }
+  return days
+})
+
+function toggleActGroup(id) {
+  const i = expandedActGroups.value.indexOf(id)
+  if (i === -1) expandedActGroups.value.push(id)
+  else expandedActGroups.value.splice(i, 1)
+}
+
+function dayLabel(iso) {
+  if (!iso) return '—'
+  const [y, m, d] = iso.split('-').map(Number)
+  const date = new Date(y, m - 1, d)
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  const diff = Math.round((today - date) / 86400000)
+  const pretty = date.toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })
+  if (diff === 0) return `Today · ${pretty}`
+  if (diff === 1) return `Yesterday · ${pretty}`
+  return pretty
+}
+
+/** Events arrive newest first, so the range reads oldest → newest. */
+function groupTimeRange(g) {
+  const first = g.items[g.items.length - 1].when_ist.slice(11, 16)
+  const last = g.items[0].when_ist.slice(11, 16)
+  return first === last ? last : `${first} – ${last}`
+}
+
+function groupSeconds(g) {
+  const total = g.items.reduce((s, e) => s + (e.seconds || 0), 0)
+  if (!total) return ''
+  if (total < 60) return `${Math.round(total)}s`
+  const m = Math.floor(total / 60)
+  return m < 60 ? `${m}m ${Math.round(total % 60)}s` : `${Math.floor(m / 60)}h ${m % 60}m`
+}
 
 const exportOpen = ref(false)
 const exportFormat = ref('xlsx')
@@ -2317,16 +2504,42 @@ function eventBadge(e) {
   return 'bg-success-subtle text-success'
 }
 
-async function loadActivity() {
-  activityLoading.value = true
+async function loadActivity(page = 1) {
+  actLoading.value = true
   try {
-    const d = await api(`/pool/admin/activity?team=${teamKey.value}&days=${activityDays.value}&limit=300`)
+    const qs = new URLSearchParams({
+      team: teamKey.value, days: String(activityDays.value),
+      page: String(page), per_page: String(actPerPage.value),
+    })
+    if (actFilters.event) qs.set('event', actFilters.event)
+    if (actFilters.annotator) qs.set('rater_id', actFilters.annotator)
+    if (actFilters.language) qs.set('language', actFilters.language)
+    if (actFilters.q.trim()) qs.set('q', actFilters.q.trim())
+    const d = await api('/pool/admin/activity?' + qs)
     activity.value = d.events || []
+    expandedActGroups.value = []
+    actPage.value = d.page || 1
+    actPages.value = d.pages || 1
+    actTotal.value = d.total ?? (d.events || []).length
+    actSummary.value = d.summary || {}
   } catch (e) {
     flash(e.message)
   } finally {
-    activityLoading.value = false
+    actLoading.value = false
   }
+}
+
+function setActEvent(ev) {
+  actFilters.event = actFilters.event === ev ? '' : ev
+  loadActivity(1)
+}
+
+function resetActFilters() {
+  actFilters.event = ''
+  actFilters.annotator = ''
+  actFilters.language = ''
+  actFilters.q = ''
+  loadActivity(1)
 }
 
 async function load() {
@@ -2936,6 +3149,31 @@ onBeforeUnmount(() => {
 .type-chip { display: inline-flex; align-items: center; gap: .35rem; background: #f1f3f5; color: #495057;
              border-radius: 2rem; padding: .1rem .6rem; font-size: .72rem; font-weight: 600; }
 .type-chip b { color: #212529; }
+.act-chip { display: inline-flex; align-items: center; gap: .4rem; background: #fff; color: #495057;
+            border: 1px solid #dee2e6; border-radius: 2rem; padding: .25rem .75rem;
+            font-size: .78rem; font-weight: 600; transition: all .15s ease; }
+.act-chip:hover { border-color: #adb5bd; background: #f8f9fa; }
+.act-chip.active { border-color: #212529; background: #212529; color: #fff; }
+.act-chip.active b { color: #fff; }
+.act-chip b { color: #212529; }
+
+/* Grouped activity feed */
+.act-day { margin-bottom: 1rem; }
+.act-day-head { display: flex; align-items: center; gap: .5rem; padding: .45rem .75rem;
+                background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 8px 8px 0 0;
+                font-size: .85rem; color: #343a40; position: sticky; top: 0; z-index: 2; }
+.act-day-body { border: 1px solid #e9ecef; border-top: 0; border-radius: 0 0 8px 8px; overflow: hidden; }
+.act-group-row { display: flex; align-items: center; gap: .55rem; width: 100%; text-align: left;
+                 background: #fff; border: 0; border-bottom: 1px solid #f1f3f5;
+                 padding: .5rem .75rem; font-size: .85rem; }
+.act-group-row:hover { background: #f8f9fa; }
+.act-count { color: #212529; font-size: .82rem; }
+.act-group-items { background: #fbfcfe; border-bottom: 1px solid #f1f3f5; padding: .25rem .75rem .25rem 2.2rem; }
+.act-single { display: flex; align-items: center; gap: .55rem; padding: .5rem .75rem .5rem 2.05rem;
+              border-bottom: 1px solid #f1f3f5; font-size: .85rem; background: #fff; }
+.act-single:hover { background: #f8f9fa; }
+.act-time { min-width: 38px; }
+.act-day-body > :last-child, .act-day-body .act-group:last-child .act-group-row { border-bottom: 0; }
 .drill-btn { border: none; background: transparent; color: #0d6efd; font-size: .72rem; font-weight: 600; padding: 0; }
 .drill-btn:hover { text-decoration: underline; }
 .drill-row > td { background: #f8f9ff; }

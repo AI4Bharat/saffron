@@ -23,18 +23,21 @@
           <div class="mb-3">
             <label for="username" class="form-label">Username</label>
             <input
+              ref="usernameInput"
               type="text"
               id="username"
               v-model="username"
               class="form-control"
               required
               autocomplete="username"
+              autofocus
             >
           </div>
           <div class="mb-3">
             <label for="password" class="form-label">Password</label>
             <div class="input-group">
               <input
+                ref="passwordInput"
                 :type="showPassword ? 'text' : 'password'"
                 id="password"
                 v-model="password"
@@ -73,7 +76,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, nextTick, onMounted } from 'vue'
 import SaffronLogo from '@/components/SaffronLogo.vue'
 import { useRouter, useRoute } from 'vue-router'
 import { API_BASE_URL } from '@/config';
@@ -87,6 +90,8 @@ const password = ref('')
 const showPassword = ref(false)
 const isSubmitting = ref(false)
 const error = ref('')
+const usernameInput = ref(null)
+const passwordInput = ref(null)
 
 const togglePasswordVisibility = () => {
   showPassword.value = !showPassword.value
@@ -113,14 +118,14 @@ const handleSubmit = async () => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        username: username.value,
+        username: username.value.trim(),
         password: password.value
       })
     })
 
-    const data = await response.json()
+    const data = await response.json().catch(() => ({}))
     if (!response.ok) {
-      throw new Error(data.message || 'Invalid credentials')
+      throw new Error(data.message || 'Invalid username or password')
     }
 
     localStorage.setItem('authToken', data.token)
@@ -132,9 +137,14 @@ const handleSubmit = async () => {
     window.location.href = destinationFor(data.role, landing)  // full refresh
   } catch (err) {
     console.error('Login error:', err)
-    error.value = 'Invalid username or password'
-    username.value = ''
+    // A network failure reads differently from a wrong password.
+    error.value = err instanceof TypeError
+      ? 'Cannot reach the server. Please check your connection and try again.'
+      : (err.message || 'Invalid username or password')
+    // Keep the username so a typo in the password doesn't mean retyping everything.
     password.value = ''
+    await nextTick()
+    passwordInput.value?.focus()
   } finally {
     isSubmitting.value = false
   }
@@ -151,6 +161,7 @@ function destinationFor(role, landing) {
 }
 
 onMounted(async () => {
+  usernameInput.value?.focus()
   // Already signed in? Send them straight where they belong.
   const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken')
   if (!token) return

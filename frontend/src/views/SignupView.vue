@@ -3,14 +3,7 @@
     <div class="auth-card">
       <!-- Brand / hero side -->
       <aside class="auth-brand">
-        <span class="auth-brand-logo" aria-hidden="true">
-          <svg viewBox="0 0 32 32" width="30" height="30" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M16 16 C16 16 11 9 9 4 C13 6 15 11 16 16Z" fill="#fff" opacity="0.95"/>
-            <path d="M16 16 C16 16 21 9 23 4 C19 6 17 11 16 16Z" fill="#fff" opacity="0.95"/>
-            <path d="M16 16 C16 16 16 7 16 2 C17.6 6 17 11 16 16Z" fill="#fff" opacity="0.95"/>
-            <path d="M16 15 C10 16 6 20 5 27 C12 27 15 22 16 16 C17 22 20 27 27 27 C26 20 22 16 16 15Z" fill="#fff"/>
-          </svg>
-        </span>
+        <SaffronLogo :size="34" variant="white" class="auth-brand-logo" />
         <h1>Join Saffron Annotation Studio</h1>
         <p class="auth-brand-sub">Create your annotator profile to start contributing to audio and translation evaluation tasks.</p>
         <div class="auth-feature"><i class="bi bi-list-check"></i><span>Get tasks assigned to your account</span></div>
@@ -21,7 +14,7 @@
       <!-- Form side -->
       <section class="auth-form-panel">
         <div class="auth-form-mark">
-          <i class="bi bi-flower1"></i><span>Saffron</span>
+          <SaffronLogo :size="20" /><span>Saffron</span>
         </div>
         <h2 class="auth-title">Create account</h2>
         <p class="auth-subtitle">Set up your annotator profile to get started.</p>
@@ -30,12 +23,16 @@
           <div class="mb-3">
             <label for="name" class="form-label">Username</label>
             <input
+              ref="nameInput"
               type="text"
               id="name"
               v-model="name"
               class="form-control"
               required
+              autocomplete="username"
+              autofocus
             >
+            <div class="form-text">You'll sign in with this name.</div>
           </div>
 
           <div class="row g-3 mb-3">
@@ -47,7 +44,8 @@
                 v-model="age"
                 class="form-control"
                 required
-                min="1"
+                min="10"
+                max="100"
               >
             </div>
             <div class="col-6">
@@ -82,7 +80,9 @@
                   id="password"
                   v-model="password"
                   class="form-control"
+                  :class="{ 'is-invalid': password && password.length < MIN_PASSWORD }"
                   required
+                  minlength="6"
                   autocomplete="new-password"
                 >
                 <button
@@ -93,6 +93,9 @@
                 >
                   <i :class="showPassword ? 'bi bi-eye-slash' : 'bi bi-eye'"></i>
                 </button>
+              </div>
+              <div class="form-text" :class="{ 'text-danger': password && password.length < MIN_PASSWORD }">
+                At least {{ MIN_PASSWORD }} characters.
               </div>
             </div>
             <div class="col-md-6">
@@ -103,6 +106,7 @@
                   id="confirmPassword"
                   v-model="confirmPassword"
                   class="form-control"
+                  :class="{ 'is-invalid': passwordMismatch, 'is-valid': passwordsMatch }"
                   required
                   autocomplete="new-password"
                 >
@@ -115,6 +119,8 @@
                   <i :class="showPassword ? 'bi bi-eye-slash' : 'bi bi-eye'"></i>
                 </button>
               </div>
+              <div v-if="passwordMismatch" class="form-text text-danger">Passwords don't match yet.</div>
+              <div v-else-if="passwordsMatch" class="form-text text-success">Passwords match.</div>
             </div>
           </div>
 
@@ -165,10 +171,10 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import SaffronLogo from '@/components/SaffronLogo.vue'
 import { API_BASE_URL } from '@/config';
 
-const router = useRouter()
+const MIN_PASSWORD = 6
 
 // Form fields
 const name = ref('')
@@ -181,22 +187,37 @@ const password = ref('')
 const confirmPassword = ref('')
 const signupPin = ref('')
 const showPassword = ref(false)
+const nameInput = ref(null)
 
 // Form submission state
 const isSubmitting = ref(false)
 const error = ref('')
+
+const passwordMismatch = computed(() =>
+  confirmPassword.value.length > 0 && password.value !== confirmPassword.value)
+const passwordsMatch = computed(() =>
+  confirmPassword.value.length > 0 && password.value === confirmPassword.value)
 
 const togglePasswordVisibility = () => {
   showPassword.value = !showPassword.value
 }
 
 const validateForm = () => {
-  if (!name.value || !age.value || !gender.value || !email.value || !password.value || !confirmPassword.value) {
+  if (!name.value.trim() || !age.value || !gender.value || !email.value.trim()
+      || !password.value || !confirmPassword.value) {
     error.value = 'Please fill in all fields.'
+    return false
+  }
+  if (password.value.length < MIN_PASSWORD) {
+    error.value = `The password needs at least ${MIN_PASSWORD} characters.`
     return false
   }
   if (password.value !== confirmPassword.value) {
     error.value = 'Passwords do not match.'
+    return false
+  }
+  if (!/^\d{8}$/.test(signupPin.value.trim())) {
+    error.value = 'The signup PIN is the 8-digit number the admin shares each day.'
     return false
   }
   return true
@@ -206,6 +227,7 @@ const teamDescription = computed(() =>
   teams.value.find(t => t.key === team.value)?.description || '')
 
 onMounted(async () => {
+  nameInput.value?.focus()
   try {
     const res = await fetch(`${API_BASE_URL}/teams`)
     if (res.ok) {
@@ -224,37 +246,35 @@ const handleSubmit = async () => {
   isSubmitting.value = true
   error.value = ''
 
-  const response = await fetch(`${API_BASE_URL}/signup`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      name: name.value,
-      age: age.value,
-      gender: gender.value,
-      email: email.value,
-      password: password.value,
-      team: team.value,
-      signup_key: signupPin.value
-    })
-  })
-
   try {
+    const response = await fetch(`${API_BASE_URL}/signup`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        name: name.value.trim(),
+        age: age.value,
+        gender: gender.value,
+        email: email.value.trim(),
+        password: password.value,
+        team: team.value,
+        signup_key: signupPin.value.trim()
+      })
+    })
+
+    const data = await response.json().catch(() => ({}))
     if (!response.ok) {
-      throw new Error('Signup failed')
+      throw new Error(data.message || 'Signup failed. Please check your details and try again.')
     }
 
-    const data = await response.json()
-
     localStorage.setItem('authToken', data.token) // Save token for authentication
-
     window.location.href = '/' // Redirect to home page with full refresh
   } catch (err) {
-    const data = await response.json()
-
     console.error('Signup error:', err)
-    error.value = data.message
+    error.value = err instanceof TypeError
+      ? 'Cannot reach the server. Please check your connection and try again.'
+      : (err.message || 'Signup failed. Please try again.')
   } finally {
     isSubmitting.value = false
   }

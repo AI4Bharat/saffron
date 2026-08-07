@@ -1380,6 +1380,7 @@ def _activity_events(team, since=None, rater_id=None, limit=500):
         q = q.filter(db.or_(PoolItem.claimed_at >= since, PoolItem.completed_at >= since))
     q = q.filter(db.or_(PoolItem.claimed_at.isnot(None), PoolItem.completed_at.isnot(None)))
 
+    # Each row yields at most two events (pulled + finished), so 2x rows covers `limit` events.
     rows = q.order_by(db.func.coalesce(PoolItem.completed_at, PoolItem.claimed_at).desc()
                       ).limit(max(limit, 1) * 2).all()
 
@@ -1412,7 +1413,11 @@ def _activity_events(team, since=None, rater_id=None, limit=500):
 @app.route('/api/pool/admin/activity', methods=['GET'])
 @token_required
 def pool_admin_activity(current_user):
-    """What has happened in the pool recently -- the admin's audit feed."""
+    """What has happened in the pool recently -- the admin's audit feed.
+
+    Filterable (event / annotator / language / free text) and paginated, so the
+    feed stays usable however many pulls the pool accumulates.
+    """
     team, err = _admin_pool_team(current_user)
     if err:
         return err
@@ -1420,16 +1425,53 @@ def pool_admin_activity(current_user):
         days = int(request.args.get('days') or 7)
     except (TypeError, ValueError):
         days = 7
-    limit = min(int(request.args.get('limit') or 200), 1000)
     rater_id = request.args.get('rater_id', type=int)
+    event = (request.args.get('event') or '').strip().lower()
+    language = (request.args.get('language') or '').strip()
+    search = (request.args.get('q') or '').strip().lower()
+    try:
+        page = max(int(request.args.get('page') or 1), 1)
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        per_page = min(max(int(request.args.get('per_page') or 50), 10), 200)
+    except (TypeError, ValueError):
+        per_page = 50
     since = datetime.utcnow() - timedelta(days=max(days, 1)) if days else None
 
-    events = _activity_events(team, since=since, rater_id=rater_id, limit=limit)
+    events = _activity_events(team, since=since, rater_id=rater_id, limit=50000)
+
+    # Counts per event type cover the whole window (before the event filter),
+    # so the UI chips double as filter toggles without losing the totals.
+    summary = {}
+    for e in events:
+        summary[e['event']] = summary.get(e['event'], 0) + 1
+
+    if event:
+        events = [e for e in events if e['event'] == event]
+    if language:
+        events = [e for e in events if (e['language'] or '') == language]
+    if search:
+        events = [e for e in events
+                  if search in (f"{e['item_id']} {e.get('task_id') or ''} {e['annotator']} "
+                                f"{e['detail']} {e['category'] or ''} {e['language'] or ''}").lower()]
+
+    total = len(events)
+    pages = max((total + per_page - 1) // per_page, 1)
+    page = min(page, pages)
+    start = (page - 1) * per_page
+    events = events[start:start + per_page]
+
     return jsonify({
         'events': [dict(e, when=e['when'].isoformat(), when_ist=_ist_stamp(e['when']))
                    for e in events],
         'days': days,
-        'count': len(events),
+        'count': total,
+        'total': total,
+        'page': page,
+        'pages': pages,
+        'per_page': per_page,
+        'summary': summary,
     }), 200
 
 
