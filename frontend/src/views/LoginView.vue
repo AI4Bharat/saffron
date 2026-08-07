@@ -3,16 +3,9 @@
     <div class="auth-card">
       <!-- Brand / hero side -->
       <aside class="auth-brand">
-        <span class="auth-brand-logo" aria-hidden="true">
-          <svg viewBox="0 0 32 32" width="30" height="30" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M16 16 C16 16 11 9 9 4 C13 6 15 11 16 16Z" fill="#fff" opacity="0.95"/>
-            <path d="M16 16 C16 16 21 9 23 4 C19 6 17 11 16 16Z" fill="#fff" opacity="0.95"/>
-            <path d="M16 16 C16 16 16 7 16 2 C17.6 6 17 11 16 16Z" fill="#fff" opacity="0.95"/>
-            <path d="M16 15 C10 16 6 20 5 27 C12 27 15 22 16 16 C17 22 20 27 27 27 C26 20 22 16 16 15Z" fill="#fff"/>
-          </svg>
-        </span>
-        <h1>Welcome back to Saffron</h1>
-        <p class="auth-brand-sub">Sign in to pick up your annotation and translation tasks where you left off.</p>
+        <SaffronLogo :size="34" variant="white" class="auth-brand-logo" />
+                <h1>Welcome back to Saffron</h1>
+        <p class="auth-brand-sub">One sign-in for the whole studio: annotators reach their tasks, admins reach their dashboard.</p>
         <div class="auth-feature"><i class="bi bi-soundwave"></i><span>Audio &amp; translation evaluation</span></div>
         <div class="auth-feature"><i class="bi bi-bar-chart-line"></i><span>Track your progress in real time</span></div>
         <div class="auth-feature"><i class="bi bi-shield-lock"></i><span>Secure, token-based access</span></div>
@@ -21,10 +14,10 @@
       <!-- Form side -->
       <section class="auth-form-panel">
         <div class="auth-form-mark">
-          <i class="bi bi-flower1"></i><span>Saffron</span>
+          <SaffronLogo :size="20" /><span>Saffron</span>
         </div>
         <h2 class="auth-title">Sign in</h2>
-        <p class="auth-subtitle">Enter your credentials to access your tasks.</p>
+        <p class="auth-subtitle">Annotators and admins sign in here — you land on the right screen automatically.</p>
 
         <form class="auth-form" @submit.prevent="handleSubmit">
           <div class="mb-3">
@@ -59,11 +52,7 @@
               </button>
             </div>
           </div>
-          <div class="mb-4 form-check">
-            <input type="checkbox" class="form-check-input" id="rememberMe" v-model="rememberMe">
-            <label class="form-check-label" for="rememberMe">Remember me</label>
-          </div>
-          <button type="submit" class="btn btn-saffron w-100" :disabled="isSubmitting">
+          <button type="submit" class="btn btn-saffron w-100 mt-2" :disabled="isSubmitting">
             <span v-if="isSubmitting" class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
             {{ isSubmitting ? 'Logging in...' : 'Login' }}
           </button>
@@ -85,8 +74,10 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import SaffronLogo from '@/components/SaffronLogo.vue'
 import { useRouter, useRoute } from 'vue-router'
 import { API_BASE_URL } from '@/config';
+import { loadIdentity, landingPath, setActiveTeam } from '@/session';
 
 const router = useRouter()
 const route = useRoute()
@@ -94,7 +85,6 @@ const route = useRoute()
 const username = ref('')
 const password = ref('')
 const showPassword = ref(false)
-const rememberMe = ref(true)  // Set to true by default
 const isSubmitting = ref(false)
 const error = ref('')
 
@@ -128,25 +118,18 @@ const handleSubmit = async () => {
       })
     })
 
-    if (!response.ok) {
-      throw new Error('Invalid credentials')
-    }
-
     const data = await response.json()
-
-    if (rememberMe.value) {
-      localStorage.setItem('authToken', data.token)
-    } else {
-      sessionStorage.setItem('authToken', data.token)
+    if (!response.ok) {
+      throw new Error(data.message || 'Invalid credentials')
     }
 
-    // Return the user to whatever they originally clicked (deep links carry
-    // ?redirect=/<test_id>?task=<id>); fall back to home.
-    let redirectPath = route.query.redirect || '/'
-    if (Array.isArray(redirectPath)) redirectPath = redirectPath[0]
-    // only allow internal paths -- never bounce to an external site
-    if (typeof redirectPath !== 'string' || !redirectPath.startsWith('/')) redirectPath = '/'
-    window.location.href = redirectPath  // Redirect with full refresh
+    localStorage.setItem('authToken', data.token)
+
+    if (data.team) setActiveTeam(data.team.key)
+    else if (data.teams?.length === 1) setActiveTeam(data.teams[0].key)
+    const landing = landingPath({ role: data.role, scope: data.scope,
+                                  teams: data.teams || [], team: data.team })
+    window.location.href = destinationFor(data.role, landing)  // full refresh
   } catch (err) {
     console.error('Login error:', err)
     error.value = 'Invalid username or password'
@@ -157,14 +140,21 @@ const handleSubmit = async () => {
   }
 }
 
-onMounted(() => {
-  // Check if there's a stored token
+/** Where to send someone after a successful sign-in. A real deep link (?redirect=/42?task=7) wins,. */
+function destinationFor(role, landing) {
+  let dest = route.query.redirect || ''
+  if (Array.isArray(dest)) dest = dest[0]
+  if (typeof dest !== 'string' || !dest.startsWith('/')) return landing
+  if (['/', '/login', '/signup', '/workspaces'].includes(dest)) return landing
+  if (role === 'admin' && !/^\/(org|admin\/|[a-z0-9_-]+\/admin)/.test(dest)) return landing
+  return dest
+}
+
+onMounted(async () => {
+  // Already signed in? Send them straight where they belong.
   const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken')
-  if (token) {
-    let dest = route.query.redirect || '/'
-    if (Array.isArray(dest)) dest = dest[0]
-    if (typeof dest !== 'string' || !dest.startsWith('/')) dest = '/'
-    router.push(dest)  // already logged in: honour the deep link
-  }
+  if (!token) return
+  const identity = await loadIdentity()
+  router.push(destinationFor(identity.role, landingPath(identity)))
 })
 </script>

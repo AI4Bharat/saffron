@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""
-admin_reports.py — admin dashboard reporting helpers.
-
-1. artist_rejection_stats(): audio-segmentation QC rollup per VOICE ARTIST (the
-   person who recorded the audio, read from <set_dir>/recorder.txt) — accept/reject
-   counts, rejection rate, and the share of each rejection reason. Built to be
-   handed straight to the vendor who supplies the artists.
-
-2. tasks_export_rows(): flat table of tests (Sr. No. per language, Language,
-   Task ID, Detail, No. of Tasks), optionally filtered by version, for CSV export.
-"""
+"""admin_reports.py — admin dashboard reporting helpers."""
 import csv
 import io
 import os
@@ -18,10 +8,7 @@ import re
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 AUDIO_DIR = os.path.join(BACKEND_DIR, "audio_segmentation")
 
-# The 31 reasons currently OFFERED in AudioSegmentation.vue — keep in sync with its
-# `availableReasons`. Anything an old submission stores that is not in here counts as
-# RETIRED: it can no longer be picked, so the admin dashboard flags those clips for
-# re-review instead of letting a dead reason sit in the reports unnoticed.
+# The 31 reasons currently OFFERED in AudioSegmentation.vue — keep in sync with its `availableReasons`.
 REJECTION_REASONS = [
     'abnormal', 'artist_issue', 'chatter', 'dramatic',
     'duplicate', 'echo', 'fan', 'flag',
@@ -128,23 +115,7 @@ def _reasons_of(results_json):
 
 
 def artist_rejection_stats(tests, ratings_by_test, language=None):
-    """Per-artist QC rollup for audio-segmentation.
-
-    tests            : iterable of Test rows
-    ratings_by_test  : {test_id: [Rating, ...]}
-    language         : keep only batches of this language (None = every language)
-
-    Returns {'artists': [...], 'overall': {...}, 'languages': [...]} where each
-    artist has:
-      artist, batches, clips, total, accepted, rejected, pending, rejection_rate,
-      reasons: [{reason, label, count, pct_of_rejections}],
-      by_language: {lang: {clips, total, accepted, rejected, pending,
-                           rejection_rate, reasons: [...]}}
-
-    'total' stays the number of REVIEWED clips (accepted + rejected) so existing
-    consumers keep working; 'clips' is everything in the artist's batches and
-    'pending' is what nobody has reviewed yet.
-    """
+    """Per-artist QC rollup for audio-segmentation."""
     want_lang = (language or "").strip().lower() or None
     per_artist = {}
     lang_seen = {}          # every language present, even when filtered out
@@ -181,8 +152,7 @@ def artist_rejection_stats(tests, ratings_by_test, language=None):
                     b_reasons[slug] = b_reasons.get(slug, 0) + 1
 
         b_total = b_acc + b_rej
-        # A clip counts as pending until somebody has reviewed it; two annotators
-        # reviewing the same clip must not make it look like two clips are done.
+        # A clip counts as pending until somebody has reviewed it; two annotators reviewing the same clip must not make it look like two clips are done.
         b_pending = max(0, clips - len(reviewed_ids))
         if not clips and not b_total:
             continue
@@ -249,9 +219,7 @@ def artist_rejection_stats(tests, ratings_by_test, language=None):
     }
 
 
-# ---------------------------------------------------------------------------
 # Task export
-# ---------------------------------------------------------------------------
 _VERSION_RE = re.compile(r" - (version \d+|new version)", re.IGNORECASE)
 
 
@@ -261,17 +229,49 @@ def test_version(description):
     return m.group(1).title() if m else "Base"
 
 
+# Every language the platform annotates.
+LANGUAGE_NAMES = [
+    "Assamese", "Bengali", "Bodo", "Dogri", "English", "Gujarati", "Hindi",
+    "Kannada", "Kashmiri", "Konkani", "Maithili", "Malayalam", "Manipuri",
+    "Marathi", "Nepali", "Odia", "Oriya", "Punjabi", "Sanskrit", "Santali",
+    "Sindhi", "Tamil", "Telugu", "Urdu",
+]
+_LANG_RE = re.compile(r"\b(" + "|".join(LANGUAGE_NAMES) + r")\b", re.IGNORECASE)
+
+# Two-letter codes in the benchmark task names (benchmark_hi_batch1), as a last resort for a description that spells no language out.
+_LANG_CODES = {
+    "as": "Assamese", "bn": "Bengali", "en": "English", "gu": "Gujarati",
+    "hi": "Hindi", "kn": "Kannada", "ml": "Malayalam", "mr": "Marathi",
+    "or": "Odia", "pa": "Punjabi", "sa": "Sanskrit", "ta": "Tamil",
+    "te": "Telugu", "ur": "Urdu",
+}
+_CODE_RE = re.compile(r"_([a-z]{2})_batch\d+", re.IGNORECASE)
+
+
 def test_language(description):
-    """'Conversation Editable - Hindi - ...' -> 'Hindi'."""
-    parts = [p.strip() for p in (description or "").split(" - ")]
-    return parts[1] if len(parts) > 1 else "Unknown"
+    """Best-effort language for a task, from its description."""
+    desc = description or ""
+    m = _LANG_RE.search(desc)
+    if m:
+        name = m.group(1).title()
+        return "Odia" if name == "Oriya" else name
+    m = _CODE_RE.search(desc)
+    if m and m.group(1).lower() in _LANG_CODES:
+        return _LANG_CODES[m.group(1).lower()]
+    # Legacy fallback: "<something> - <Language> - ..."
+    parts = [p.strip() for p in desc.split(" - ")]
+    if len(parts) > 1 and parts[1]:
+        return parts[1]
+    return "Unknown"
+
+
+def pretty_test_type(test_type):
+    """'conversation-editable' -> 'Conversation Editable'."""
+    return " ".join(w.capitalize() for w in (test_type or "").split("-")) or "Unknown"
 
 
 def tasks_export_rows(tests, test_type=None, version=None):
-    """Rows for the export table, Sr. No. restarting per language.
-
-    Returns (rows, headers). version may be '6', 'Version 6', 'new', 'base' or None.
-    """
+    """Rows for the export table, Sr."""
     want_v = None
     if version:
         v = str(version).strip().lower()
@@ -290,21 +290,23 @@ def tasks_export_rows(tests, test_type=None, version=None):
         if want_v and test_version(desc) != want_v:
             continue
         n = len(t.json_entry) if isinstance(t.json_entry, list) else 0
-        picked.append((test_language(desc), t.id, desc, n))
+        picked.append((test_language(desc), pretty_test_type(t.test_type), t.id, desc, n))
 
-    # group by language, keep test-id order inside a language
-    picked.sort(key=lambda r: (r[0], r[1]))
+    # group by language, then task type, keeping test-id order inside a group
+    picked.sort(key=lambda r: (r[0], r[1], r[2]))
     rows, counters = [], {}
-    for lang, tid, desc, n in picked:
-        counters[lang] = counters.get(lang, 0) + 1
+    for lang, ttype, tid, desc, n in picked:
+        key = (lang, ttype)
+        counters[key] = counters.get(key, 0) + 1
         rows.append({
-            "sr_no": counters[lang],
+            "sr_no": counters[key],
             "language": lang,
+            "task_type": ttype,
             "task_id": f"#{tid}",
             "detail": desc,
             "num_tasks": n,
         })
-    headers = ["Sr. No.", "Language", "Task ID", "Detail", "No. of Task"]
+    headers = ["Sr. No.", "Language", "Task Type", "Task ID", "Detail", "No. of Task"]
     return rows, headers
 
 
@@ -314,7 +316,8 @@ def tasks_export_csv(tests, test_type=None, version=None):
     w = csv.writer(buf)
     w.writerow(headers)
     for r in rows:
-        w.writerow([r["sr_no"], r["language"], r["task_id"], r["detail"], r["num_tasks"]])
+        w.writerow([r["sr_no"], r["language"], r["task_type"], r["task_id"],
+                    r["detail"], r["num_tasks"]])
     return buf.getvalue()
 
 
@@ -328,8 +331,7 @@ def _artist_csv_cells(name, b):
 
 
 def artist_report_csv(stats):
-    """Vendor-shareable CSV: per-artist rates (incl. pending), a per-language
-    rollup, then the per-artist reason breakdown."""
+    """Vendor-shareable CSV: per-artist rates (incl."""
     buf = io.StringIO()
     w = csv.writer(buf)
     if stats.get("language_filter"):
@@ -369,10 +371,7 @@ def artist_report_csv(stats):
     return buf.getvalue()
 
 
-# ---------------------------------------------------------------------------
-# Clip-level audio-segmentation export (with playable Saffron links)
-# ---------------------------------------------------------------------------
-# Public base URL of the app; a link opens the exact task so the audio can be played.
+# Clip-level audio-segmentation export (with playable Saffron links) Public base URL of the app; a link opens the exact task so the audio can be played.
 SAFFRON_BASE_URL = os.environ.get("SAFFRON_BASE_URL", "https://tts-saffron.ai4bharat.org")
 
 
@@ -383,13 +382,7 @@ def task_link(test_id, task_id):
 
 def audio_clips_rows(tests, ratings_by_test, only_rejected=True, language=None,
                      include_pending=True):
-    """One row per audio clip: who recorded it, the verdict, why, and a link that
-    opens the clip in Saffron so the vendor can listen to it.
-
-    include_pending adds the clips nobody has reviewed yet (evaluation 'pending'),
-    so the export shows the whole batch instead of only the finished part. It is
-    ignored when only_rejected is set.
-    """
+    """One row per audio clip: who recorded it, the verdict, why, and a link that opens the clip in Saffron so the vendor can listen to it."""
     want_lang = (language or "").strip().lower() or None
     rows = []
     for test in tests:
@@ -479,16 +472,9 @@ def audio_clips_csv(tests, ratings_by_test, only_rejected=True, language=None,
     return buf.getvalue()
 
 
-# ---------------------------------------------------------------------------
 # Annotator export (Current working task, pending tasks, tasks done)
-# ---------------------------------------------------------------------------
 def annotators_export_rows(raters, tests, ratings_by_rater, d_from=None, d_to=None, rater_id=None):
-    """Generates rows summarizing annotator work, status, assigned/pending tasks,
-    current task working on, and total completed tasks count.
-
-    d_from, d_to: optional datetime objects for date range filtering.
-    rater_id: optional integer to filter for a single specific rater.
-    """
+    """Generates rows summarizing annotator work, status, assigned/pending tasks, current task working on, and total completed tasks count."""
     if rater_id is not None:
         raters = [r for r in raters if r.id == rater_id]
 
@@ -508,13 +494,53 @@ def annotators_export_rows(raters, tests, ratings_by_rater, d_from=None, d_to=No
                 continue
             filtered_ratings.append(r)
 
-        # Unique completed items across lifetime & period
+        # Payment basis: unique items the annotator actually finished, keyed on (test_id, item id) because item ids restart at 1 in every batch, so a bare item id merges.
         completed_task_ids = {
-            str(r.page_no_progress) for r in filtered_ratings
-            if r.page_no_progress and r.completion_status in ("completed", "skipped")
+            (r.test_id, str(r.page_no_progress)) for r in filtered_ratings
+            if r.page_no_progress and r.completion_status == "completed"
         }
+        skipped_task_ids = {
+            (r.test_id, str(r.page_no_progress)) for r in filtered_ratings
+            if r.page_no_progress and r.completion_status == "skipped"
+        } - completed_task_ids
         completed_count = len(completed_task_ids)
+        skipped_count = len(skipped_task_ids)
+        draft_count = sum(1 for r in filtered_ratings
+                          if r.completion_status not in ("completed", "skipped"))
         submissions_count = len(filtered_ratings)
+
+        # The same figures split by task type (benchmark / conversation / audio / ...) and, one level finer, by the individual batch the work came from.
+        done_by_type, subs_by_type = {}, {}
+        skipped_by_type, drafts_by_type = {}, {}
+        done_by_batch, subs_by_batch, secs_by_batch, last_by_batch = {}, {}, {}, {}
+        skipped_by_batch, drafts_by_batch = {}, {}
+        for r in filtered_ratings:
+            t = tests_by_id.get(r.test_id)
+            ttype = (t.test_type if t else "") or "unknown"
+            subs_by_type[ttype] = subs_by_type.get(ttype, 0) + 1
+            subs_by_batch[r.test_id] = subs_by_batch.get(r.test_id, 0) + 1
+            if r.time_taken_to_submit:
+                _s = r.time_taken_to_submit / 1000.0
+                if 0 < _s < 7200:
+                    secs_by_batch[r.test_id] = secs_by_batch.get(r.test_id, 0.0) + _s
+            if r.time_of_submission and (last_by_batch.get(r.test_id) is None
+                                         or r.time_of_submission > last_by_batch[r.test_id]):
+                last_by_batch[r.test_id] = r.time_of_submission
+            key = (r.test_id, str(r.page_no_progress)) if r.page_no_progress else None
+            if key and r.completion_status == "completed":
+                done_by_type.setdefault(ttype, set()).add(key)
+                done_by_batch.setdefault(r.test_id, set()).add(key)
+            elif key and r.completion_status == "skipped":
+                skipped_by_type.setdefault(ttype, set()).add(key)
+                skipped_by_batch.setdefault(r.test_id, set()).add(key)
+            else:
+                drafts_by_type[ttype] = drafts_by_type.get(ttype, 0) + 1
+                drafts_by_batch[r.test_id] = drafts_by_batch.get(r.test_id, 0) + 1
+        # An item completed on one row and skipped on another is paid, not skipped, so drop any key that also shows up as completed before counting.
+        skipped_by_type = {k: len(v - completed_task_ids) for k, v in skipped_by_type.items()}
+        skipped_by_batch = {k: len(v - completed_task_ids) for k, v in skipped_by_batch.items()}
+        done_by_type = {k: len(v) for k, v in done_by_type.items()}
+        done_by_batch = {k: len(v) for k, v in done_by_batch.items()}
 
         total_secs = 0.0
         last_active_dt = None
@@ -593,10 +619,23 @@ def annotators_export_rows(raters, tests, ratings_by_rater, d_from=None, d_to=No
             "assigned_batches": ", ".join(f"#{x}" for x in assigned_ids) if assigned_ids else "None",
             "total_assigned_tasks": total_assigned_tasks,
             "tasks_completed": completed_count,
+            "tasks_skipped": skipped_count,
+            "tasks_drafts": draft_count,
             "pending_tasks_count": pending_tasks_count,
             "current_working_task": working_on_str,
             "pending_batch_ids": ", ".join(f"#{x}" for x in pending_batch_ids) if pending_batch_ids else "None",
             "submissions": submissions_count,
+            "tasks_done_by_type": done_by_type,
+            "submissions_by_type": subs_by_type,
+            "skipped_by_type": skipped_by_type,
+            "drafts_by_type": drafts_by_type,
+            "tasks_done_by_batch": done_by_batch,
+            "submissions_by_batch": subs_by_batch,
+            "skipped_by_batch": skipped_by_batch,
+            "drafts_by_batch": drafts_by_batch,
+            "secs_by_batch": secs_by_batch,
+            "last_by_batch": last_by_batch,
+            "tasks_done_per_batch_str": batch_breakdown_str(done_by_batch, tests_by_id),
             "hours_spent": round(total_secs / 3600.0, 2),
             "last_active": last_active_dt.isoformat() if last_active_dt else "",
         })
@@ -605,23 +644,111 @@ def annotators_export_rows(raters, tests, ratings_by_rater, d_from=None, d_to=No
     return rows
 
 
+def batch_breakdown_str(done_by_batch, tests_by_id):
+    """'#20500 Conversation Editable: 250 | #20501 Sentence Correction: 180', busiest batch first — the task-wise breakdown squeezed into one CSV cell."""
+    parts = []
+    for tid, n in sorted(done_by_batch.items(), key=lambda kv: (-kv[1], kv[0])):
+        t = tests_by_id.get(tid)
+        label = pretty_test_type(t.test_type if t else "") if t else "Deleted Batch"
+        parts.append(f"#{tid} {label}: {n}")
+    return " | ".join(parts)
+
+
+def task_type_columns(tests, rows=None):
+    """Task types that get a column, busiest first, so the CSV header stays stable."""
+    seen = {}
+    for t in tests or []:
+        seen.setdefault((t.test_type or "") or "unknown", 0)
+    for r in rows or []:
+        for tt, n in (r.get("tasks_done_by_type") or {}).items():
+            seen[tt] = seen.get(tt, 0) + n
+        for tt in (r.get("submissions_by_type") or {}):
+            seen.setdefault(tt, 0)
+    return sorted(seen, key=lambda k: (-seen[k], k))
+
+
 def annotators_export_csv(raters, tests, ratings_by_rater, d_from=None, d_to=None, rater_id=None):
     rows = annotators_export_rows(raters, tests, ratings_by_rater, d_from=d_from, d_to=d_to, rater_id=rater_id)
+    # One "Tasks Done" column per task type, so the export shows how much benchmark / conversation / audio work each person did, not only a total.
+    types = task_type_columns(tests, rows)
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow([
         "Annotator ID", "Name", "Email", "Gender", "Age", "Account Status", "Status",
-        "Assigned Test Batches", "Total Tasks Assigned", "Tasks Done (Completed)",
+        "Assigned Test Batches", "Total Tasks Assigned",
+        "Tasks Done (Payable)", "Skipped (Not Paid)", "Drafts (In Progress)",
         "Pending Tasks Count", "Current Working Task / Batch", "Pending Batch IDs",
-        "Total Submissions", "Hours Spent", "Last Active Date"
-    ])
+        "Hours Spent", "Last Active Date"
+    ] + ["Tasks Done - " + pretty_test_type(t) for t in types]
+      + ["Skipped - " + pretty_test_type(t) for t in types]
+      + ["Tasks Done Per Batch"])
     for r in rows:
         w.writerow([
             r["rater_id"], r["name"], r["email"], r["gender"], r["age"],
             r["account_status"], r["status"], r["assigned_batches"],
-            r["total_assigned_tasks"], r["tasks_completed"], r["pending_tasks_count"],
-            r["current_working_task"], r["pending_batch_ids"], r["submissions"],
+            r["total_assigned_tasks"], r["tasks_completed"], r["tasks_skipped"],
+            r["tasks_drafts"], r["pending_tasks_count"],
+            r["current_working_task"], r["pending_batch_ids"],
             r["hours_spent"], r["last_active"]
+        ] + [r["tasks_done_by_type"].get(t, 0) for t in types]
+          + [r["skipped_by_type"].get(t, 0) for t in types]
+          + [r["tasks_done_per_batch_str"]])
+    return buf.getvalue()
+
+
+def annotator_batches_rows(raters, tests, ratings_by_rater, d_from=None, d_to=None, rater_id=None):
+    """Long-format task-wise breakdown: one row per (annotator, batch) they worked on."""
+    rows = annotators_export_rows(raters, tests, ratings_by_rater,
+                                  d_from=d_from, d_to=d_to, rater_id=rater_id)
+    tests_by_id = {t.id: t for t in tests}
+    out = []
+    for r in rows:
+        assigned = {int(x.strip().lstrip("#")) for x in str(r["assigned_batches"]).split(",")
+                    if x.strip().lstrip("#").isdigit()}
+        for tid in sorted(set(r["tasks_done_by_batch"]) | set(r["submissions_by_batch"])):
+            t = tests_by_id.get(tid)
+            entries = t.json_entry if (t and isinstance(t.json_entry, list)) else []
+            done = r["tasks_done_by_batch"].get(tid, 0)
+            total = len(entries)
+            last = r["last_by_batch"].get(tid)
+            out.append({
+                "rater_id": r["rater_id"],
+                "name": r["name"],
+                "email": r["email"],
+                "test_id": tid,
+                "test_type": pretty_test_type(t.test_type) if t else "Deleted Batch",
+                "language": test_language(t.description if t else ""),
+                "description": (t.description if t else "") or "",
+                "assigned": "Yes" if tid in assigned else "No",
+                "tasks_done": done,
+                "total_items": total,
+                "percent": round(100.0 * done / total, 1) if total else "",
+                "skipped": r["skipped_by_batch"].get(tid, 0),
+                "drafts": r["drafts_by_batch"].get(tid, 0),
+                "hours_spent": round(r["secs_by_batch"].get(tid, 0.0) / 3600.0, 2),
+                "last_active": last.isoformat() if last else "",
+            })
+    out.sort(key=lambda x: (x["name"].lower(), -x["tasks_done"], x["test_id"]))
+    return out
+
+
+def annotator_batches_csv(raters, tests, ratings_by_rater, d_from=None, d_to=None, rater_id=None):
+    rows = annotator_batches_rows(raters, tests, ratings_by_rater,
+                                  d_from=d_from, d_to=d_to, rater_id=rater_id)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([
+        "Annotator ID", "Name", "Email", "Batch / Test ID", "Task Type", "Language",
+        "Batch Description", "Assigned To Them", "Tasks Done (Payable)",
+        "Total Items In Batch", "% Of Batch Done", "Skipped (Not Paid)",
+        "Drafts (In Progress)", "Hours Spent", "Last Active Date",
+    ])
+    for r in rows:
+        w.writerow([
+            r["rater_id"], r["name"], r["email"], r["test_id"], r["test_type"],
+            r["language"], r["description"], r["assigned"], r["tasks_done"],
+            r["total_items"], r["percent"], r["skipped"], r["drafts"],
+            r["hours_spent"], r["last_active"],
         ])
     return buf.getvalue()
 

@@ -188,3 +188,16 @@ backend/conversation_editable_tasks/version_5/
 *.bak.*
 *.bak_*
 *.BROKEN_DO_NOT_RUN
+CREDENTIALS.md
+
+# Bulk annotation data lives on the server, not in git: raw recordings, source
+# scripts and generated task/export payloads. set0-set3 audio was tracked before
+# this rule and stays tracked; nothing new enters the repo.
+backend/audio_segmentation/set*/
+backend/tasks/
+
+# Runtime state and secrets: rotating signup key, server logs, QC job records.
+# The *_state.csv pipeline trackers under backend/state/ stay tracked.
+backend/state/signup_key.txt
+backend/logs/
+backend/qc_jobs/

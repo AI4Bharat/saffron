@@ -27,7 +27,6 @@
       <br><br>
       <strong>Important:</strong> If you refresh the page during the screening test, the test will restart from the beginning, but the timer will keep running in the background. You won’t get extra time, so please avoid refreshing the page.
       <!-- <br><br> -->
-      <!-- <strong>Note:</strong> This behavior applies only to the screening test. The main study does not have a timer and will not be affected if you refresh the page. -->
     </div>
     <div class="text-center mt-4">
       <button class="btn btn-primary btn-lg" @click="proceedToTest">Starting Screening Test</button>

@@ -261,6 +261,7 @@ const currentTestComponent = computed(() => {
     'audio-segmentation': AudioSegmentation,
     'benchmark-verification': BenchmarkVerification,
     'benchmark-parallel': BenchmarkVerification,
+    'benchmark-evaluation-v2': BenchmarkVerification,
   }
 
   return testComponents[data.value.test_type]

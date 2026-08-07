@@ -1,0 +1,3051 @@
+<template>
+  <div class="dashboard-container py-4">
+    <!-- Header -->
+    <div class="d-flex flex-wrap justify-content-between align-items-center mb-4 pb-3 border-bottom border-secondary-subtle">
+      <div>
+        <h1 class="h2 fw-bold text-dark mb-1">Admin Dashboard</h1>
+        <p class="text-muted mb-0">
+          Monitor the prompt pool, languages, classes and annotator progress in real-time.
+        </p>
+      </div>
+      <div class="d-flex align-items-center gap-3 mt-3 mt-md-0">
+        <div class="d-flex align-items-center gap-2 bg-light px-3 py-2 rounded border shadow-sm">
+          <div :class="['status-dot', isAutoRefreshActive ? 'active animate-pulse' : '']"></div>
+          <span class="text-xs fw-medium text-secondary">
+            {{ isAutoRefreshActive ? `Auto-refreshing in ${countdown}s` : 'Auto-refresh paused' }}
+          </span>
+          <button @click="toggleAutoRefresh" class="btn btn-sm btn-outline-secondary ms-2" title="Toggle Auto-Refresh">
+            <i :class="['bi', isAutoRefreshActive ? 'bi-pause-fill' : 'bi-play-fill']"></i>
+          </button>
+        </div>
+        <button class="btn btn-primary d-flex align-items-center gap-2 shadow-sm" :disabled="loading" @click="load">
+          <i :class="['bi', 'bi-arrow-clockwise', { 'animate-spin': loading }]"></i>
+          <span>Refresh</span>
+        </button>
+      </div>
+    </div>
+
+    <div v-if="error" class="alert alert-danger alert-dismissible fade show shadow-sm">
+      <i class="bi bi-exclamation-triangle-fill me-2"></i>{{ error }}
+      <button type="button" class="btn-close" @click="error = ''"></button>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <div class="tabs-nav mb-4 bg-white p-2 rounded shadow-sm border d-flex gap-2 flex-wrap">
+      <button v-for="t in tabs" :key="t.key" :title="t.hint" @click="setTab(t.key)"
+              :class="['tab-btn btn flex-fill py-2 fw-semibold d-flex align-items-center justify-content-center gap-2',
+                       tab === t.key ? 'btn-dark text-white' : 'btn-light text-secondary']">
+        <i :class="['bi', t.icon]"></i><span>{{ t.label }}</span>
+      </button>
+    </div>
+
+    <div class="tab-content">
+      <!-- ══════════════════ OVERVIEW ══════════════════ -->
+      <div v-if="tab === 'overview'" class="tab-pane-active">
+        <div class="row g-4 mb-4">
+          <div class="col-12 col-sm-6 col-xl-3">
+            <div class="kpi-card bg-white p-4 rounded shadow-sm border border-start border-4 border-primary">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="text-muted fw-medium text-uppercase text-xs">Prompts in the pool</span>
+                <div class="kpi-icon-wrapper bg-primary-subtle text-primary"><i class="bi bi-collection-fill fs-5"></i></div>
+              </div>
+              <h2 class="fw-bold text-dark mb-1">{{ (stats.total || 0).toLocaleString() }}</h2>
+              <div class="text-xs text-muted d-flex align-items-center gap-1">
+                <span class="text-success fw-bold">{{ stats.languages || 0 }} languages</span>
+                <span>•</span><span>{{ uploads.length }} upload(s)</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-12 col-sm-6 col-xl-3">
+            <div class="kpi-card bg-white p-4 rounded shadow-sm border border-start border-4 border-success">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="text-muted fw-medium text-uppercase text-xs">Annotated</span>
+                <div class="kpi-icon-wrapper bg-success-subtle text-success"><i class="bi bi-check-circle-fill fs-5"></i></div>
+              </div>
+              <h2 class="fw-bold text-dark mb-1">
+                {{ (stats.done || 0).toLocaleString() }}
+                <span class="text-muted fs-6">/ {{ (stats.total || 0).toLocaleString() }}</span>
+              </h2>
+              <div class="progress mt-2" style="height: 6px;">
+                <div class="progress-bar bg-success" :style="{ width: (stats.progress || 0) + '%' }"></div>
+              </div>
+              <p class="text-xs text-muted mt-2 mb-0">
+                Coverage: {{ showPct(stats.progress, stats.done) }}% · {{ stats.completed_today || 0 }} today
+              </p>
+            </div>
+          </div>
+
+          <div class="col-12 col-sm-6 col-xl-3">
+            <div class="kpi-card bg-white p-4 rounded shadow-sm border border-start border-4 border-warning">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="text-muted fw-medium text-uppercase text-xs">In progress</span>
+                <div class="kpi-icon-wrapper bg-warning-subtle text-warning"><i class="bi bi-hourglass-split fs-5"></i></div>
+              </div>
+              <h2 class="fw-bold text-dark mb-1">{{ (stats.claimed || 0).toLocaleString() }}</h2>
+              <p class="text-xs text-muted mb-0">
+                Held by annotators · {{ (stats.available || 0).toLocaleString() }} still unclaimed
+              </p>
+            </div>
+          </div>
+
+          <div class="col-12 col-sm-6 col-xl-3">
+            <div class="kpi-card bg-white p-4 rounded shadow-sm border border-start border-4 border-info">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="text-muted fw-medium text-uppercase text-xs">Annotators</span>
+                <div class="kpi-icon-wrapper bg-info-subtle text-info"><i class="bi bi-people-fill fs-5"></i></div>
+              </div>
+              <h2 class="fw-bold text-dark mb-1">
+                {{ stats.active_annotators || 0 }}<span class="text-muted fs-6">/ {{ stats.annotators || 0 }}</span>
+              </h2>
+              <div class="text-xs text-muted d-flex align-items-center gap-1">
+                <span class="text-primary fw-bold">{{ (stats.edited || 0).toLocaleString() }} edits</span>
+                <span>•</span>
+                <span class="text-warning fw-bold">{{ (stats.flagged || 0).toLocaleString() }} flagged</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Needs attention: actionable task health (click a card to jump) -->
+        <h3 class="fw-bold text-dark mb-3"><i class="bi bi-clipboard2-pulse-fill text-primary me-2"></i>Needs Attention</h3>
+        <div class="row g-4 mb-4">
+          <div class="col-12 col-md-4">
+            <button type="button" class="attention-card w-100 text-start bg-white p-4 rounded shadow-sm border border-start border-4 border-danger"
+                    @click="focusTasks('unassigned')">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="text-muted fw-medium text-uppercase text-xs">Unassigned Tasks</span>
+                <div class="kpi-icon-wrapper bg-danger-subtle text-danger"><i class="bi bi-folder-x fs-5"></i></div>
+              </div>
+              <h2 class="fw-bold text-dark mb-1">{{ taskTotals.unassigned || 0 }}</h2>
+              <p class="text-xs text-muted mb-0"><i class="bi bi-arrow-right-short"></i> Nobody can work these — assign them.</p>
+            </button>
+          </div>
+          <div class="col-12 col-md-4">
+            <button type="button" class="attention-card w-100 text-start bg-white p-4 rounded shadow-sm border border-start border-4 border-warning"
+                    @click="focusTasks('not-started')">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="text-muted fw-medium text-uppercase text-xs">Assigned, Not Started</span>
+                <div class="kpi-icon-wrapper bg-warning-subtle text-warning"><i class="bi bi-hourglass-bottom fs-5"></i></div>
+              </div>
+              <h2 class="fw-bold text-dark mb-1">{{ notStartedTasks }}</h2>
+              <p class="text-xs text-muted mb-0"><i class="bi bi-arrow-right-short"></i> Handed out but nothing pulled yet.</p>
+            </button>
+          </div>
+          <div class="col-12 col-md-4">
+            <button type="button" class="attention-card w-100 text-start bg-white p-4 rounded shadow-sm border border-start border-4 border-success"
+                    @click="focusTasks('in-progress')">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="text-muted fw-medium text-uppercase text-xs">Almost Done</span>
+                <div class="kpi-icon-wrapper bg-success-subtle text-success"><i class="bi bi-flag-fill fs-5"></i></div>
+              </div>
+              <h2 class="fw-bold text-dark mb-1">{{ almostDoneTasks }}</h2>
+              <p class="text-xs text-muted mb-0"><i class="bi bi-arrow-right-short"></i> &ge;80% done — a final push finishes them.</p>
+            </button>
+          </div>
+        </div>
+
+        <div v-if="stats.stale_claims" class="alert alert-warning d-flex align-items-center shadow-sm">
+          <i class="bi bi-hourglass-split me-2"></i>
+          <span><strong>{{ stats.stale_claims }}</strong> prompt(s) have been held for more than
+            {{ staleHours }}h without being finished.</span>
+          <button class="btn btn-sm btn-warning ms-auto" :disabled="reclaiming" @click="reclaim">
+            Return them to the pool
+          </button>
+        </div>
+
+        <div class="row g-4">
+          <div class="col-12">
+            <div class="bg-white p-4 rounded shadow-sm border h-100">
+              <h5 class="fw-bold text-dark mb-3"><i class="bi bi-translate me-2 text-primary"></i>Progress by language</h5>
+              <div v-for="L in languages" :key="L.language" class="mb-3 lang-line" @click="openLanguage(L)">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                  <span class="fw-semibold text-dark">{{ L.language }}</span>
+                  <span class="text-xs text-muted">
+                    {{ L.done.toLocaleString() }} / {{ L.total.toLocaleString() }}
+                    <span class="fw-bold text-success ms-1">{{ showPct(L.progress, L.done) }}%</span>
+                  </span>
+                </div>
+                <div class="progress" style="height: 7px;">
+                  <div class="progress-bar bg-success" :style="{ width: pct(L.completed, L.total) }"></div>
+                  <div class="progress-bar bg-warning" :style="{ width: pct(L.flagged, L.total) }"></div>
+                  <div class="progress-bar bg-info" :style="{ width: pct(L.claimed, L.total) }"></div>
+                </div>
+              </div>
+              <p v-if="!languages.length" class="text-muted small mb-0">No prompts loaded yet.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ══════════════════ TASKS ══════════════════ -->
+      <div v-else-if="tab === 'tasks'" class="tab-pane-active">
+        <div class="d-flex justify-content-center mb-4">
+          <div class="tasks-subnav d-inline-flex align-items-center">
+            <button type="button" @click="tasksSubTab = 'overview'"
+                    :class="['subnav-btn', { active: tasksSubTab === 'overview' }]">
+              <i class="bi bi-stack"></i><span>Overview</span>
+            </button>
+            <button type="button" @click="tasksSubTab = 'all'"
+                    :class="['subnav-btn', { active: tasksSubTab === 'all' }]">
+              <i class="bi bi-list-task"></i><span>All Tasks</span>
+              <span class="subnav-badge">{{ shownTasks.length }}</span>
+            </button>
+          </div>
+        </div>
+
+        <div v-if="tasksLoading" class="text-center py-5"><span class="spinner-border text-secondary"></span></div>
+
+        <template v-else>
+          <!-- ── Tasks overview ── -->
+          <div v-show="tasksSubTab === 'overview'">
+            <h3 class="fw-bold text-dark mb-3"><i class="bi bi-stack text-primary me-2"></i>Tasks Overview</h3>
+            <div class="d-flex flex-wrap gap-2 mb-4">
+              <div class="ov-tile">
+                <span class="lbl">Tasks</span>
+                <span class="val">{{ taskTotals.tasks || 0 }}</span>
+                <span class="sub">one per language &amp; class</span>
+              </div>
+              <div class="ov-tile">
+                <span class="lbl">Assigned</span>
+                <span class="val">{{ taskTotals.assigned || 0 }}
+                  <small class="text-muted fw-normal">/ {{ taskTotals.tasks || 0 }}</small></span>
+                <span class="sub"><span class="text-danger fw-semibold">{{ taskTotals.unassigned || 0 }}</span> waiting for an annotator</span>
+              </div>
+              <div class="ov-tile">
+                <span class="lbl">Task progress</span>
+                <span class="val"><span class="text-success">{{ taskTotals.complete || 0 }}</span> done
+                  <span class="text-muted mx-1 fw-normal">·</span>
+                  <span class="text-warning-emphasis">{{ taskTotals.in_progress || 0 }}</span> running</span>
+                <span class="sub">a task is done when every prompt in it is</span>
+              </div>
+              <div class="ov-tile">
+                <span class="lbl">Prompts annotated</span>
+                <span class="val">{{ (taskTotals.done || 0).toLocaleString() }}
+                  <small class="text-muted fw-normal">/ {{ (taskTotals.total || 0).toLocaleString() }}</small></span>
+                <div class="progress mt-1 mb-1" style="height: 5px;">
+                  <div class="progress-bar bg-success" :style="{ width: (taskTotals.progress || 0) + '%' }"></div>
+                </div>
+                <span class="sub">{{ showPct(taskTotals.progress, taskTotals.done) }}% coverage</span>
+              </div>
+              <div class="ov-tile">
+                <span class="lbl">Still unclaimed</span>
+                <span class="val">{{ (taskTotals.available || 0).toLocaleString() }}</span>
+                <span class="sub">{{ (taskTotals.claimed || 0).toLocaleString() }} being worked on now</span>
+              </div>
+            </div>
+
+            <div class="bg-white p-4 rounded shadow-sm border">
+              <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+                <div>
+                  <h5 class="fw-bold text-dark mb-1">Tasks by language</h5>
+                  <p class="text-muted text-xs mb-0">Click a language to see each class as its own task.</p>
+                </div>
+                <button class="btn btn-sm btn-outline-secondary"
+                        @click="exportSimple('/pool/admin/export_tasks_csv', 'asr_task_list.csv', 'Task list')">
+                  <i class="bi bi-filetype-csv me-1"></i>Export task list
+                </button>
+              </div>
+
+              <div v-for="L in tasksByLanguage" :key="L.language" class="border rounded mb-2 overflow-hidden">
+                <button class="lang-row btn w-100 d-flex align-items-center gap-3 py-3 px-3 text-start"
+                        @click="toggle(L.language)">
+                  <i class="bi text-secondary" :class="expanded[L.language] ? 'bi-chevron-down' : 'bi-chevron-right'"></i>
+                  <span class="fw-bold text-dark" style="min-width:110px">{{ L.language }}</span>
+                  <span class="text-xs text-muted" style="min-width:150px">
+                    {{ L.tasks.length }} task(s) · {{ L.total.toLocaleString() }} prompts
+                  </span>
+                  <span class="badge rounded-pill" :class="L.assigned === L.tasks.length ? 'bg-success-subtle text-success' : 'bg-light text-secondary border'">
+                    {{ L.assigned }}/{{ L.tasks.length }} assigned
+                  </span>
+                  <div class="progress flex-grow-1" style="height: 9px;">
+                    <div class="progress-bar bg-success" :style="{ width: pct(L.completed, L.total) }" title="completed"></div>
+                    <div class="progress-bar bg-warning" :style="{ width: pct(L.flagged, L.total) }" title="flagged"></div>
+                    <div class="progress-bar bg-info" :style="{ width: pct(L.claimed, L.total) }" title="in progress"></div>
+                  </div>
+                  <span class="fw-bold text-success" style="min-width:56px;text-align:right">{{ showPct(L.progress, L.done) }}%</span>
+                </button>
+
+                <div v-if="expanded[L.language]" class="bg-light border-top p-3">
+                  <div class="table-responsive bg-white rounded border">
+                    <table class="table table-sm table-hover align-middle mb-0">
+                      <thead class="table-light">
+                        <tr>
+                          <th style="width:80px">Task ID</th><th>Class</th>
+                          <th>Assigned to</th><th>State</th>
+                          <th class="text-end">Prompts</th><th class="text-end">Completed</th>
+                          <th class="text-end">In progress</th><th class="text-end">Available</th>
+                          <th style="width:160px">Progress</th><th style="width:150px"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="t in L.tasks" :key="t.task_id" class="cursor-pointer" @click="openTask(t.task_id)">
+                          <td><span class="task-id-badge">#{{ t.task_id }}</span></td>
+                          <td class="fw-semibold">Class {{ t.class }}</td>
+                          <td>
+                            <span v-if="t.assignee" class="text-dark text-xs">{{ t.assignee.name }}</span>
+                            <span v-else class="badge bg-danger-subtle text-danger rounded-pill">Unassigned</span>
+                          </td>
+                          <td><span class="badge rounded-pill" :class="stateBadge(t.state)">{{ t.state }}</span></td>
+                          <td class="text-end">{{ t.total.toLocaleString() }}</td>
+                          <td class="text-end text-success fw-semibold">{{ t.completed.toLocaleString() }}</td>
+                          <td class="text-end">{{ t.claimed.toLocaleString() }}</td>
+                          <td class="text-end text-muted">{{ t.available.toLocaleString() }}</td>
+                          <td>
+                            <div class="progress" style="height:6px"><div class="progress-bar bg-success" :style="{ width: t.progress + '%' }"></div></div>
+                            <small class="text-muted">{{ showPct(t.progress, t.done) }}%</small>
+                          </td>
+                          <td class="text-end text-nowrap" @click.stop>
+                            <button class="btn btn-sm btn-outline-primary me-1" @click="openAssign([t.task_id])">
+                              <i class="bi bi-person-plus"></i>
+                            </button>
+                            <button v-if="t.assignee" class="btn btn-sm btn-outline-secondary"
+                                    title="Take this task back" @click="unassignTask(t)">
+                              <i class="bi bi-person-dash"></i>
+                            </button>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+              <p v-if="!tasksByLanguage.length" class="text-muted small mb-0">No tasks yet — load prompts into the pool first.</p>
+            </div>
+          </div>
+
+          <!-- ── All tasks ── -->
+          <div v-show="tasksSubTab === 'all'">
+            <div class="bg-white p-4 rounded shadow-sm border">
+              <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+                <div>
+                  <h5 class="fw-bold text-dark mb-1">All tasks</h5>
+                  <p class="text-muted text-xs mb-0">
+                    One task per language &amp; class. A task belongs to one annotator at a time —
+                    click a row to open it, tick rows to assign them together.
+                  </p>
+                </div>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-sm btn-primary" :disabled="!selectedTasks.length"
+                          @click="openAssign(selectedTasks)">
+                    <i class="bi bi-person-plus me-1"></i>Assign
+                    <span v-if="selectedTasks.length" class="badge bg-white text-primary ms-1">{{ selectedTasks.length }}</span>
+                  </button>
+                  <button class="btn btn-sm btn-outline-secondary" @click="loadTasks">
+                    <i class="bi bi-arrow-clockwise"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+                <select v-model="taskFilters.language" class="form-select form-select-sm w-auto">
+                  <option value="">All languages</option>
+                  <option v-for="l in taskLanguages" :key="l" :value="l">{{ l }}</option>
+                </select>
+                <select v-model="taskFilters.class" class="form-select form-select-sm w-auto">
+                  <option value="">All classes</option>
+                  <option v-for="c in taskClasses" :key="c" :value="c">Class {{ c }}</option>
+                </select>
+                <select v-if="taskTypes.length > 1" v-model="taskFilters.type"
+                        class="form-select form-select-sm w-auto">
+                  <option value="">All work types</option>
+                  <option v-for="tt in taskTypes" :key="tt" :value="tt">{{ humanizeType(tt) }}</option>
+                </select>
+                <select v-model="taskFilters.state" class="form-select form-select-sm w-auto">
+                  <option value="">Any state</option>
+                  <option v-for="s in taskStates" :key="s" :value="s">{{ s }}</option>
+                </select>
+                <select v-model="taskFilters.annotator" class="form-select form-select-sm w-auto">
+                  <option value="">Any annotator</option>
+                  <option value="none">Unassigned</option>
+                  <option v-for="a in annotators" :key="a.rater_id" :value="String(a.rater_id)">{{ a.name }}</option>
+                </select>
+                <input v-model="taskFilters.q" class="form-control form-control-sm" style="width:220px"
+                       placeholder="Task ID, language, class, holder…">
+                <button class="btn btn-sm btn-outline-secondary" @click="resetTaskFilters">Clear</button>
+                <span class="ms-auto text-xs text-muted">{{ shownTasks.length }} of {{ taskTotals.tasks || 0 }} task(s)</span>
+              </div>
+
+              <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                  <thead class="table-light">
+                    <tr>
+                      <th style="width:34px">
+                        <input class="form-check-input" type="checkbox"
+                               :checked="allShownSelected" @change="toggleSelectAll">
+                      </th>
+                      <th style="width:90px">Task ID</th><th>Language</th><th>Class</th>
+                      <th>Assigned to</th><th>State</th>
+                      <th class="text-end">Prompts</th><th class="text-end">Done</th>
+                      <th class="text-end">In progress</th><th class="text-end">Available</th>
+                      <th style="width:170px">Progress</th><th style="width:110px"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="t in shownTasks" :key="t.task_id" class="cursor-pointer" @click="openTask(t.task_id)">
+                      <td @click.stop>
+                        <input class="form-check-input" type="checkbox"
+                               :checked="selectedTasks.includes(t.task_id)" @change="toggleTaskPick(t.task_id)">
+                      </td>
+                      <td><span class="task-id-badge">#{{ t.task_id }}</span></td>
+                      <td class="fw-semibold text-dark">{{ t.language }}</td>
+                      <td>Class {{ t.class }}</td>
+                      <td>
+                        <div v-if="t.assignee">
+                          <div class="text-dark text-xs fw-semibold">{{ t.assignee.name }}</div>
+                          <div class="text-muted" style="font-size:.7rem">{{ t.assignee.assigned_at_ist }}</div>
+                        </div>
+                        <span v-else class="badge bg-danger-subtle text-danger rounded-pill">Unassigned</span>
+                      </td>
+                      <td><span class="badge rounded-pill" :class="stateBadge(t.state)">{{ t.state }}</span></td>
+                      <td class="text-end">{{ t.total.toLocaleString() }}</td>
+                      <td class="text-end text-success fw-semibold">{{ t.done.toLocaleString() }}</td>
+                      <td class="text-end">{{ t.claimed.toLocaleString() }}</td>
+                      <td class="text-end text-muted">{{ t.available.toLocaleString() }}</td>
+                      <td>
+                        <div class="progress" style="height:6px"><div class="progress-bar bg-success" :style="{ width: t.progress + '%' }"></div></div>
+                        <small class="text-muted">{{ showPct(t.progress, t.done) }}%</small>
+                      </td>
+                      <td class="text-end text-nowrap" @click.stop>
+                        <button class="btn btn-sm btn-outline-primary me-1" title="Assign this task"
+                                @click="openAssign([t.task_id])"><i class="bi bi-person-plus"></i></button>
+                        <button v-if="t.assignee" class="btn btn-sm btn-outline-secondary" title="Take this task back"
+                                @click="unassignTask(t)"><i class="bi bi-person-dash"></i></button>
+                      </td>
+                    </tr>
+                    <tr v-if="!shownTasks.length"><td colspan="12" class="text-center text-muted py-4">Nothing matches those filters.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- ══════════════════ ANNOTATORS ══════════════════ -->
+      <div v-else-if="tab === 'annotators'" class="tab-pane-active">
+        <!-- Stale-annotator alert -->
+        <div v-if="staleRaters.length" class="alert stale-alert d-flex align-items-center gap-2 shadow-sm mb-3">
+          <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+          <div class="flex-grow-1">
+            <strong>{{ staleRaters.length }}</strong>
+            annotator{{ staleRaters.length > 1 ? 's have' : ' has' }} tasks assigned but no activity in {{ STALE_DAYS }}+ days.
+          </div>
+          <button class="btn btn-sm btn-warning flex-shrink-0 fw-semibold" :disabled="bulkNudging" @click="remindAllStale">
+            <span v-if="bulkNudging" class="spinner-border spinner-border-sm me-1"></span>
+            <i v-else class="bi bi-bell-fill me-1"></i>Remind all
+          </button>
+          <button class="btn btn-sm btn-outline-dark flex-shrink-0" @click="showStaleOnly = !showStaleOnly">
+            <i :class="['bi me-1', showStaleOnly ? 'bi-list-ul' : 'bi-funnel-fill']"></i>
+            {{ showStaleOnly ? 'Show all' : 'Show only these' }}
+          </button>
+        </div>
+
+        <div class="card shadow-sm border">
+          <!-- Toolbar -->
+          <div class="card-header bg-white py-3">
+            <div class="d-flex flex-wrap align-items-center gap-3">
+              <div class="me-auto">
+                <h3 class="fw-bold text-dark m-0 fs-5">Annotators &amp; Task Assignment</h3>
+                <small class="text-muted">A task is <strong>locked</strong> to one annotator at a time.</small>
+              </div>
+
+              <div class="search-wrap position-relative">
+                <i class="bi bi-search search-icon"></i>
+                <input v-model="raterSearch" type="text" class="form-control form-control-sm ps-5"
+                       placeholder="Search name or email…">
+                <button v-if="raterSearch" class="btn btn-sm search-clear" @click="raterSearch = ''" title="Clear">
+                  <i class="bi bi-x-lg"></i>
+                </button>
+              </div>
+
+              <button class="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1"
+                      @click="toggleMenu('exports', $event, 280)" title="Download reports">
+                <i class="bi bi-download"></i> Exports <i class="bi bi-chevron-down text-xs"></i>
+              </button>
+              <button class="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1"
+                      @click="toggleMenu('messages', $event, 240)" title="Message annotators">
+                <i class="bi bi-chat-dots"></i> Messages <i class="bi bi-chevron-down text-xs"></i>
+              </button>
+
+              <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" role="switch" id="showAllRaters" v-model="showInactive">
+                <label class="form-check-label text-xs text-secondary user-select-none" for="showAllRaters">Show inactive</label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Date window + what it adds up to -->
+          <div class="filter-bar border-top border-bottom">
+            <div class="d-flex flex-wrap align-items-center gap-3">
+              <div class="d-flex align-items-center gap-2">
+                <i class="bi bi-calendar3 text-secondary"></i>
+                <div class="btn-group btn-group-sm">
+                  <button v-for="pr in activityPresets" :key="pr.label" class="btn"
+                          :class="windowPreset === pr.label ? 'btn-primary' : 'btn-outline-secondary'"
+                          @click="applyPreset(pr)">{{ pr.label }}</button>
+                </div>
+              </div>
+              <div class="d-flex align-items-center gap-1">
+                <input type="date" v-model="activityFrom" class="form-control form-control-sm date-input" title="From">
+                <span class="text-muted text-xs">→</span>
+                <input type="date" v-model="activityTo" class="form-control form-control-sm date-input" title="To">
+                <button class="btn btn-sm btn-primary ms-1" :disabled="activityLoading" @click="loadActivityWindow">
+                  <span v-if="activityLoading" class="spinner-border spinner-border-sm"></span>
+                  <span v-else>Apply</span>
+                </button>
+              </div>
+
+              <div v-if="activityWindow" class="ms-auto d-flex align-items-center gap-3 stat-strip">
+                <div class="stat" title="Prompts completed in this window — what payment is based on">
+                  <div class="stat-val text-success">{{ activityWindow.totals.completed.toLocaleString() }}</div>
+                  <div class="stat-lbl">payable</div>
+                </div>
+                <div class="stat" title="Prompts handed back as unusable — not paid">
+                  <div class="stat-val" :class="activityWindow.totals.flagged ? 'text-warning' : 'text-muted'">
+                    {{ activityWindow.totals.flagged }}</div>
+                  <div class="stat-lbl">flagged</div>
+                </div>
+                <div class="stat" title="Prompts whose text the annotator corrected">
+                  <div class="stat-val text-primary">{{ activityWindow.totals.edited }}</div>
+                  <div class="stat-lbl">edited</div>
+                </div>
+                <div class="stat" title="Claimed but not yet finished">
+                  <div class="stat-val text-muted">{{ activityWindow.totals.holding }}</div>
+                  <div class="stat-lbl">holding</div>
+                </div>
+                <div class="stat"><div class="stat-val">{{ activityWindow.totals.hours }}</div><div class="stat-lbl">hours</div></div>
+                <div class="stat"><div class="stat-val">{{ activityWindow.totals.active_annotators }}</div><div class="stat-lbl">active</div></div>
+              </div>
+            </div>
+
+            <div class="d-flex flex-wrap align-items-center gap-2 mt-2 pt-2 border-top">
+              <span class="text-xs fw-bold text-secondary text-uppercase">
+                By type<span v-if="!activityWindow" class="text-muted fw-normal text-lowercase"> · all time</span>
+              </span>
+              <span class="type-chip" title="ASR text review: edit the prompt and label its difficulty">
+                ASR text review<b>{{ (stats.done || 0).toLocaleString() }}</b>
+              </span>
+              <button class="btn btn-sm btn-link text-decoration-none p-0 ms-auto text-xs"
+                      @click="exportSimple('/pool/admin/export_rater_activity_csv', 'asr_annotator_days.csv', 'Per-day report')">
+                <i class="bi bi-download me-1"></i>Task-wise CSV
+              </button>
+            </div>
+          </div>
+
+          <!-- The table -->
+          <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0 rater-table">
+              <thead>
+                <tr>
+                  <th class="ps-3 sortable-th" @click="sortRaters('name')">Annotator <i :class="['bi', sortIcon('name')]"></i></th>
+                  <th class="sortable-th" style="width: 230px;" @click="sortRaters('assigned')">Assigned tasks <i :class="['bi', sortIcon('assigned')]"></i></th>
+                  <th class="sortable-th" style="width: 185px;" @click="sortRaters('lastactive')">Status <i :class="['bi', sortIcon('lastactive')]"></i></th>
+                  <th class="sortable-th text-end" style="width: 240px;" @click="sortRaters('completed')">
+                    {{ activityWindow ? 'In period / All' : 'Prompts done' }} <i :class="['bi', sortIcon('completed')]"></i>
+                  </th>
+                  <th class="text-end pe-3" style="width: 130px;">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template v-for="a in shownAnnotators" :key="a.rater_id">
+                  <tr :class="{ 'stale-row': isStale(a), 'row-open': expandedRaters.includes(a.rater_id) }">
+                    <td class="ps-3">
+                      <div class="d-flex align-items-center gap-2" style="min-width: 0;">
+                        <div class="avatar-circle flex-shrink-0" :class="{ 'avatar-off': a.account_active === false }">
+                          {{ (a.name || '?').charAt(0).toUpperCase() }}
+                        </div>
+                        <div style="min-width: 0;">
+                          <div class="fw-semibold text-dark text-truncate" style="max-width: 260px;" :title="a.name">{{ a.name }}</div>
+                          <div class="text-muted text-xs text-truncate" style="max-width: 260px;" :title="a.email">
+                            {{ a.email }}
+                            <span v-if="a.gender || a.age" class="text-body-tertiary">· {{ a.gender }}{{ a.age ? ', ' + a.age : '' }}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+
+                    <td>
+                      <div v-if="(a.assigned_task_ids || []).length" class="d-flex flex-wrap gap-1 assigned-chip-wrap">
+                        <span v-for="tid in a.assigned_task_ids.slice(0, 4)" :key="tid"
+                              class="badge rounded-pill bg-primary-subtle text-primary border border-primary-subtle cursor-pointer"
+                              @click="openTask(tid)">#{{ tid }}</span>
+                        <span v-if="a.assigned_task_ids.length > 4"
+                              class="badge rounded-pill bg-secondary-subtle text-secondary border"
+                              :title="a.assigned_task_ids.join(', ')">+{{ a.assigned_task_ids.length - 4 }}</span>
+                      </div>
+                      <span v-else class="text-muted text-xs fst-italic">Unassigned</span>
+                    </td>
+
+                    <td>
+                      <div class="d-flex flex-column gap-1 align-items-start">
+                        <span v-if="a.account_active === false" class="status-pill is-off" title="Deactivated — cannot log in">
+                          <i class="bi bi-slash-circle-fill"></i> Deactivated
+                        </span>
+                        <span v-else class="status-pill" :class="raterStatusClass(a)">
+                          <i :class="['bi', raterStatusIcon(a)]"></i> {{ raterStatus(a) }}
+                        </span>
+                        <span class="text-xs" :class="isStale(a) ? 'text-warning-emphasis fw-semibold' : 'text-muted'"
+                              :title="fmtDate(a.last_active)">
+                          <i v-if="isStale(a)" class="bi bi-exclamation-triangle-fill me-1"></i>
+                          {{ a.last_active ? timeAgo(a.last_active) : 'never active' }}
+                        </span>
+                      </div>
+                    </td>
+
+                    <td class="text-end tasks-cell">
+                      <div class="d-flex align-items-baseline justify-content-end gap-1">
+                        <span class="tasks-num">{{ (activityWindow ? (a.completed || 0) : (a.completed || 0)).toLocaleString() }}</span>
+                        <span v-if="activityWindow" class="text-muted text-xs">/ {{ (allTimeFor(a.rater_id)).toLocaleString() }}</span>
+                      </div>
+                      <div v-if="a.flagged || a.edited" class="d-flex gap-1 justify-content-end mt-1">
+                        <span v-if="a.flagged" class="stat-pill warn" :title="a.flagged + ' flagged — not paid'">{{ a.flagged }} flagged</span>
+                        <span v-if="a.edited" class="stat-pill info" :title="a.edited + ' prompts whose text was corrected'">{{ a.edited }} edited</span>
+                      </div>
+                      <button class="drill-btn mt-1" @click="toggleRaterTasks(a)">
+                        <i class="bi" :class="expandedRaters.includes(a.rater_id) ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+                        {{ expandedRaters.includes(a.rater_id) ? 'Hide tasks' : 'Task-wise' }}
+                      </button>
+                    </td>
+
+                    <td class="text-end pe-3">
+                      <div class="d-inline-flex gap-1 justify-content-end align-items-center flex-nowrap">
+                        <button class="rater-action-btn btn btn-sm"
+                                :class="(a.assigned_task_ids || []).length ? 'btn-primary' : 'btn-outline-primary'"
+                                :title="(a.assigned_task_ids || []).length ? 'Edit the tasks assigned to ' + a.name : 'Assign tasks to ' + a.name"
+                                @click="openAssign([], a.rater_id)">
+                          <i :class="['bi', (a.assigned_task_ids || []).length ? 'bi-pencil-square' : 'bi-plus-lg']"></i>
+                        </button>
+                        <button class="rater-action-btn btn btn-sm btn-outline-secondary"
+                                :title="'Message ' + a.name" @click="openMessage(a)">
+                          <i class="bi bi-chat-dots"></i>
+                        </button>
+                        <button class="rater-action-btn btn btn-sm btn-outline-primary"
+                                :title="'Open the full record for ' + a.name" @click="openAnnotator(a)">
+                          <i class="bi bi-person-lines-fill"></i>
+                        </button>
+                        <button class="rater-action-btn btn btn-sm btn-outline-success"
+                                :title="'Export the work of ' + a.name + ' (original and submission, prompt by prompt)'"
+                                @click="exportSimple(`/pool/admin/export_submissions_csv&annotator=${a.rater_id}&state=submitted`,
+                                                     `asr_${a.name}_submissions.csv`, a.name + ' submissions')">
+                          <i class="bi bi-file-earmark-code"></i>
+                        </button>
+                        <button class="rater-action-btn btn btn-sm btn-outline-warning"
+                                :title="'Send a reminder to ' + a.name" @click="nudgeRater(a)">
+                          <i class="bi bi-bell"></i>
+                        </button>
+                        <button class="rater-action-btn btn btn-sm btn-outline-secondary"
+                                :title="'Languages & pull size for ' + a.name" @click="openEdit(a)">
+                          <i class="bi bi-gear"></i>
+                        </button>
+                        <button v-if="a.account_active === false" class="rater-action-btn btn btn-sm btn-outline-success"
+                                :title="'Reactivate ' + a.name + ' (lets them sign in again)'"
+                                @click="reactivateRater(a)">
+                          <i class="bi bi-arrow-counterclockwise"></i>
+                        </button>
+                        <button v-else class="rater-action-btn btn btn-sm btn-outline-danger"
+                                :title="'Deactivate ' + a.name + ' (frees their tasks and unfinished prompts)'"
+                                @click="removeModal = { rater: a, confirm: '' }">
+                          <i class="bi bi-person-dash"></i>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+
+                  <!-- Task-wise drill-down -->
+                  <tr v-if="expandedRaters.includes(a.rater_id)" class="drill-row">
+                    <td colspan="5" class="p-0">
+                      <div class="drill-panel">
+                        <div class="d-flex align-items-center mb-2 gap-2">
+                          <span class="text-xs fw-bold text-secondary text-uppercase">{{ a.name }} · prompts per task</span>
+                          <button class="btn btn-sm btn-link text-decoration-none p-0 ms-auto text-xs"
+                                  @click="exportSimple(`/pool/admin/export_submissions_csv&annotator=${a.rater_id}&state=submitted`,
+                                                       `asr_${a.name}_submissions.csv`, a.name + ' submissions')">
+                            <i class="bi bi-download me-1"></i>CSV
+                          </button>
+                        </div>
+                        <div v-if="raterTasksLoading === a.rater_id" class="text-center py-3">
+                          <span class="spinner-border spinner-border-sm text-secondary"></span>
+                        </div>
+                        <table v-else class="table table-sm mb-0 bg-white border rounded drill-table">
+                          <thead>
+                            <tr>
+                              <th style="width: 80px;">Task</th>
+                              <th style="width: 110px;">Language</th>
+                              <th style="width: 80px;">Class</th>
+                              <th>Assigned</th>
+                              <th class="text-end" style="width: 150px;">Completed</th>
+                              <th class="text-end" style="width: 70px;">Flagged</th>
+                              <th class="text-end" style="width: 70px;">Edited</th>
+                              <th class="text-end" style="width: 80px;">Holding</th>
+                              <th class="text-end" style="width: 70px;">Hours</th>
+                              <th class="text-end" style="width: 140px;">Last activity</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr v-for="t in (raterTasks[a.rater_id] || [])" :key="t.task_id">
+                              <td><a href="#" class="fw-semibold text-decoration-none" @click.prevent="openTask(t.task_id)">#{{ t.task_id }}</a></td>
+                              <td><span class="badge rounded-pill bg-secondary-subtle text-secondary border">{{ t.language || '—' }}</span></td>
+                              <td>Class {{ t.class }}</td>
+                              <td>
+                                <span v-if="t.is_assigned" class="badge bg-success-subtle text-success rounded-pill">holds it</span>
+                                <span v-else class="text-muted text-xs">worked earlier</span>
+                              </td>
+                              <td class="text-end">
+                                <div class="d-flex align-items-center gap-2 justify-content-end">
+                                  <span class="fw-semibold text-nowrap">{{ t.completed }}<span v-if="t.task_total" class="text-muted"> / {{ t.task_total }}</span></span>
+                                  <div v-if="t.task_total" class="progress" style="height: 5px; width: 52px;">
+                                    <div class="progress-bar" :class="t.completed >= t.task_total ? 'bg-success' : 'bg-warning'"
+                                         :style="{ width: (100 * t.completed / t.task_total) + '%' }"></div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td class="text-end" :class="t.flagged ? 'text-warning fw-semibold' : 'text-muted'">{{ t.flagged }}</td>
+                              <td class="text-end" :class="t.edited ? 'text-primary fw-semibold' : 'text-muted'">{{ t.edited }}</td>
+                              <td class="text-end text-muted">{{ t.claimed }}</td>
+                              <td class="text-end">{{ t.hours }}</td>
+                              <td class="text-end text-muted text-xs">{{ t.last_active_ist || '—' }}</td>
+                            </tr>
+                            <tr v-if="!(raterTasks[a.rater_id] || []).length">
+                              <td colspan="10" class="text-center text-muted py-3">No tasks touched yet.</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
+                <tr v-if="!shownAnnotators.length">
+                  <td colspan="5" class="text-center text-muted py-5 bg-white">No matching annotators found.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══════════════════ SUBMISSIONS ══════════════════ -->
+      <div v-else-if="tab === 'submissions'" class="tab-pane-active">
+        <div class="bg-white p-4 rounded shadow-sm border">
+          <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+            <div>
+              <h5 class="fw-bold text-dark mb-1">Submissions</h5>
+              <p class="text-muted text-xs mb-0">
+                Every prompt and the submission made against it. Click a row to open the full record.
+              </p>
+            </div>
+            <div class="d-flex gap-2">
+              <button class="btn btn-sm btn-outline-secondary" @click="exportSubmissions">
+                <i class="bi bi-filetype-csv me-1"></i>Export this view
+              </button>
+              <button class="btn btn-sm btn-primary" @click="exportOpen = true">
+                <i class="bi bi-file-earmark-spreadsheet me-1"></i>Full export
+              </button>
+            </div>
+          </div>
+
+          <div class="filter-bar border-top border-bottom py-3 mb-3">
+            <div class="d-flex flex-wrap gap-2 align-items-center">
+              <select v-model="subFilters.task_id" class="form-select form-select-sm w-auto" @change="loadSubmissions(1)">
+                <option value="">All tasks</option>
+                <option v-for="t in subMeta.tasks" :key="t.task_id" :value="String(t.task_id)">
+                  #{{ t.task_id }} — {{ t.label }}
+                </option>
+              </select>
+              <select v-model="subFilters.language" class="form-select form-select-sm w-auto" @change="loadSubmissions(1)">
+                <option value="">All languages</option>
+                <option v-for="l in subMeta.languages" :key="l" :value="l">{{ l }}</option>
+              </select>
+              <select v-model="subFilters.class" class="form-select form-select-sm w-auto" @change="loadSubmissions(1)">
+                <option value="">All classes</option>
+                <option v-for="c in subMeta.classes" :key="c" :value="c">Class {{ c }}</option>
+              </select>
+              <select v-model="subFilters.category" class="form-select form-select-sm w-auto" @change="loadSubmissions(1)">
+                <option value="">All categories</option>
+                <option v-for="c in subMeta.categories" :key="c" :value="c">{{ c }}</option>
+              </select>
+              <select v-model="subFilters.annotator" class="form-select form-select-sm w-auto" @change="loadSubmissions(1)">
+                <option value="">Any annotator</option>
+                <option v-for="a in subMeta.annotators" :key="a.rater_id" :value="String(a.rater_id)">{{ a.name }}</option>
+              </select>
+              <select v-model="subFilters.state" class="form-select form-select-sm w-auto" @change="loadSubmissions(1)">
+                <option value="submitted">Submitted only</option>
+                <option value="completed">Completed</option>
+                <option value="flagged">Flagged</option>
+                <option value="pending">Not submitted yet</option>
+                <option value="claimed">In progress</option>
+                <option value="available">Untouched</option>
+                <option value="">Everything</option>
+              </select>
+              <select v-model="subFilters.difficulty" class="form-select form-select-sm w-auto" @change="loadSubmissions(1)">
+                <option value="">Any difficulty</option>
+                <option v-for="d in difficulties" :key="d" :value="d">{{ d }}</option>
+              </select>
+            </div>
+
+            <div class="d-flex flex-wrap gap-2 align-items-center mt-2">
+              <div class="d-flex align-items-center gap-1">
+                <i class="bi bi-calendar3 text-secondary"></i>
+                <input type="date" v-model="subFilters.from" class="form-control form-control-sm date-input"
+                       title="Submitted from" @change="loadSubmissions(1)">
+                <span class="text-muted text-xs">-&gt;</span>
+                <input type="date" v-model="subFilters.to" class="form-control form-control-sm date-input"
+                       title="Submitted to" @change="loadSubmissions(1)">
+              </div>
+              <div class="form-check form-check-inline ms-1">
+                <input class="form-check-input" type="checkbox" id="subEdited" v-model="subFilters.edited"
+                       true-value="1" false-value="" @change="loadSubmissions(1)">
+                <label class="form-check-label text-xs" for="subEdited">text edited</label>
+              </div>
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox" id="subFlagged" v-model="subFilters.flagged"
+                       true-value="1" false-value="" @change="loadSubmissions(1)">
+                <label class="form-check-label text-xs" for="subFlagged">flagged</label>
+              </div>
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox" id="subChanged" v-model="subFilters.changed"
+                       true-value="1" false-value="" @change="loadSubmissions(1)">
+                <label class="form-check-label text-xs" for="subChanged">difficulty changed</label>
+              </div>
+              <input v-model="subFilters.q" class="form-control form-control-sm" style="width:220px"
+                     placeholder="Search text or prompt ID…" @keyup.enter="loadSubmissions(1)">
+              <button class="btn btn-sm btn-outline-secondary" @click="loadSubmissions(1)"><i class="bi bi-search"></i></button>
+              <button class="btn btn-sm btn-outline-secondary" @click="resetSubFilters">Clear</button>
+              <span class="ms-auto text-xs text-muted">{{ subTotal.toLocaleString() }} row(s)</span>
+            </div>
+          </div>
+
+          <div v-if="subLoading" class="text-center py-5"><span class="spinner-border text-secondary"></span></div>
+          <template v-else>
+            <div class="table-responsive">
+              <table class="table table-sm table-hover align-middle">
+                <thead class="table-light">
+                  <tr>
+                    <th style="width:70px">Task</th><th style="width:70px">Prompt</th>
+                    <th>Language</th><th>Cl</th><th>Category</th>
+                    <th>Submission</th><th>Difficulty</th><th>State</th>
+                    <th>Annotator</th><th class="text-nowrap">When (IST)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="it in submissions" :key="it.id" class="cursor-pointer" @click="openItem(it.id)">
+                    <td><span class="task-id-badge">#{{ it.task_id }}</span></td>
+                    <td class="text-muted">{{ it.id }}</td>
+                    <td>{{ it.language }}</td>
+                    <td>{{ it.class }}</td>
+                    <td class="text-muted">{{ it.category }}</td>
+                    <td class="cell-text" :dir="rtl(it.language) ? 'rtl' : 'ltr'">
+                      <div>{{ trim(it.text) }}</div>
+                      <div v-if="it.is_edited" class="text-xs text-muted-2">was: <s>{{ trim(it.original_text, 60) }}</s></div>
+                      <div v-if="it.is_flagged" class="text-xs text-warning">flagged: {{ it.flag_reason }}</div>
+                    </td>
+                    <td>
+                      <span v-if="it.final_difficulty" class="badge" :class="badgeFor(it.final_difficulty)">{{ it.final_difficulty }}</span>
+                      <span v-else class="text-muted text-xs">{{ it.source_difficulty || '—' }}</span>
+                      <i v-if="it.difficulty_changed" class="bi bi-arrow-left-right text-primary ms-1" title="changed by the annotator"></i>
+                    </td>
+                    <td>
+                      <span class="badge" :class="statusBadge(it.status)">{{ it.status }}</span>
+                      <span v-if="it.is_edited" class="badge bg-primary-subtle text-primary ms-1">edited</span>
+                    </td>
+                    <td class="text-xs text-muted">{{ it.annotator || '—' }}</td>
+                    <td class="text-xs text-muted text-nowrap">{{ it.completed_at_ist || '—' }}</td>
+                  </tr>
+                  <tr v-if="!submissions.length"><td colspan="10" class="text-center text-muted py-4">Nothing matches those filters.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="subPages > 1" class="d-flex justify-content-center align-items-center gap-3 mt-2">
+              <button class="btn btn-sm btn-outline-secondary" :disabled="subPage <= 1" @click="loadSubmissions(subPage - 1)">Previous</button>
+              <span class="text-xs text-muted">Page {{ subPage }} of {{ subPages }}</span>
+              <button class="btn btn-sm btn-outline-secondary" :disabled="subPage >= subPages" @click="loadSubmissions(subPage + 1)">Next</button>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- ══════════════════ ACTIVITY LOG ══════════════════ -->
+      <div v-else-if="tab === 'activity'" class="tab-pane-active">
+        <div class="bg-white p-4 rounded shadow-sm border">
+          <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+            <div>
+              <h5 class="fw-bold text-dark mb-1">Activity log</h5>
+              <p class="text-muted text-xs mb-0">
+                Every pull and every submission, newest first, in IST.
+              </p>
+            </div>
+            <div class="d-flex gap-2 align-items-center">
+              <select v-model.number="activityDays" class="form-select form-select-sm w-auto" @change="loadActivity">
+                <option :value="1">Last 24 hours</option>
+                <option :value="7">Last 7 days</option>
+                <option :value="30">Last 30 days</option>
+                <option :value="365">Everything</option>
+              </select>
+              <button class="btn btn-sm btn-outline-secondary" @click="loadActivity">
+                <i class="bi bi-arrow-clockwise"></i>
+              </button>
+              <button class="btn btn-sm btn-outline-secondary"
+                      @click="exportSimple(`/pool/admin/export_activity_csv&days=${activityDays}`, 'asr_activity.csv', 'Activity log')">
+                <i class="bi bi-filetype-csv me-1"></i>Export
+              </button>
+            </div>
+          </div>
+
+          <div v-if="activityLoading" class="text-center py-5"><span class="spinner-border text-secondary"></span></div>
+          <div v-else-if="!activity.length" class="text-center text-muted py-5">
+            <i class="bi bi-clock-history d-block fs-3 mb-2"></i>Nothing has happened in this window yet.
+          </div>
+          <div v-else class="table-responsive">
+            <table class="table table-sm table-hover align-middle">
+              <thead class="table-light">
+                <tr><th>When (IST)</th><th>Event</th><th>Annotator</th><th>Prompt</th>
+                    <th>Language</th><th>Class</th><th>Detail</th><th class="text-end">Seconds</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="(e, i) in activity" :key="i" class="cursor-pointer" @click="openItem(e.item_id)">
+                  <td class="text-nowrap text-muted text-xs">{{ e.when_ist }}</td>
+                  <td><span class="badge" :class="eventBadge(e.event)">{{ e.event }}</span></td>
+                  <td>{{ e.annotator || '—' }}</td>
+                  <td class="text-muted">#{{ e.item_id }}</td>
+                  <td>{{ e.language }}</td>
+                  <td>{{ e.class }}</td>
+                  <td class="text-xs text-muted">{{ e.detail }}</td>
+                  <td class="text-end text-xs">{{ e.seconds != null ? e.seconds : '' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══════════════════ ADMIN ══════════════════ -->
+      <div v-else-if="tab === 'admin'" class="tab-pane-active">
+        <div class="row g-4">
+          <div class="col-12 col-lg-6">
+            <div class="bg-white p-4 rounded shadow-sm border h-100">
+              <h5 class="fw-bold text-dark mb-2"><i class="bi bi-key-fill me-2 text-primary"></i>Today's signup PIN</h5>
+              <p class="text-muted text-xs">New annotators need this PIN to create an account. It changes daily.</p>
+              <div class="d-flex align-items-center gap-2">
+                <code class="pin-box">{{ signupPin || '••••••••' }}</code>
+                <button class="btn btn-sm btn-outline-secondary" @click="loadPin"><i class="bi bi-arrow-clockwise"></i></button>
+                <button class="btn btn-sm btn-outline-secondary" :disabled="!signupPin" @click="copyPin">
+                  <i class="bi bi-clipboard me-1"></i>{{ pinCopied ? 'Copied' : 'Copy' }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-12 col-lg-6">
+            <div class="bg-white p-4 rounded shadow-sm border h-100">
+              <h5 class="fw-bold text-dark mb-2"><i class="bi bi-download me-2 text-primary"></i>Reports</h5>
+              <p class="text-muted text-xs">Every report covers the ASR team only.</p>
+              <div class="d-grid gap-2">
+                <button class="btn btn-sm btn-outline-primary" @click="exportOpen = true">
+                  <i class="bi bi-file-earmark-spreadsheet me-1"></i>Full pool export (Excel / CSV)
+                </button>
+                <button class="btn btn-sm btn-outline-secondary"
+                        @click="exportSimple('/pool/admin/export_tasks_csv', 'asr_task_list.csv', 'Task list')">
+                  <i class="bi bi-list-task me-1"></i>Task list by language &amp; class
+                </button>
+                <button class="btn btn-sm btn-outline-secondary"
+                        @click="exportSimple('/pool/admin/export_annotators_csv', 'asr_annotators.csv', 'Annotator report')">
+                  <i class="bi bi-people me-1"></i>Annotator productivity
+                </button>
+                <button class="btn btn-sm btn-outline-secondary"
+                        @click="exportSimple('/pool/admin/export_activity_csv&days=30', 'asr_activity.csv', 'Activity log')">
+                  <i class="bi bi-clock-history me-1"></i>Activity log (30 days)
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-12 col-lg-6">
+            <div class="bg-white p-4 rounded shadow-sm border h-100">
+              <h5 class="fw-bold text-dark mb-2"><i class="bi bi-hourglass-split me-2 text-primary"></i>Abandoned work</h5>
+              <p class="text-muted text-xs">Prompts claimed more than {{ staleHours }}h ago and never finished can go
+                back to the pool. Finished annotations are never affected.</p>
+              <div class="d-flex align-items-center gap-2">
+                <span class="h4 fw-bold mb-0" :class="stats.stale_claims ? 'text-warning' : 'text-muted'">
+                  {{ stats.stale_claims || 0 }}</span>
+                <span class="text-xs text-muted">prompt(s) stale</span>
+                <button class="btn btn-sm btn-warning ms-auto" :disabled="reclaiming || !stats.stale_claims"
+                        @click="reclaim">Return to pool</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-12 col-lg-6">
+            <div class="bg-white p-4 rounded shadow-sm border h-100">
+              <h5 class="fw-bold text-dark mb-2"><i class="bi bi-cloud-upload me-2 text-primary"></i>Uploads</h5>
+              <table class="table table-sm mb-0">
+                <tbody>
+                  <tr v-for="u in uploads" :key="u.id">
+                    <td class="text-dark">{{ u.name }}</td>
+                    <td class="text-end">{{ u.item_count.toLocaleString() }}</td>
+                    <td class="text-xs text-muted">{{ fmtDate(u.created_at) }}</td>
+                  </tr>
+                  <tr v-if="!uploads.length"><td class="text-muted small">No uploads recorded.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ pop-menus (teleported so table overflow cannot clip them) ══ -->
+    <Teleport to="body">
+      <div v-if="openMenu !== null" class="menu-backdrop" @click="openMenu = null"></div>
+
+      <div v-if="openMenu === 'exports'" class="pop-menu"
+           :style="{ top: menuPos.top + 'px', left: menuPos.left + 'px', width: '280px' }">
+        <div class="pop-menu-head">Exports</div>
+        <button class="pop-item" @click="runMenu(() => { exportOpen = true })">
+          <i class="bi bi-file-earmark-spreadsheet text-primary"></i>
+          <span><b>All annotations</b><small>Every prompt: original, submission &amp; metadata</small></span>
+        </button>
+        <button class="pop-item" @click="runMenu(exportSubmissions)">
+          <i class="bi bi-list-check text-primary"></i>
+          <span><b>Submissions</b><small>Exactly what the Submissions tab is showing</small></span>
+        </button>
+        <button class="pop-item" @click="runMenu(() => exportSimple('/pool/admin/export_annotators_csv', 'asr_annotators.csv', 'Annotator data'))">
+          <i class="bi bi-people text-success"></i>
+          <span><b>Annotator data</b><small>Per-annotator totals, tasks held &amp; hours</small></span>
+        </button>
+        <button class="pop-item" @click="runMenu(() => exportSimple('/pool/admin/export_rater_activity_csv', 'asr_annotator_days.csv', 'Per-day report'))">
+          <i class="bi bi-calendar-range text-success"></i>
+          <span><b>Annotator day by day</b><small>One row per annotator per day</small></span>
+        </button>
+        <button class="pop-item" @click="runMenu(() => exportSimple('/pool/admin/export_tasks_csv', 'asr_task_list.csv', 'Task list'))">
+          <i class="bi bi-diagram-3 text-success"></i>
+          <span><b>Task list</b><small>Every task &amp; category with its progress</small></span>
+        </button>
+        <button class="pop-item" @click="runMenu(() => exportSimple('/pool/admin/export_activity_csv&days=30', 'asr_activity.csv', 'Activity log'))">
+          <i class="bi bi-clock-history text-secondary"></i>
+          <span><b>Activity log</b><small>Every pull and submission, last 30 days</small></span>
+        </button>
+      </div>
+
+      <div v-if="openMenu === 'messages'" class="pop-menu"
+           :style="{ top: menuPos.top + 'px', left: menuPos.left + 'px', width: '240px' }">
+        <div class="pop-menu-head">Messages</div>
+        <button class="pop-item" @click="runMenu(() => { broadcastModal = { body: '' } })">
+          <i class="bi bi-broadcast text-primary"></i>
+          <span><b>Announcement</b><small>Message every ASR annotator</small></span>
+        </button>
+        <button class="pop-item" @click="runMenu(openOutbox)">
+          <i class="bi bi-clock-history text-secondary"></i>
+          <span><b>Sent messages</b><small>Review and edit what you sent</small></span>
+        </button>
+      </div>
+
+    </Teleport>
+
+    <!-- ══ task detail ══ -->
+    <div v-if="taskModal" class="asr-modal-backdrop" @click.self="taskModal = null">
+      <div class="asr-modal wide">
+        <div class="asr-modal-head">
+          <div>
+            <h5 class="fw-bold mb-0">
+              <span class="task-id-badge me-2">#{{ taskModal.task.task_id }}</span>{{ taskModal.task.label }}
+            </h5>
+            <div class="text-xs text-muted">
+              {{ taskModal.task.total.toLocaleString() }} prompts ·
+              <span class="badge rounded-pill" :class="stateBadge(taskModal.task.state)">{{ taskModal.task.state }}</span>
+              <span v-if="taskModal.task.assignee"> · held by <strong>{{ taskModal.task.assignee.name }}</strong>
+                since {{ taskModal.task.assignee.assigned_at_ist }}</span>
+              <span v-else> · not assigned to anyone</span>
+            </div>
+          </div>
+          <button class="btn-close" @click="taskModal = null"></button>
+        </div>
+        <div class="asr-modal-body">
+          <div v-if="taskLoading" class="text-center py-5"><span class="spinner-border text-secondary"></span></div>
+          <template v-else>
+            <div class="row g-2 mb-3">
+              <div class="col-6 col-md-2"><div class="mini-stat"><span>Prompts</span><strong>{{ taskModal.task.total.toLocaleString() }}</strong></div></div>
+              <div class="col-6 col-md-2"><div class="mini-stat"><span>Completed</span><strong class="text-success">{{ taskModal.task.completed.toLocaleString() }}</strong></div></div>
+              <div class="col-6 col-md-2"><div class="mini-stat"><span>Flagged</span><strong class="text-warning">{{ taskModal.task.flagged.toLocaleString() }}</strong></div></div>
+              <div class="col-6 col-md-2"><div class="mini-stat"><span>In progress</span><strong>{{ taskModal.task.claimed.toLocaleString() }}</strong></div></div>
+              <div class="col-6 col-md-2"><div class="mini-stat"><span>Available</span><strong class="text-muted">{{ taskModal.task.available.toLocaleString() }}</strong></div></div>
+              <div class="col-6 col-md-2"><div class="mini-stat"><span>Progress</span><strong>{{ showPct(taskModal.task.progress, taskModal.task.done) }}%</strong></div></div>
+            </div>
+
+            <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Granularity inside this task</h6>
+            <div class="table-responsive border rounded mb-3">
+              <table class="table table-sm mb-0">
+                <thead class="table-light"><tr><th>Category</th><th class="text-end">Prompts</th><th class="text-end">Completed</th>
+                  <th class="text-end">Flagged</th><th class="text-end">In progress</th><th class="text-end">Available</th><th style="width:150px">Progress</th></tr></thead>
+                <tbody>
+                  <tr v-for="c in taskModal.task.categories" :key="c.category">
+                    <td class="fw-semibold">{{ c.category }}</td>
+                    <td class="text-end">{{ c.total.toLocaleString() }}</td>
+                    <td class="text-end text-success">{{ c.completed.toLocaleString() }}</td>
+                    <td class="text-end text-warning">{{ c.flagged }}</td>
+                    <td class="text-end">{{ c.claimed }}</td>
+                    <td class="text-end text-muted">{{ c.available.toLocaleString() }}</td>
+                    <td><div class="progress" style="height:6px"><div class="progress-bar bg-success" :style="{ width: c.progress + '%' }"></div></div></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="row g-4 mb-3">
+              <div class="col-12 col-lg-6">
+                <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Who has worked on it</h6>
+                <div class="table-responsive border rounded">
+                  <table class="table table-sm mb-0">
+                    <thead class="table-light"><tr><th>Annotator</th><th class="text-end">Completed</th><th class="text-end">Flagged</th><th class="text-end">Holding</th></tr></thead>
+                    <tbody>
+                      <tr v-for="a in taskModal.annotators" :key="a.rater_id">
+                        <td>{{ a.name }}</td>
+                        <td class="text-end text-success">{{ a.completed }}</td>
+                        <td class="text-end text-warning">{{ a.flagged }}</td>
+                        <td class="text-end">{{ a.claimed }}</td>
+                      </tr>
+                      <tr v-if="!taskModal.annotators.length"><td colspan="4" class="text-muted small">Nothing submitted yet.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="col-12 col-lg-6">
+                <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Assignment history</h6>
+                <div class="table-responsive border rounded">
+                  <table class="table table-sm mb-0">
+                    <thead class="table-light"><tr><th>Annotator</th><th>From (IST)</th><th>Until</th><th>By</th></tr></thead>
+                    <tbody>
+                      <tr v-for="(h, i) in taskModal.assignment_history" :key="i">
+                        <td>{{ h.name }}
+                          <span v-if="h.is_active" class="badge bg-success-subtle text-success ms-1">current</span></td>
+                        <td class="text-xs">{{ h.assigned_at_ist }}</td>
+                        <td class="text-xs text-muted">{{ h.revoked_at_ist || '—' }}</td>
+                        <td class="text-xs text-muted">{{ h.assigned_by || '—' }}</td>
+                      </tr>
+                      <tr v-if="!taskModal.assignment_history.length"><td colspan="4" class="text-muted small">Never assigned.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Pulls made against this task</h6>
+            <div class="table-responsive border rounded mb-3">
+              <table class="table table-sm mb-0">
+                <thead class="table-light"><tr><th>Pulled (IST)</th><th>Annotator</th><th>Slice</th>
+                  <th class="text-end">Prompts</th><th class="text-end">Done</th><th class="text-end">Left</th><th>State</th></tr></thead>
+                <tbody>
+                  <tr v-for="p in taskModal.pulls" :key="p.pull_id">
+                    <td class="text-xs text-nowrap">{{ p.created_at_ist }}</td>
+                    <td>{{ p.annotator }}</td>
+                    <td class="text-xs text-muted">{{ p.category || 'whole task' }}{{ p.source_difficulty ? ' · ' + p.source_difficulty : '' }}</td>
+                    <td class="text-end">{{ p.item_count }}</td>
+                    <td class="text-end text-success">{{ p.done }}</td>
+                    <td class="text-end">{{ p.claimed }}</td>
+                    <td><span class="badge" :class="pullBadge(p.status)">{{ p.status }}</span></td>
+                  </tr>
+                  <tr v-if="!taskModal.pulls.length"><td colspan="7" class="text-muted small">Nobody has pulled from this task yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Latest submissions</h6>
+            <div class="table-responsive border rounded">
+              <table class="table table-sm table-hover mb-0">
+                <thead class="table-light"><tr><th>#</th><th>Category</th><th>Submission</th><th>Difficulty</th><th>Annotator</th><th>When (IST)</th></tr></thead>
+                <tbody>
+                  <tr v-for="it in taskModal.recent_submissions" :key="it.id" class="cursor-pointer" @click="openItem(it.id)">
+                    <td class="text-muted">{{ it.id }}</td>
+                    <td class="text-muted text-xs">{{ it.category }}</td>
+                    <td class="cell-text" :dir="rtl(it.language) ? 'rtl' : 'ltr'">{{ trim(it.text, 60) }}</td>
+                    <td><span v-if="it.final_difficulty" class="badge" :class="badgeFor(it.final_difficulty)">{{ it.final_difficulty }}</span></td>
+                    <td class="text-xs">{{ it.annotator }}</td>
+                    <td class="text-xs text-muted text-nowrap">{{ it.completed_at_ist }}</td>
+                  </tr>
+                  <tr v-if="!taskModal.recent_submissions.length"><td colspan="6" class="text-muted small">No submissions yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
+        </div>
+        <div class="asr-modal-foot">
+          <button v-if="taskModal.task.assignee" class="btn btn-outline-danger me-auto" @click="unassignTask(taskModal.task)">
+            <i class="bi bi-person-dash me-1"></i>Take this task back
+          </button>
+          <button class="btn btn-outline-secondary" @click="browseTask(taskModal.task.task_id)">
+            <i class="bi bi-list-check me-1"></i>See its submissions
+          </button>
+          <button class="btn btn-primary" @click="openAssign([taskModal.task.task_id])">
+            <i class="bi bi-person-plus me-1"></i>Assign
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== ASSIGN TASKS MODAL ===================== -->
+    <transition name="modal-fade">
+      <div v-if="assignModal" class="assign-modal-backdrop" @click.self="assignModal = null">
+        <div class="assign-modal-card shadow-lg">
+          <!-- Header -->
+          <div class="assign-modal-header d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-3">
+              <div class="avatar-circle-lg">{{ (assignRater?.name || '?').charAt(0).toUpperCase() }}</div>
+              <div>
+                <h5 class="fw-bold mb-0 text-dark">Assign Tasks</h5>
+                <small class="text-muted">
+                  <span v-if="assignRater">{{ assignRater.name }} · {{ assignRater.email }}</span>
+                  <span v-else>Choose an annotator to hand these tasks to</span>
+                </small>
+              </div>
+            </div>
+            <button class="btn-close" @click="assignModal = null"></button>
+          </div>
+
+          <!-- Body -->
+          <div class="assign-modal-body">
+            <!-- Lock notice -->
+            <div class="d-flex align-items-start gap-2 py-2 px-3 rounded-3 bg-info-subtle mb-3">
+              <i class="bi bi-lock-fill text-info mt-1"></i>
+              <small class="text-info-emphasis">Selected tasks are <strong>locked to this annotator</strong>.
+                No one else will be able to pull from them. Taking a task back unlocks it again.</small>
+            </div>
+
+            <label class="form-label fw-semibold text-dark small mb-1">Annotator</label>
+            <select v-model="assignModal.rater_id" class="form-select mb-3">
+              <option value="">Choose an annotator…</option>
+              <option v-for="a in assignCandidates" :key="a.rater_id" :value="a.rater_id">
+                {{ a.name }} — holds {{ a.tasks_held }} task(s)
+              </option>
+            </select>
+
+            <!-- Selected summary -->
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <span class="fw-semibold text-dark">
+                Selected <span class="badge bg-primary rounded-pill ms-1">{{ assignModal.task_ids.length }}</span>
+              </span>
+              <button v-if="assignModal.task_ids.length" class="btn btn-sm btn-link text-danger p-0 text-decoration-none"
+                      @click="assignModal.task_ids = []">
+                <i class="bi bi-x-circle me-1"></i>Clear all
+              </button>
+            </div>
+            <div v-if="assignModal.task_ids.length" class="selected-chips mb-3">
+              <span v-for="tid in assignModal.task_ids" :key="tid" class="chip">
+                #{{ tid }}
+                <i class="bi bi-x-lg" role="button" title="Remove" @click="toggleAssignPick(tid)"></i>
+              </span>
+            </div>
+
+            <!-- Search tasks -->
+            <div class="input-group mb-2">
+              <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
+              <input v-model="assignSearch" type="text" class="form-control border-start-0 ps-0"
+                     placeholder="Search tasks by ID, language, class or current holder..." />
+            </div>
+
+            <!-- Task list -->
+            <div class="batch-picker border rounded-3">
+              <label v-for="t in assignableShown" :key="t.task_id"
+                     :class="['batch-row d-flex align-items-center gap-3 px-3 py-2',
+                              assignModal.task_ids.includes(t.task_id) ? 'selected' : '']">
+                <input type="checkbox" class="form-check-input mt-0 flex-shrink-0"
+                       :checked="assignModal.task_ids.includes(t.task_id)" @change="toggleAssignPick(t.task_id)" />
+                <span class="badge bg-light text-dark border flex-shrink-0 text-center" style="min-width: 52px;">#{{ t.task_id }}</span>
+                <span class="flex-grow-1 text-truncate text-dark small">{{ t.label }}</span>
+                <span class="text-muted flex-shrink-0" style="font-size: .72rem;">{{ t.available.toLocaleString() }} free</span>
+                <span v-if="t.assignee"
+                      class="badge rounded-pill bg-warning-subtle text-warning-emphasis flex-shrink-0 d-inline-flex align-items-center gap-1"
+                      :title="`Already locked to ${t.assignee.name}`">
+                  <i class="bi bi-lock-fill"></i>{{ t.assignee.name }}
+                </span>
+                <span class="badge rounded-pill bg-secondary-subtle text-secondary flex-shrink-0">{{ t.language }}</span>
+              </label>
+              <div v-if="!assignableShown.length" class="text-center text-muted py-4 small">
+                <i class="bi bi-inbox d-block fs-4 mb-1 opacity-50"></i>
+                No tasks match your search.
+              </div>
+            </div>
+
+            <div v-if="assignTakeover.length" class="alert alert-warning mt-3 py-2 mb-0">
+              <i class="bi bi-exclamation-triangle-fill me-1"></i>
+              {{ assignTakeover.length }} of the selected task(s) already belong to somebody else
+              ({{ assignTakeover.join(', ') }}). Tick below to take them over — the previous holder
+              keeps everything they have already submitted.
+              <div class="form-check mt-2">
+                <input class="form-check-input" type="checkbox" id="reassignOk" v-model="assignModal.reassign">
+                <label class="form-check-label text-xs" for="reassignOk">Yes, move these tasks</label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Footer -->
+          <div class="assign-modal-footer d-flex justify-content-between align-items-center gap-3">
+            <small v-if="assignError" class="text-danger"><i class="bi bi-exclamation-circle me-1"></i>{{ assignError }}</small>
+            <small v-else class="text-muted">
+              {{ assignModal.task_ids.length }} task(s) will be locked to
+              <strong>{{ assignRater?.name || 'the chosen annotator' }}</strong>
+            </small>
+            <div class="d-flex gap-2 flex-shrink-0">
+              <button class="btn btn-light border" @click="assignModal = null" :disabled="assigning">Cancel</button>
+              <button class="btn btn-primary d-inline-flex align-items-center gap-2"
+                      :disabled="assigning || !assignModal.rater_id || !assignModal.task_ids.length"
+                      @click="saveAssignment">
+                <span v-if="assigning" class="spinner-border spinner-border-sm"></span>
+                <i v-else class="bi bi-check2-circle"></i>
+                <span>{{ assigning ? 'Saving…' : 'Save Assignment' }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- ══ annotator drill-down ══ -->
+    <div v-if="annotatorModal" class="asr-modal-backdrop" @click.self="annotatorModal = null">
+      <div class="asr-modal wide">
+        <div class="asr-modal-head">
+          <div>
+            <h5 class="fw-bold mb-0">{{ annotatorModal.annotator?.name }}</h5>
+            <div class="text-xs text-muted">{{ annotatorModal.annotator?.email }}</div>
+          </div>
+          <button class="btn-close" @click="annotatorModal = null"></button>
+        </div>
+        <div class="asr-modal-body">
+          <div v-if="annotatorLoading" class="text-center py-5"><span class="spinner-border text-secondary"></span></div>
+          <template v-else>
+            <div class="row g-2 mb-3">
+              <div class="col-6 col-md-2"><div class="mini-stat"><span>Completed</span><strong class="text-success">{{ annotatorModal.totals.completed.toLocaleString() }}</strong></div></div>
+              <div class="col-6 col-md-2"><div class="mini-stat"><span>Flagged</span><strong class="text-warning">{{ annotatorModal.totals.flagged }}</strong></div></div>
+              <div class="col-6 col-md-2"><div class="mini-stat"><span>Text edited</span><strong>{{ annotatorModal.totals.edited }}</strong></div></div>
+              <div class="col-6 col-md-2"><div class="mini-stat"><span>Diff. changed</span><strong>{{ annotatorModal.totals.difficulty_changed }}</strong></div></div>
+              <div class="col-6 col-md-2"><div class="mini-stat"><span>Holding now</span><strong>{{ annotatorModal.totals.claimed }}</strong></div></div>
+              <div class="col-6 col-md-2"><div class="mini-stat"><span>Avg / prompt</span><strong>{{ annotatorModal.totals.avg_seconds }}s</strong></div></div>
+            </div>
+
+            <template v-if="(annotatorModal.by_task_type || []).length">
+              <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Payable work by task type</h6>
+              <div class="table-responsive border rounded mb-3">
+                <table class="table table-sm mb-0">
+                  <thead class="table-light"><tr>
+                    <th>Type of work</th><th class="text-end">Submitted</th>
+                    <th class="text-end">Completed</th><th class="text-end">Flagged</th>
+                    <th class="text-end">Edited</th><th class="text-end">Time (h)</th>
+                  </tr></thead>
+                  <tbody>
+                    <tr v-for="tt in annotatorModal.by_task_type" :key="tt.task_type">
+                      <td class="fw-semibold">{{ tt.task_type_label }}</td>
+                      <td class="text-end fw-semibold">{{ tt.submitted.toLocaleString() }}</td>
+                      <td class="text-end text-success">{{ tt.completed.toLocaleString() }}</td>
+                      <td class="text-end text-warning">{{ tt.flagged }}</td>
+                      <td class="text-end">{{ tt.edited }}</td>
+                      <td class="text-end">{{ tt.hours }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
+
+            <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">By language &amp; class</h6>
+            <div class="table-responsive border rounded mb-3">
+              <table class="table table-sm mb-0">
+                <thead class="table-light"><tr><th>Language</th><th class="text-end">Completed</th><th class="text-end">Flagged</th><th class="text-end">Holding</th><th>Classes</th></tr></thead>
+                <tbody>
+                  <tr v-for="L in annotatorModal.by_language" :key="L.language">
+                    <td class="fw-semibold">{{ L.language }}</td>
+                    <td class="text-end text-success">{{ L.completed }}</td>
+                    <td class="text-end text-warning">{{ L.flagged }}</td>
+                    <td class="text-end">{{ L.claimed }}</td>
+                    <td><span v-for="K in L.classes" :key="K.class" class="badge bg-light text-secondary border me-1">
+                      C{{ K.class }} {{ K.completed + K.flagged }}</span></td>
+                  </tr>
+                  <tr v-if="!annotatorModal.by_language.length"><td colspan="5" class="text-muted small">Nothing yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="row g-4 mb-3">
+              <div class="col-12 col-md-6">
+                <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Difficulty they assigned</h6>
+                <div v-for="(n, k) in annotatorModal.difficulties" :key="k" class="d-flex align-items-center gap-2 mb-1">
+                  <span class="text-xs" style="min-width:70px">{{ k }}</span>
+                  <div class="progress flex-grow-1" style="height:6px"><div class="progress-bar" :class="diffClass(k)"
+                       :style="{ width: pct(n, annotatorModal.totals.completed || 1) }"></div></div>
+                  <span class="text-xs fw-semibold">{{ n }}</span>
+                </div>
+                <p v-if="!Object.keys(annotatorModal.difficulties).length" class="text-muted small mb-0">Nothing yet.</p>
+              </div>
+              <div class="col-12 col-md-6">
+                <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Categories worked</h6>
+                <div v-for="(n, k) in annotatorModal.categories" :key="k" class="d-flex align-items-center gap-2 mb-1">
+                  <span class="text-xs" style="min-width:70px">{{ k }}</span>
+                  <div class="progress flex-grow-1" style="height:6px"><div class="progress-bar bg-primary"
+                       :style="{ width: pct(n, annotatorModal.totals.done || 1) }"></div></div>
+                  <span class="text-xs fw-semibold">{{ n }}</span>
+                </div>
+                <p v-if="!Object.keys(annotatorModal.categories).length" class="text-muted small mb-0">Nothing yet.</p>
+              </div>
+            </div>
+
+            <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Day by day</h6>
+            <div class="table-responsive border rounded mb-3">
+              <table class="table table-sm mb-0">
+                <thead class="table-light"><tr><th>Date (IST)</th><th class="text-end">Completed</th><th class="text-end">Flagged</th><th class="text-end">Edited</th><th class="text-end">Hours</th><th style="width:180px"></th></tr></thead>
+                <tbody>
+                  <tr v-for="d in annotatorDays" :key="d.date">
+                    <td class="fw-semibold">{{ longDay(d.date) }}
+                      <span v-if="d.date === todayIst" class="badge bg-success-subtle text-success ms-1">Today</span>
+                    </td>
+                    <td class="text-end text-success">{{ d.completed }}</td>
+                    <td class="text-end text-warning">{{ d.flagged }}</td>
+                    <td class="text-end">{{ d.edited }}</td>
+                    <td class="text-end">{{ d.hours }}</td>
+                    <td>
+                      <div class="progress" style="height:6px">
+                        <div class="progress-bar bg-success" :style="{ width: dayBarWidth(d) }"></div>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr v-if="!annotatorDays.length"><td colspan="6" class="text-muted small">No activity recorded in this window.</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Most recent work</h6>
+            <div class="table-responsive border rounded">
+              <table class="table table-sm table-hover mb-0">
+                <thead class="table-light"><tr><th>#</th><th>Lang</th><th>Cl</th><th>Text</th><th>Difficulty</th><th>State</th><th>When</th></tr></thead>
+                <tbody>
+                  <tr v-for="it in annotatorModal.recent_items.slice(0, 40)" :key="it.id"
+                      class="cursor-pointer" @click="openItem(it.id)">
+                    <td class="text-muted">{{ it.id }}</td>
+                    <td>{{ it.language }}</td>
+                    <td>{{ it.class }}</td>
+                    <td class="cell-text" :dir="rtl(it.language) ? 'rtl' : 'ltr'">{{ trim(it.text, 60) }}</td>
+                    <td><span v-if="it.final_difficulty" class="badge" :class="badgeFor(it.final_difficulty)">{{ it.final_difficulty }}</span></td>
+                    <td>
+                      <span v-if="it.is_flagged" class="badge bg-warning-subtle text-warning">flagged</span>
+                      <span v-else-if="it.is_edited" class="badge bg-primary-subtle text-primary">edited</span>
+                      <span v-else class="badge bg-success-subtle text-success">as-is</span>
+                    </td>
+                    <td class="text-xs text-muted">{{ fmtDate(it.completed_at) }}</td>
+                  </tr>
+                  <tr v-if="!annotatorModal.recent_items.length"><td colspan="7" class="text-muted small">No submissions yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
+        </div>
+        <div class="asr-modal-foot">
+          <button class="btn btn-outline-secondary me-auto"
+                  @click="openMessage({ rater_id: annotatorModal.annotator.id, name: annotatorModal.annotator.name, email: annotatorModal.annotator.email })">
+            <i class="bi bi-chat-dots me-1"></i>Message
+          </button>
+          <button class="btn btn-secondary" @click="annotatorModal = null">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ item detail ══ -->
+    <div v-if="itemModal" class="asr-modal-backdrop" @click.self="itemModal = null">
+      <div class="asr-modal">
+        <div class="asr-modal-head">
+          <div>
+            <h5 class="fw-bold mb-0">Prompt #{{ itemModal.id }}</h5>
+            <div class="text-xs text-muted">
+              <a href="#" class="text-decoration-none" @click.prevent="openTask(itemModal.task_id)">
+                <span class="task-id-badge">#{{ itemModal.task_id }}</span> {{ itemModal.task_label }}
+              </a>
+              · {{ itemModal.category }}
+            </div>
+          </div>
+          <button class="btn-close" @click="itemModal = null"></button>
+        </div>
+        <div class="asr-modal-body">
+          <div class="mb-3 d-flex flex-wrap gap-1">
+            <span class="badge bg-light text-secondary border">{{ itemModal.task_type_label || 'text review' }}</span>
+            <span v-if="itemModal.source" class="badge bg-light text-secondary border">source: {{ itemModal.source }}</span>
+            <span v-if="itemModal.n_words" class="badge bg-light text-secondary border">{{ itemModal.n_words }} words</span>
+            <span class="badge" :class="statusBadge(itemModal.status)">{{ itemModal.status }}</span>
+            <span v-if="itemModal.revision" class="badge bg-light text-secondary border">revision {{ itemModal.revision }}</span>
+          </div>
+
+          <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Original text</h6>
+          <div class="text-block" :dir="rtl(itemModal.language) ? 'rtl' : 'ltr'">{{ itemModal.original_text }}</div>
+
+          <template v-if="itemModal.is_edited">
+            <h6 class="fw-bold text-uppercase text-muted text-xs mb-2 mt-3">Corrected by the annotator</h6>
+            <div class="text-block edited-block" :dir="rtl(itemModal.language) ? 'rtl' : 'ltr'">{{ itemModal.text }}</div>
+          </template>
+
+          <div class="row g-3 mt-2">
+            <div class="col-12 col-md-6">
+              <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Difficulty</h6>
+              <p class="mb-1 small"><span class="text-muted">generated:</span>
+                <span class="badge ms-1" :class="badgeFor(itemModal.source_difficulty)">{{ itemModal.source_difficulty || 'unset' }}</span></p>
+              <p class="mb-0 small"><span class="text-muted">annotator:</span>
+                <span v-if="itemModal.final_difficulty" class="badge ms-1" :class="badgeFor(itemModal.final_difficulty)">{{ itemModal.final_difficulty }}</span>
+                <span v-else class="text-muted"> not labelled yet</span></p>
+            </div>
+            <div class="col-12 col-md-6">
+              <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Who &amp; when</h6>
+              <p class="mb-1 small"><span class="text-muted">completed by:</span> {{ itemModal.completed_by || '—' }}</p>
+              <p class="mb-1 small"><span class="text-muted">claimed:</span> {{ itemModal.claimed_at_ist || '—' }}</p>
+              <p class="mb-1 small"><span class="text-muted">completed:</span> {{ itemModal.completed_at_ist || '—' }}</p>
+              <p class="mb-0 small"><span class="text-muted">time spent:</span>
+                {{ itemModal.time_taken_ms ? (itemModal.time_taken_ms / 1000).toFixed(1) + 's' : '—' }}</p>
+            </div>
+          </div>
+
+          <div v-if="itemModal.is_flagged" class="alert alert-warning mt-3 py-2 mb-0">
+            <i class="bi bi-flag-fill me-1"></i><strong>Flagged:</strong> {{ itemModal.flag_reason }}
+          </div>
+        </div>
+        <div class="asr-modal-foot">
+          <button v-if="itemModal.status !== 'available'" class="btn btn-outline-danger me-auto" @click="resetItem(itemModal.id)">
+            <i class="bi bi-arrow-counterclockwise me-1"></i>Send back to the pool
+          </button>
+          <button class="btn btn-secondary" @click="itemModal = null">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== MESSAGE MODAL ===================== -->
+    <transition name="modal-fade">
+      <div v-if="messageModal" class="assign-modal-backdrop" @click.self="messageModal = null">
+        <div class="assign-modal-card shadow-lg" style="max-width: 520px;">
+          <div class="assign-modal-header d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-3">
+              <div class="avatar-circle-lg">{{ (messageModal.rater?.name || '?').charAt(0).toUpperCase() }}</div>
+              <div>
+                <h5 class="fw-bold mb-0 text-dark">Message annotator</h5>
+                <small class="text-muted">{{ messageModal.rater?.name }} · {{ messageModal.rater?.email }}</small>
+              </div>
+            </div>
+            <button class="btn-close" @click="messageModal = null"></button>
+          </div>
+          <div class="assign-modal-body">
+            <!-- Full history with this annotator, stacked like a chat -->
+            <div v-if="threadLoading" class="text-center text-muted py-3">
+              <span class="spinner-border spinner-border-sm me-2"></span>Loading history…
+            </div>
+            <div v-else-if="threadItems.length" ref="threadBox" class="msg-thread mb-3">
+              <div v-for="item in threadItems"
+                   :key="item.kind === 'broadcast' ? 'b-' + item.broadcast_id : 'm-' + item.id"
+                   class="msg-bubble" :class="{ broadcast: item.kind === 'broadcast' }">
+                <div class="d-flex justify-content-between align-items-center gap-2 mb-1">
+                  <span class="d-inline-flex align-items-center gap-2 flex-wrap">
+                    <span v-if="item.kind === 'broadcast'" class="badge rounded-pill bg-primary-subtle text-primary"><i class="bi bi-broadcast me-1"></i>Broadcast</span>
+                    <span v-else-if="item.category === 'nudge'" class="badge rounded-pill bg-warning-subtle text-warning-emphasis"><i class="bi bi-bell me-1"></i>Nudge</span>
+                    <span v-else class="badge rounded-pill bg-secondary-subtle text-secondary"><i class="bi bi-chat-dots me-1"></i>Message</span>
+                    <span v-if="item.kind === 'broadcast'" class="fs-9 text-muted">{{ item.recipients_read }}/{{ item.recipients_total }} read</span>
+                    <span v-else class="fs-9" :class="item.is_read ? 'text-success' : 'text-muted'">
+                      <i :class="['bi', item.is_read ? 'bi-check2-all' : 'bi-check2']"></i> {{ item.is_read ? 'Read' : 'Unread' }}
+                    </span>
+                  </span>
+                  <button v-if="item.kind !== 'broadcast'" class="btn btn-link btn-sm p-0 text-secondary"
+                          title="Edit this message" @click="startEditThread(item)"><i class="bi bi-pencil"></i></button>
+                </div>
+                <div class="small text-dark" style="white-space: pre-wrap; word-break: break-word;">{{ item.body }}</div>
+                <div class="text-muted fs-9 mt-1">{{ fmtDate(item.created_at) }}<span v-if="item.edited_at"> · edited {{ fmtDate(item.edited_at) }}</span></div>
+              </div>
+            </div>
+            <div v-else class="text-center text-muted small py-2 mb-2">
+              <i class="bi bi-chat-square-text d-block fs-4 mb-1 opacity-50"></i>
+              No previous messages with this annotator.
+            </div>
+
+            <label class="form-label fw-semibold text-dark small mb-1">New message</label>
+            <textarea v-model="messageModal.body" class="form-control" rows="3" maxlength="2000"
+                      placeholder="Write your message… (they see it in their in-app inbox)"></textarea>
+            <div class="text-end text-muted fs-9 mt-1">{{ messageModal.body.length }}/2000</div>
+            <div v-if="messageError" class="text-danger small mt-1"><i class="bi bi-exclamation-triangle-fill me-1"></i>{{ messageError }}</div>
+          </div>
+          <div class="assign-modal-footer d-flex justify-content-end gap-2">
+            <button class="btn btn-light border btn-sm" @click="messageModal = null" :disabled="sending">Close</button>
+            <button class="btn btn-primary btn-sm d-inline-flex align-items-center gap-1.5"
+                    :disabled="sending || !messageModal.body.trim()" @click="sendMessage">
+              <span v-if="sending" class="spinner-border spinner-border-sm"></span>
+              <i v-else class="bi bi-send-fill"></i>
+              <span>Send message</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- ===================== BROADCAST MODAL ===================== -->
+    <transition name="modal-fade">
+      <div v-if="broadcastModal" class="assign-modal-backdrop" @click.self="broadcastModal = null">
+        <div class="assign-modal-card shadow-lg" style="max-width: 520px;">
+          <div class="assign-modal-header d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-3">
+              <div class="avatar-circle-lg bg-primary-subtle text-primary"><i class="bi bi-broadcast"></i></div>
+              <div>
+                <h5 class="fw-bold mb-0 text-dark">Broadcast to all annotators</h5>
+                <small class="text-muted">Sends the same message to every annotator on this team.</small>
+              </div>
+            </div>
+            <button class="btn-close" @click="broadcastModal = null"></button>
+          </div>
+          <div class="assign-modal-body">
+            <label class="form-label fw-semibold text-dark small">Message</label>
+            <textarea v-model="broadcastModal.body" class="form-control" rows="4" maxlength="2000"
+                      placeholder="Announcement for everyone…"></textarea>
+            <div class="text-end text-muted fs-9 mt-1">{{ broadcastModal.body.length }}/2000</div>
+            <div v-if="messageError" class="text-danger small mt-1"><i class="bi bi-exclamation-triangle-fill me-1"></i>{{ messageError }}</div>
+          </div>
+          <div class="assign-modal-footer d-flex justify-content-end gap-2">
+            <button class="btn btn-light border btn-sm" @click="broadcastModal = null" :disabled="sending">Cancel</button>
+            <button class="btn btn-primary btn-sm d-inline-flex align-items-center gap-1.5"
+                    :disabled="sending || !broadcastModal.body.trim()" @click="sendBroadcast">
+              <span v-if="sending" class="spinner-border spinner-border-sm"></span>
+              <i v-else class="bi bi-broadcast"></i>
+              <span>Broadcast</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- ===================== REMOVE (DEACTIVATE) MODAL ===================== -->
+    <transition name="modal-fade">
+      <div v-if="removeModal" class="assign-modal-backdrop" @click.self="removeModal = null">
+        <div class="assign-modal-card shadow-lg" style="max-width: 520px;">
+          <div class="assign-modal-header d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-3">
+              <div class="avatar-circle-lg bg-danger-subtle text-danger"><i class="bi bi-person-dash-fill"></i></div>
+              <div>
+                <h5 class="fw-bold mb-0 text-dark">Deactivate annotator</h5>
+                <small class="text-muted">{{ removeModal.rater.name }} · {{ removeModal.rater.email }}</small>
+              </div>
+            </div>
+            <button class="btn-close" @click="removeModal = null"></button>
+          </div>
+          <div class="assign-modal-body">
+            <div class="d-flex align-items-start gap-2 py-2 px-3 rounded-3 bg-warning-subtle mb-3">
+              <i class="bi bi-shield-check text-warning-emphasis mt-1"></i>
+              <small class="text-dark">
+                This <strong>deactivates</strong> the account (they can no longer log in) and
+                <strong>unlocks their {{ (removeModal.rater.assigned_task_ids || []).length }} assigned task(s)</strong>
+                so others can pick them up. Their submitted annotations are <strong>kept</strong>,
+                and this is <strong>reversible</strong> — you can Reactivate them later.
+              </small>
+            </div>
+            <label class="form-label fw-semibold text-dark small">
+              Type <code class="text-danger">deactivate {{ removeModal.rater.name }}</code> to confirm
+            </label>
+            <input v-model="removeModal.confirm" type="text" class="form-control"
+                   :class="{ 'is-invalid': removeModal.confirm && !removeConfirmMatches }"
+                   :placeholder="`deactivate ${removeModal.rater.name}`"
+                   autocomplete="off"
+                   @keyup.enter="removeConfirmMatches && deactivateRater()" />
+            <div v-if="removeError" class="text-danger small mt-2"><i class="bi bi-exclamation-triangle-fill me-1"></i>{{ removeError }}</div>
+          </div>
+          <div class="assign-modal-footer d-flex justify-content-end gap-2">
+            <button class="btn btn-light border btn-sm" @click="removeModal = null" :disabled="removing">Cancel</button>
+            <button class="btn btn-danger btn-sm d-inline-flex align-items-center gap-1.5"
+                    :disabled="removing || !removeConfirmMatches" @click="deactivateRater">
+              <span v-if="removing" class="spinner-border spinner-border-sm"></span>
+              <i v-else class="bi bi-person-dash-fill"></i>
+              <span>Deactivate annotator</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- ===================== SENT MESSAGES (OUTBOX) MODAL ===================== -->
+    <transition name="modal-fade">
+      <div v-if="outboxOpen" class="assign-modal-backdrop" @click.self="outboxOpen = false">
+        <div class="assign-modal-card shadow-lg" style="max-width: 680px;">
+          <div class="assign-modal-header d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-3">
+              <div class="avatar-circle-lg bg-secondary-subtle text-secondary"><i class="bi bi-clock-history"></i></div>
+              <div>
+                <h5 class="fw-bold mb-0 text-dark">Sent messages</h5>
+                <small class="text-muted">Messages and broadcasts you've shared with this team.</small>
+              </div>
+            </div>
+            <button class="btn-close" @click="outboxOpen = false"></button>
+          </div>
+          <div class="assign-modal-body" style="max-height: 60vh; overflow-y: auto;">
+            <div v-if="outboxLoading" class="text-center text-muted py-4">
+              <span class="spinner-border spinner-border-sm me-2"></span> Loading…
+            </div>
+            <div v-else-if="!outbox.length" class="text-center text-muted py-4">
+              <i class="bi bi-inbox fs-3 d-block mb-2"></i> You haven't sent any messages yet.
+            </div>
+            <div v-else class="d-flex flex-column gap-2">
+              <div v-for="(item, i) in outbox"
+                   :key="item.kind === 'broadcast' ? 'b-' + item.broadcast_id : 'm-' + item.id"
+                   class="border rounded-3 p-3">
+                <div class="d-flex justify-content-between align-items-start gap-2">
+                  <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <span v-if="item.kind === 'broadcast'" class="badge rounded-pill bg-primary-subtle text-primary">
+                      <i class="bi bi-broadcast me-1"></i>Broadcast
+                    </span>
+                    <span v-else-if="item.category === 'nudge'" class="badge rounded-pill bg-warning-subtle text-warning-emphasis">
+                      <i class="bi bi-bell me-1"></i>Nudge
+                    </span>
+                    <span v-else class="badge rounded-pill bg-secondary-subtle text-secondary">
+                      <i class="bi bi-chat-dots me-1"></i>Message
+                    </span>
+                    <span class="small text-dark fw-semibold">
+                      {{ item.kind === 'broadcast' ? `${item.recipients_total} annotator(s)` : item.rater_name }}
+                    </span>
+                    <span v-if="item.kind === 'broadcast'" class="fs-9 text-muted">{{ item.recipients_read }}/{{ item.recipients_total }} read</span>
+                    <span v-else class="fs-9" :class="item.is_read ? 'text-success' : 'text-muted'">
+                      <i :class="['bi', item.is_read ? 'bi-check2-all' : 'bi-check2']"></i> {{ item.is_read ? 'Read' : 'Unread' }}
+                    </span>
+                    <span v-if="item.edited_at" class="badge bg-light text-secondary border">edited</span>
+                  </div>
+                  <button v-if="item.kind !== 'broadcast' && editingMsg !== i"
+                          class="btn btn-link btn-sm p-0 text-secondary flex-shrink-0"
+                          title="Edit this message" @click="editingMsg = i; editBody = item.body">
+                    <i class="bi bi-pencil"></i>
+                  </button>
+                </div>
+
+                <template v-if="editingMsg === i">
+                  <textarea v-model="editBody" class="form-control form-control-sm mt-2" rows="3" maxlength="2000"></textarea>
+                  <div class="d-flex justify-content-end gap-2 mt-2">
+                    <button class="btn btn-light border btn-sm" @click="editingMsg = null">Cancel</button>
+                    <button class="btn btn-primary btn-sm" @click="saveMessageEdit(item, i)">Save changes</button>
+                  </div>
+                </template>
+                <div v-else class="small text-dark mt-2" style="white-space: pre-wrap; word-break: break-word;">{{ item.body }}</div>
+
+                <div class="text-muted fs-9 mt-1">{{ fmtDate(item.created_at) }}</div>
+              </div>
+            </div>
+          </div>
+          <div class="assign-modal-footer d-flex justify-content-end">
+            <button class="btn btn-light border btn-sm" @click="outboxOpen = false">Close</button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- ===================== LANGUAGES & PULL SIZE MODAL ===================== -->
+    <transition name="modal-fade">
+      <div v-if="memberModal" class="assign-modal-backdrop" @click.self="memberModal = null">
+        <div class="assign-modal-card shadow-lg" style="max-width: 520px;">
+          <div class="assign-modal-header d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-3">
+              <div class="avatar-circle-lg">{{ (memberModal.name || '?').charAt(0).toUpperCase() }}</div>
+              <div>
+                <h5 class="fw-bold mb-0 text-dark">Languages &amp; pull size</h5>
+                <small class="text-muted">{{ memberModal.name }}</small>
+              </div>
+            </div>
+            <button class="btn-close" @click="memberModal = null"></button>
+          </div>
+          <div class="assign-modal-body">
+            <div class="d-flex align-items-start gap-2 py-2 px-3 rounded-3 bg-info-subtle mb-3">
+              <i class="bi bi-info-circle-fill text-info mt-1"></i>
+              <small class="text-info-emphasis">
+                What they actually work on is their <strong>assigned tasks</strong>. These two
+                settings are the coarse limits: which languages they may be given at all, and how
+                many prompts one "Get prompts" hands them.
+              </small>
+            </div>
+            <label class="form-label fw-semibold text-dark small mb-1">
+              Languages they may be given <span class="text-muted fw-normal">(none = every language)</span>
+            </label>
+            <div class="d-flex flex-wrap gap-2 mb-3">
+              <label v-for="L in languages" :key="L.language" class="lang-check">
+                <input type="checkbox" :value="L.language" v-model="memberModal.languages"> {{ L.language }}
+              </label>
+            </div>
+            <label class="form-label fw-semibold text-dark small mb-1">Prompts per "Get prompts"</label>
+            <input type="number" v-model.number="memberModal.pull_size" class="form-control" min="1" max="500">
+          </div>
+          <div class="assign-modal-footer d-flex justify-content-between align-items-center gap-2">
+            <button class="btn btn-outline-danger btn-sm" @click="removeMember">Remove from team</button>
+            <div class="d-flex gap-2">
+              <button class="btn btn-light border btn-sm" @click="memberModal = null">Cancel</button>
+              <button class="btn btn-primary btn-sm d-inline-flex align-items-center gap-1.5"
+                      :disabled="savingMember" @click="saveMember">
+                <span v-if="savingMember" class="spinner-border spinner-border-sm"></span>
+                <i v-else class="bi bi-check2-circle"></i>
+                <span>Save</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- ══ export with live progress ══ -->
+    <div v-if="exportOpen" class="asr-modal-backdrop" @click.self="closeExport">
+      <div class="asr-modal">
+        <div class="asr-modal-head">
+          <h5 class="fw-bold mb-0">Export the pool</h5>
+          <button class="btn-close" @click="closeExport"></button>
+        </div>
+        <div class="asr-modal-body">
+          <template v-if="!exportJob">
+            <label class="form-label fw-semibold text-xs text-uppercase text-secondary">Format</label>
+            <div class="btn-group w-100 mb-3">
+              <button class="btn" :class="exportFormat === 'xlsx' ? 'btn-primary' : 'btn-outline-secondary'"
+                      @click="exportFormat = 'xlsx'"><i class="bi bi-file-earmark-excel me-1"></i>Excel</button>
+              <button class="btn" :class="exportFormat === 'csv' ? 'btn-primary' : 'btn-outline-secondary'"
+                      @click="exportFormat = 'csv'"><i class="bi bi-filetype-csv me-1"></i>CSV</button>
+            </div>
+            <label class="form-label fw-semibold text-xs text-uppercase text-secondary">Rows</label>
+            <select v-model="exportScope" class="form-select mb-3">
+              <option value="all">Everything in the pool</option>
+              <option value="done">Only annotated prompts</option>
+            </select>
+            <label class="form-label fw-semibold text-xs text-uppercase text-secondary">Language</label>
+            <select v-model="exportLanguage" class="form-select mb-3">
+              <option value="">All languages</option>
+              <option v-for="L in languages" :key="L.language" :value="L.language">{{ L.language }}</option>
+            </select>
+            <label class="form-label fw-semibold text-xs text-uppercase text-secondary">Task</label>
+            <select v-model="exportTaskId" class="form-select mb-3">
+              <option value="">Every task</option>
+              <option v-for="t in tasks" :key="t.task_id" :value="String(t.task_id)">
+                #{{ t.task_id }} — {{ t.label }}
+              </option>
+            </select>
+            <label class="form-label fw-semibold text-xs text-uppercase text-secondary">Category</label>
+            <select v-model="exportCategory" class="form-select">
+              <option value="">Every category</option>
+              <option v-for="c in subMeta.categories" :key="c" :value="c">{{ c }}</option>
+            </select>
+            <p class="text-muted text-xs mt-3 mb-0">
+              Every row carries the original prompt, what the annotator submitted, the labels,
+              who did it, when, and the task it belongs to.
+            </p>
+          </template>
+
+          <div v-else class="text-center py-2">
+            <div class="fw-semibold text-dark mb-3">
+              <span v-if="exportJob.status !== 'done' && exportJob.status !== 'error'" class="spinner-border spinner-border-sm me-2"></span>
+              <i v-else-if="exportJob.status === 'done'" class="bi bi-check-circle-fill text-success me-2"></i>
+              <i v-else class="bi bi-exclamation-octagon-fill text-danger me-2"></i>
+              {{ exportLabel }}
+            </div>
+            <div class="progress" style="height:10px">
+              <div class="progress-bar" :class="{ 'progress-bar-striped progress-bar-animated': exportJob.status !== 'done' }"
+                   :style="{ width: (exportJob.percent || 0) + '%' }"></div>
+            </div>
+            <div class="text-xs text-muted mt-2">
+              {{ (exportJob.done || 0).toLocaleString() }} / {{ (exportJob.total || 0).toLocaleString() }} rows
+              <span v-if="exportJob.percent">· {{ exportJob.percent }}%</span>
+            </div>
+            <p v-if="exportJob.status === 'error'" class="text-danger small mt-2 mb-0">{{ exportJob.error }}</p>
+          </div>
+        </div>
+        <div class="asr-modal-foot">
+          <button class="btn btn-secondary" @click="closeExport">
+            {{ exportJob && exportJob.status === 'done' ? 'Close' : 'Cancel' }}
+          </button>
+          <button v-if="!exportJob" class="btn btn-primary" @click="startExport">
+            <i class="bi bi-gear me-1"></i>Build the file
+          </button>
+          <button v-else-if="exportJob.status === 'done'" class="btn btn-success" :disabled="downloading" @click="downloadExport">
+            <span v-if="downloading" class="spinner-border spinner-border-sm me-1"></span>
+            <i v-else class="bi bi-download me-1"></i>Download
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- simple report overlay -->
+    <div v-if="simpleExport" class="asr-modal-backdrop">
+      <div class="bg-white rounded shadow-lg px-4 py-3 fw-semibold text-dark d-flex align-items-center">
+        <span v-if="simpleExport.state === 'busy'" class="spinner-border spinner-border-sm me-2"></span>
+        <i v-else-if="simpleExport.state === 'done'" class="bi bi-check-circle-fill text-success me-2"></i>
+        <i v-else class="bi bi-exclamation-octagon-fill text-danger me-2"></i>
+        {{ simpleExport.label }}
+        <span v-if="simpleExport.state === 'busy'" class="text-muted ms-2">building…</span>
+      </div>
+    </div>
+
+    <div v-if="toast" class="asr-toast">{{ toast }}</div>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, reactive, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { useRoute } from 'vue-router'
+import { api, authToken, session } from '@/session'
+import { API_BASE_URL } from '@/config'
+
+// Which team's dashboard this is (from /<team>/admin); works for any pool team.
+const route = useRoute()
+const teamKey = computed(() =>
+  String(route.params.team || session.team?.key || 'asr').toLowerCase())
+
+// Same icons the TTS dashboard uses for the same ideas, so the two read as one product.
+const tabs = [
+  { key: 'overview',    label: 'Overview',    icon: 'bi-grid-1x2-fill', hint: 'Key numbers and language stats' },
+  { key: 'tasks',       label: 'Tasks',       icon: 'bi-list-task',     hint: 'Every task, who holds it, how far along it is' },
+  { key: 'annotators',  label: 'Annotators',  icon: 'bi-people-fill',   hint: 'Assign tasks, message & manage annotators' },
+  { key: 'submissions', label: 'Submissions', icon: 'bi-list-check',    hint: 'Every prompt and the submission made against it' },
+  { key: 'activity',    label: 'Activity',    icon: 'bi-clock-history', hint: 'Everything that happened, with timestamps' },
+  { key: 'admin',       label: 'Admin',       icon: 'bi-gear-fill',     hint: 'Signup PIN, reports and maintenance' },
+]
+const tab = ref('overview')
+
+const loading = ref(false)
+const error = ref('')
+const stats = ref({})
+const languages = ref([])
+const annotators = ref([])
+const daily = ref([])
+const uploads = ref([])
+const staleHours = ref(48)
+const difficulties = ref(['Easy', 'Medium', 'Hard'])
+const expanded = reactive({})
+const lastLoaded = ref('')
+const isAutoRefreshActive = ref(true)
+const refreshInterval = 10
+const countdown = ref(refreshInterval)
+let countdownTimer = null
+const reclaiming = ref(false)
+const toast = ref('')
+
+// ── tasks: one per language x class, the unit the admin hands out ──
+const tasksSubTab = ref('overview')
+const tasks = ref([])
+const taskTotals = ref({})
+const taskLanguages = ref([])
+const taskClasses = ref([])
+const taskTypes = ref([])
+const taskStates = ref([])
+
+function humanizeType(t) {
+  return String(t || '').replace(/[-_]/g, ' ').replace(/^\w/, c => c.toUpperCase())
+}
+const tasksLoading = ref(false)
+const selectedTasks = ref([])
+const taskFilters = reactive({ language: '', class: '', type: '', state: '', annotator: '', q: '' })
+const taskModal = ref(null)
+const taskLoading = ref(false)
+
+// ── assignment ──
+const assignModal = ref(null)
+const assignCandidates = ref([])
+const assignableTasks = ref([])
+const assignSearch = ref('')
+const assigning = ref(false)
+const assignError = ref('')
+
+// ── submissions: every prompt and what was submitted against it ──
+const submissions = ref([])
+const subLoading = ref(false)
+const subPage = ref(1)
+const subPages = ref(1)
+const subTotal = ref(0)
+const subMeta = ref({ tasks: [], languages: [], classes: [], categories: [], annotators: [] })
+const subFilters = reactive({ task_id: '', language: '', class: '', category: '',
+                              annotator: '', state: 'submitted', difficulty: '',
+                              edited: '', flagged: '', changed: '', from: '', to: '', q: '' })
+
+const memberModal = ref(null)
+const savingMember = ref(false)
+const annotatorModal = ref(null)
+const annotatorLoading = ref(false)
+const itemModal = ref(null)
+const messageModal = ref(null)
+const broadcastModal = ref(null)
+const sending = ref(false)
+const signupPin = ref('')
+const pinCopied = ref(false)
+
+// ── annotators tab: search, sort, stale alert, menus, drill-down ──
+const STALE_DAYS = 5
+const raterSearch = ref('')
+const showInactive = ref(false)
+const showStaleOnly = ref(false)
+const raterSort = ref({ key: 'default', dir: 'asc' })
+const expandedRaters = ref([])
+const raterTasks = reactive({})
+const raterTasksLoading = ref(null)
+const bulkNudging = ref(false)
+const openMenu = ref(null)
+const menuPos = reactive({ top: 0, left: 0 })
+const removeModal = ref(null)
+const removing = ref(false)
+const removeError = ref('')
+const removeConfirmMatches = computed(() =>
+  !!removeModal.value
+  && removeModal.value.confirm.trim().toLowerCase() === `deactivate ${removeModal.value.rater.name}`.toLowerCase())
+const messageError = ref('')
+const threadItems = ref([])
+const threadLoading = ref(false)
+const threadBox = ref(null)
+const outboxOpen = ref(false)
+const outbox = ref([])
+const outboxLoading = ref(false)
+const editingMsg = ref(null)
+const editBody = ref('')
+
+const activityPresets = [
+  { label: 'Today', days: 0 },
+  { label: '7d', days: 7 },
+  { label: '30d', days: 30 },
+  { label: 'All time', days: null },
+]
+const activityFrom = ref('')
+const activityTo = ref('')
+const activityWindow = ref(null)
+const activityLoading = ref(false)
+const windowDays = ref({})
+const todayIst = ref('')
+
+const activity = ref([])
+const activityDays = ref(7)
+
+const exportOpen = ref(false)
+const exportFormat = ref('xlsx')
+const exportScope = ref('all')
+const exportLanguage = ref('')
+const exportTaskId = ref('')
+const exportCategory = ref('')
+const exportJob = ref(null)
+const downloading = ref(false)
+const simpleExport = ref(null)
+let pollTimer = null
+
+const exportLabel = computed(() => {
+  const s = exportJob.value?.status
+  if (s === 'done') return 'Your file is ready.'
+  if (s === 'error') return 'The export failed.'
+  if (s === 'queued') return 'Starting…'
+  return 'Building your file…'
+})
+
+function pct(n, total) { return total ? `${(100 * n) / total}%` : '0%' }
+/** Never show a flat 0% when real work has been done. */
+function showPct(p, done) { return (!p && done) ? '<0.1' : (p || 0) }
+function diffClass(k) {
+  return { Easy: 'bg-success', Medium: 'bg-warning', Hard: 'bg-danger' }[k] || 'bg-secondary'
+}
+function badgeFor(d) {
+  return { easy: 'bg-success-subtle text-success', medium: 'bg-warning-subtle text-warning',
+           hard: 'bg-danger-subtle text-danger' }[String(d || '').toLowerCase()]
+         || 'bg-light text-secondary border'
+}
+function statusBadge(s) {
+  return { completed: 'bg-success-subtle text-success', flagged: 'bg-warning-subtle text-warning',
+           claimed: 'bg-info-subtle text-info', available: 'bg-light text-secondary border' }[s]
+         || 'bg-light text-secondary border'
+}
+function stateBadge(s) {
+  return { complete: 'bg-success-subtle text-success', 'in-progress': 'bg-info-subtle text-info',
+           'not-started': 'bg-light text-secondary border',
+           unassigned: 'bg-danger-subtle text-danger' }[s] || 'bg-light text-secondary border'
+}
+function pullBadge(s) {
+  return { open: 'bg-info-subtle text-info', done: 'bg-success-subtle text-success',
+           released: 'bg-light text-secondary border' }[s] || 'bg-light text-secondary border'
+}
+function rtl(lang) { return String(lang || '').toLowerCase() === 'urdu' }
+function trim(t, n = 90) {
+  const s = (t || '').replace(/\s+/g, ' ').trim()
+  return s.length > n ? s.slice(0, n) + '…' : s
+}
+function fmtDate(v) {
+  if (!v) return '—'
+  return new Date(v).toLocaleString('en-IN', { day: '2-digit', month: 'short',
+                                               hour: '2-digit', minute: '2-digit' })
+}
+function toggle(lang) { expanded[lang] = !expanded[lang] }
+function flash(msg) {
+  toast.value = msg
+  setTimeout(() => (toast.value = ''), 2600)
+}
+
+/** Rows come from the chosen date window; with no window, from the dashboard. Search, the inactive. */
+const shownAnnotators = computed(() => {
+  const base = activityWindow.value ? activityWindow.value.raters : annotators.value
+  // A windowed row carries only that window's numbers; merge the standing facts
+  const facts = Object.fromEntries(annotators.value.map(a => [a.rater_id, a]))
+  let rows = base.map(a => ({ ...(facts[a.rater_id] || {}), ...a }))
+
+  const q = raterSearch.value.trim().toLowerCase()
+  if (q) rows = rows.filter(a => `${a.name} ${a.email}`.toLowerCase().includes(q))
+  if (!showInactive.value) rows = rows.filter(a => a.account_active !== false)
+  if (showStaleOnly.value) rows = rows.filter(isStale)
+
+  const { key, dir } = raterSort.value
+  const sign = dir === 'asc' ? 1 : -1
+  const sorted = [...rows]
+  if (key === 'name') sorted.sort((a, b) => sign * (a.name || '').localeCompare(b.name || ''))
+  else if (key === 'assigned') sorted.sort((a, b) => sign * ((a.assigned_task_ids?.length || 0) - (b.assigned_task_ids?.length || 0)))
+  else if (key === 'completed') sorted.sort((a, b) => sign * ((a.completed || 0) - (b.completed || 0)))
+  else if (key === 'lastactive') sorted.sort((a, b) => sign * (new Date(a.last_active || 0) - new Date(b.last_active || 0)))
+  else sorted.sort((a, b) => (b.completed || 0) - (a.completed || 0))
+  return sorted
+})
+
+/** Holding tasks but silent for STALE_DAYS+ days (or never active at all). */
+function isStale(a) {
+  if (!a || !(a.assigned_task_ids || []).length) return false
+  if (a.account_active === false) return false
+  if (!a.last_active) return true
+  return (Date.now() - new Date(a.last_active).getTime()) / 86400000 >= STALE_DAYS
+}
+const staleRaters = computed(() => annotators.value.filter(isStale))
+
+function sortRaters(key) {
+  raterSort.value = raterSort.value.key === key
+    ? { key, dir: raterSort.value.dir === 'asc' ? 'desc' : 'asc' }
+    : { key, dir: key === 'name' ? 'asc' : 'desc' }
+}
+function sortIcon(key) {
+  if (raterSort.value.key !== key) return 'bi-arrow-down-up text-muted opacity-50'
+  return raterSort.value.dir === 'asc' ? 'bi-sort-up' : 'bi-sort-down'
+}
+
+function allTimeFor(id) {
+  return annotators.value.find(a => a.rater_id === id)?.completed || 0
+}
+function raterStatus(a) {
+  if (!(a.assigned_task_ids || []).length) return 'Unassigned'
+  if (a.in_progress || a.holding) return 'Working'
+  if (a.completed) return 'Active'
+  return 'Not started'
+}
+function raterStatusClass(a) {
+  const s = raterStatus(a)
+  return s === 'Working' ? 'is-working' : s === 'Active' ? 'is-active'
+       : s === 'Unassigned' ? 'is-idle' : 'is-new'
+}
+function raterStatusIcon(a) {
+  const s = raterStatus(a)
+  return s === 'Working' ? 'bi-hourglass-split' : s === 'Active' ? 'bi-check-circle-fill'
+       : s === 'Unassigned' ? 'bi-dash-circle' : 'bi-circle'
+}
+function timeAgo(iso) {
+  if (!iso) return 'never active'
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const h = Math.floor(mins / 60)
+  if (h < 24) return `${h}h ago`
+  const d = Math.floor(h / 24)
+  return d < 30 ? `${d}d ago` : `${Math.floor(d / 30)}mo ago`
+}
+
+async function toggleRaterTasks(a) {
+  const i = expandedRaters.value.indexOf(a.rater_id)
+  if (i !== -1) { expandedRaters.value.splice(i, 1); return }
+  expandedRaters.value.push(a.rater_id)
+  if (raterTasks[a.rater_id]) return
+  raterTasksLoading.value = a.rater_id
+  try {
+    const d = await api(`/pool/admin/annotator/${a.rater_id}?team=${teamKey.value}`)
+    raterTasks[a.rater_id] = d.by_task || []
+  } catch (e) {
+    flash(e.message)
+  } finally {
+    raterTasksLoading.value = null
+  }
+}
+
+// ── pop-menus ──
+function toggleMenu(key, ev, width = 240) {
+  if (openMenu.value === key) { openMenu.value = null; return }
+  const r = ev.currentTarget.getBoundingClientRect()
+  menuPos.top = r.bottom + 6
+  menuPos.left = Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8))
+  openMenu.value = key
+}
+// Header dropdowns (exports / messages) only -- annotator-row actions are inline buttons.
+function runMenu(fn) { fn(); openMenu.value = null }
+
+// ── annotator account actions ──
+async function nudgeRater(a) {
+  try {
+    flash((await api(`/admin/rater/${a.rater_id}/nudge`, {
+      method: 'POST', body: JSON.stringify({}),
+    })).message)
+  } catch (e) {
+    flash(e.message)
+  }
+}
+
+async function remindAllStale() {
+  bulkNudging.value = true
+  try {
+    for (const a of staleRaters.value) {
+      await api(`/admin/rater/${a.rater_id}/nudge`, { method: 'POST', body: JSON.stringify({}) })
+    }
+    flash(`Reminder sent to ${staleRaters.value.length} annotator(s).`)
+  } catch (e) {
+    flash(e.message)
+  } finally {
+    bulkNudging.value = false
+  }
+}
+
+async function deactivateRater() {
+  removing.value = true
+  removeError.value = ''
+  try {
+    const r = await api(`/admin/rater/${removeModal.value.rater.rater_id}/deactivate`, {
+      method: 'POST', body: JSON.stringify({ confirm: removeModal.value.confirm }),
+    })
+    flash(r.message)
+    removeModal.value = null
+    await Promise.all([load(), loadTasks()])
+  } catch (e) {
+    removeError.value = e.message
+  } finally {
+    removing.value = false
+  }
+}
+
+async function reactivateRater(a) {
+  try {
+    flash((await api(`/admin/rater/${a.rater_id}/reactivate`, {
+      method: 'POST', body: JSON.stringify({}),
+    })).message)
+    await load()
+  } catch (e) {
+    flash(e.message)
+  }
+}
+
+// ── outbox ──
+async function openOutbox() {
+  outboxOpen.value = true
+  outboxLoading.value = true
+  editingMsg.value = null
+  try {
+    outbox.value = (await api(`/admin/messages?team=${teamKey.value}`)).items || []
+  } catch (e) {
+    flash(e.message)
+  } finally {
+    outboxLoading.value = false
+  }
+}
+
+async function saveMessageEdit(m, i) {
+  try {
+    await api(`/admin/message/${m.id}`, {
+      method: 'PUT', body: JSON.stringify({ body: editBody.value }),
+    })
+    outbox.value[i] = { ...m, body: editBody.value, edited_at: new Date().toISOString() }
+    editingMsg.value = null
+    flash('Message updated.')
+  } catch (e) {
+    flash(e.message)
+  }
+}
+
+const windowPreset = computed(() => {
+  if (!activityFrom.value && !activityTo.value) return 'All time'
+  const today = new Date().toISOString().slice(0, 10)
+  if (activityTo.value !== today) return null
+  for (const pr of activityPresets) {
+    if (pr.days === null) continue
+    const d = new Date()
+    d.setDate(d.getDate() - pr.days)
+    if (activityFrom.value === d.toISOString().slice(0, 10)) return pr.label
+  }
+  return null
+})
+
+function applyPreset(pr) {
+  if (pr.days === null) {
+    activityFrom.value = ''
+    activityTo.value = ''
+  } else {
+    const from = new Date()
+    from.setDate(from.getDate() - pr.days)
+    activityFrom.value = from.toISOString().slice(0, 10)
+    activityTo.value = new Date().toISOString().slice(0, 10)
+  }
+  loadActivityWindow()
+}
+
+async function loadActivityWindow() {
+  activityLoading.value = true
+  try {
+    const qs = new URLSearchParams({ team: teamKey.value })
+    if (activityFrom.value) qs.set('from', activityFrom.value)
+    if (activityTo.value) qs.set('to', activityTo.value)
+    const d = await api('/pool/admin/rater_activity?' + qs)
+    activityWindow.value = (activityFrom.value || activityTo.value) ? d : null
+    todayIst.value = d.today
+    windowDays.value = Object.fromEntries(d.raters.map(r => [r.rater_id, r.days]))
+  } catch (e) {
+    flash(e.message)
+  } finally {
+    activityLoading.value = false
+  }
+}
+
+const annotatorDays = computed(() => {
+  const id = annotatorModal.value?.annotator?.id
+  return id ? (windowDays.value[id] || []) : []
+})
+
+function dayBarWidth(d) {
+  const max = Math.max(1, ...annotatorDays.value.map(x => x.completed + x.flagged))
+  return ((d.completed + d.flagged) / max) * 100 + '%'
+}
+
+function longDay(iso) {
+  const [y, m, dd] = (iso || '').split('-').map(Number)
+  if (!y) return iso
+  return new Date(y, m - 1, dd).toLocaleDateString('en-IN',
+    { weekday: 'short', day: '2-digit', month: 'short' })
+}
+
+function setTab(key) {
+  tab.value = key
+  if (key === 'tasks' && !tasks.value.length) loadTasks()
+  if (key === 'submissions') {
+    if (!subMeta.value.tasks.length) loadSubMeta()
+    if (!submissions.value.length) loadSubmissions(1)
+  }
+  if (key === 'admin' && !signupPin.value) loadPin()
+  if (key === 'activity' && !activity.value.length) loadActivity()
+  if (key === 'annotators' && !todayIst.value) loadActivityWindow()
+}
+
+function eventBadge(e) {
+  if (e === 'pulled') return 'bg-info-subtle text-info'
+  if (e === 'flagged') return 'bg-warning-subtle text-warning'
+  if (e === 'edited & labelled') return 'bg-primary-subtle text-primary'
+  return 'bg-success-subtle text-success'
+}
+
+async function loadActivity() {
+  activityLoading.value = true
+  try {
+    const d = await api(`/pool/admin/activity?team=${teamKey.value}&days=${activityDays.value}&limit=300`)
+    activity.value = d.events || []
+  } catch (e) {
+    flash(e.message)
+  } finally {
+    activityLoading.value = false
+  }
+}
+
+async function load() {
+  loading.value = true
+  try {
+    const d = await api(`/pool/admin/dashboard?team=${teamKey.value}`)
+    stats.value = d.stats || {}
+    languages.value = d.languages || []
+    annotators.value = d.annotators || []
+    daily.value = d.daily || []
+    uploads.value = d.uploads || []
+    staleHours.value = d.stale_claim_hours || 48
+    difficulties.value = d.difficulties || difficulties.value
+    lastLoaded.value = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+    error.value = ''
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    loading.value = false
+  }
+}
+
+// ── tasks ──────────────────────────────────────────────────────────────────
+async function loadTasks() {
+  tasksLoading.value = true
+  try {
+    const d = await api(`/pool/admin/tasks?team=${teamKey.value}`)
+    tasks.value = d.tasks || []
+    taskTotals.value = d.totals || {}
+    taskLanguages.value = d.languages || []
+    taskClasses.value = d.classes || []
+    taskTypes.value = d.task_types || []
+    taskStates.value = d.states || []
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    tasksLoading.value = false
+  }
+}
+
+/** The task table filters in the browser: the whole list is one small payload, so every filter is i. */
+const shownTasks = computed(() => {
+  const q = taskFilters.q.trim().toLowerCase()
+  return tasks.value.filter(t => {
+    if (taskFilters.language && t.language !== taskFilters.language) return false
+    if (taskFilters.class && String(t.class) !== taskFilters.class) return false
+    if (taskFilters.type && (t.task_type || 'text-review') !== taskFilters.type) return false
+    if (taskFilters.state && t.state !== taskFilters.state) return false
+    if (taskFilters.annotator === 'none' && t.assignee) return false
+    if (taskFilters.annotator && taskFilters.annotator !== 'none'
+        && String(t.assignee?.rater_id ?? '') !== taskFilters.annotator) return false
+    if (q) {
+      const hay = `${t.task_id} ${t.language} ${t.class} ${t.assignee?.name || ''}`.toLowerCase()
+      if (!hay.includes(q)) return false
+    }
+    return true
+  })
+})
+
+const tasksByLanguage = computed(() => {
+  const out = {}
+  for (const t of tasks.value) {
+    const L = out[t.language] || (out[t.language] = {
+      language: t.language, tasks: [], assigned: 0,
+      total: 0, completed: 0, flagged: 0, claimed: 0, available: 0, done: 0,
+    })
+    L.tasks.push(t)
+    if (t.assignee) L.assigned += 1
+    for (const k of ['total', 'completed', 'flagged', 'claimed', 'available', 'done']) L[k] += t[k]
+  }
+  return Object.values(out)
+    .map(L => ({ ...L, progress: L.total ? Math.round(1000 * L.done / L.total) / 10 : 0 }))
+    .sort((a, b) => a.language.localeCompare(b.language))
+})
+
+const allShownSelected = computed(() =>
+  shownTasks.value.length > 0 && shownTasks.value.every(t => selectedTasks.value.includes(t.task_id)))
+
+function toggleTaskPick(id) {
+  const i = selectedTasks.value.indexOf(id)
+  if (i === -1) selectedTasks.value.push(id)
+  else selectedTasks.value.splice(i, 1)
+}
+function toggleSelectAll() {
+  selectedTasks.value = allShownSelected.value ? [] : shownTasks.value.map(t => t.task_id)
+}
+function resetTaskFilters() {
+  Object.keys(taskFilters).forEach(k => { taskFilters[k] = '' })
+}
+
+async function openTask(id) {
+  if (!id) return
+  taskLoading.value = true
+  taskModal.value = { task: { task_id: id, label: '', total: 0, categories: [] },
+                      annotators: [], pulls: [], assignment_history: [], recent_submissions: [] }
+  try {
+    taskModal.value = await api(`/pool/admin/task/${id}?team=${teamKey.value}`)
+  } catch (e) {
+    flash(e.message)
+    taskModal.value = null
+  } finally {
+    taskLoading.value = false
+  }
+}
+
+const notStartedTasks = computed(() =>
+  tasks.value.filter(t => t.state === 'not-started').length)
+const almostDoneTasks = computed(() =>
+  tasks.value.filter(t => t.progress >= 80 && t.progress < 100).length)
+
+/** Jump from an Overview card straight into the matching task list. */
+function focusTasks(state) {
+  resetTaskFilters()
+  if (state !== 'almostdone') taskFilters.state = state
+  setTab('tasks')
+  tasksSubTab.value = 'all'
+  if (!tasks.value.length) loadTasks()
+}
+
+function browseTask(id) {
+  taskModal.value = null
+  resetSubFilters(false)
+  subFilters.task_id = String(id)
+  setTab('submissions')
+  loadSubmissions(1)
+}
+
+function openLanguage(L) {
+  setTab('tasks')
+  tasksSubTab.value = 'overview'
+  expanded[L.language] = true
+}
+
+// ── assignment ─────────────────────────────────────────────────────────────
+async function openAssign(taskIds = [], raterId = '') {
+  assignError.value = ''
+  assignSearch.value = ''
+  assignModal.value = { rater_id: raterId || '', task_ids: [...taskIds], reassign: false }
+  try {
+    const d = await api(`/pool/admin/tasks/assignable?team=${teamKey.value}`)
+    assignCandidates.value = d.annotators || []
+    assignableTasks.value = d.tasks || []
+  } catch (e) {
+    assignError.value = e.message
+  }
+}
+
+const assignRater = computed(() =>
+  assignCandidates.value.find(a => String(a.rater_id) === String(assignModal.value?.rater_id)) || null)
+
+const assignableShown = computed(() => {
+  const q = assignSearch.value.trim().toLowerCase()
+  if (!q) return assignableTasks.value
+  return assignableTasks.value.filter(t =>
+    `${t.task_id} ${t.label} ${t.assignee?.name || ''}`.toLowerCase().includes(q))
+})
+
+/** Selected tasks that somebody else already holds -- shown by name so taking them over is always a. */
+const assignTakeover = computed(() => {
+  if (!assignModal.value) return []
+  const me = assignModal.value.rater_id
+  return assignableTasks.value
+    .filter(t => assignModal.value.task_ids.includes(t.task_id)
+                 && t.assignee && String(t.assignee.rater_id) !== String(me))
+    .map(t => `#${t.task_id} (${t.assignee.name})`)
+})
+
+function toggleAssignPick(id) {
+  const list = assignModal.value.task_ids
+  const i = list.indexOf(id)
+  if (i === -1) list.push(id)
+  else list.splice(i, 1)
+}
+
+async function saveAssignment() {
+  assigning.value = true
+  assignError.value = ''
+  try {
+    const r = await api('/pool/admin/tasks/assign', {
+      method: 'POST',
+      body: JSON.stringify({ team: teamKey.value, rater_id: Number(assignModal.value.rater_id),
+                             task_ids: assignModal.value.task_ids,
+                             reassign: assignModal.value.reassign }),
+    })
+    assignModal.value = null
+    selectedTasks.value = []
+    flash(r.message)
+    await Promise.all([loadTasks(), load()])
+  } catch (e) {
+    assignError.value = e.message
+  } finally {
+    assigning.value = false
+  }
+}
+
+async function unassignTask(t) {
+  const holder = t.assignee?.name || 'the annotator'
+  if (!confirm(`Take task #${t.task_id} (${t.label || t.language}) back from ${holder}?\n\n`
+             + 'Everything they have already submitted is kept. Anything they are still '
+             + 'holding goes back to the pool so the task can be given to someone else.')) return
+  try {
+    const r = await api('/pool/admin/tasks/unassign', {
+      method: 'POST',
+      body: JSON.stringify({ team: teamKey.value, task_ids: [t.task_id], return_claimed: true }),
+    })
+    flash(r.message)
+    taskModal.value = null
+    await Promise.all([loadTasks(), load()])
+  } catch (e) {
+    flash(e.message)
+  }
+}
+
+// ── submissions ────────────────────────────────────────────────────────────
+function subQuery() {
+  const qs = new URLSearchParams()
+  Object.entries(subFilters).forEach(([k, v]) => { if (v) qs.set(k, v) })
+  return qs
+}
+
+async function loadSubmissions(p = 1) {
+  subLoading.value = true
+  try {
+    const qs = subQuery()
+    qs.set('team', teamKey.value)
+    qs.set('page', p)
+    qs.set('per_page', 50)
+    const d = await api(`/pool/admin/submissions?${qs}`)
+    submissions.value = d.items || []
+    subPage.value = d.page
+    subPages.value = d.pages
+    subTotal.value = d.total
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    subLoading.value = false
+  }
+}
+
+async function loadSubMeta() {
+  try {
+    subMeta.value = await api(`/pool/admin/submissions/filters?team=${teamKey.value}`)
+  } catch (e) {
+    flash(e.message)
+  }
+}
+
+function resetSubFilters(reload = true) {
+  Object.keys(subFilters).forEach(k => { subFilters[k] = '' })
+  subFilters.state = 'submitted'
+  if (reload) loadSubmissions(1)
+}
+
+function exportSubmissions() {
+  const tail = subQuery().toString()
+  exportSimple('/pool/admin/export_submissions_csv' + (tail ? `&${tail}` : ''),
+               'asr_submissions.csv', 'Submissions')
+}
+
+async function openAnnotator(a) {
+  annotatorModal.value = { annotator: { name: a.name, email: a.email, id: a.rater_id },
+                           totals: {}, by_language: [], recent_items: [],
+                           categories: {}, difficulties: {} }
+  annotatorLoading.value = true
+  try {
+    annotatorModal.value = await api(`/pool/admin/annotator/${a.rater_id}?team=${teamKey.value}`)
+  } catch (e) {
+    flash(e.message)
+    annotatorModal.value = null
+  } finally {
+    annotatorLoading.value = false
+  }
+}
+
+async function openItem(id) {
+  try {
+    itemModal.value = (await api(`/pool/admin/item/${id}?team=${teamKey.value}`)).item
+  } catch (e) {
+    flash(e.message)
+  }
+}
+
+async function resetItem(id) {
+  if (!confirm(`Send prompt #${id} back to the pool? The annotation on this prompt is cleared `
+             + 'so someone can redo it. The original text is untouched.')) return
+  try {
+    flash((await api(`/pool/admin/item/${id}/reset`, { method: 'POST', body: JSON.stringify({ team: teamKey.value }) })).message)
+    itemModal.value = null
+    await Promise.all([load(), loadSubmissions(subPage.value), loadTasks()])
+  } catch (e) {
+    flash(e.message)
+  }
+}
+
+async function reclaim() {
+  if (!confirm(`Return every prompt held for more than ${staleHours.value}h to the pool? `
+             + 'Finished annotations are not affected.')) return
+  reclaiming.value = true
+  try {
+    flash((await api('/pool/admin/reclaim', { method: 'POST', body: JSON.stringify({ team: teamKey.value }) })).message)
+    await load()
+  } catch (e) {
+    flash(e.message)
+  } finally {
+    reclaiming.value = false
+  }
+}
+
+function openEdit(a) {
+  memberModal.value = { rater_id: a.rater_id, name: a.name,
+                        languages: [...a.allowed_languages], pull_size: a.pull_size }
+}
+async function saveMember() {
+  if (!memberModal.value.rater_id) return
+  savingMember.value = true
+  try {
+    const r = await api('/pool/admin/member', {
+      method: 'POST',
+      body: JSON.stringify({ team: teamKey.value, rater_id: memberModal.value.rater_id,
+                             languages: memberModal.value.languages,
+                             pull_size: memberModal.value.pull_size }),
+    })
+    memberModal.value = null
+    flash(r.message)
+    await load()
+  } catch (e) {
+    flash(e.message)
+  } finally {
+    savingMember.value = false
+  }
+}
+async function removeMember() {
+  if (!confirm('Remove this annotator from the ASR team? Their finished work is kept; '
+             + 'anything unfinished goes back to the pool.')) return
+  try {
+    const r = await api('/pool/admin/member', {
+      method: 'POST',
+      body: JSON.stringify({ team: teamKey.value, rater_id: memberModal.value.rater_id, remove: true }),
+    })
+    memberModal.value = null
+    flash(r.message)
+    await load()
+  } catch (e) {
+    flash(e.message)
+  }
+}
+
+/** Open the message dialog and pull the whole history with that annotator, the same conversation vi. */
+async function openMessage(a) {
+  messageError.value = ''
+  messageModal.value = { rater: a, body: '' }
+  threadItems.value = []
+  threadLoading.value = true
+  try {
+    const d = await api(`/admin/messages?team=${teamKey.value}`)
+    threadItems.value = (d.items || [])
+      .filter(it => it.kind === 'broadcast' || it.rater_id === a.rater_id)
+      .reverse()
+    await nextTick()
+    if (threadBox.value) threadBox.value.scrollTop = threadBox.value.scrollHeight
+  } catch (e) {
+    threadItems.value = []
+  } finally {
+    threadLoading.value = false
+  }
+}
+
+function startEditThread(item) {
+  messageModal.value.body = item.body
+  messageModal.value.editing = item.id
+}
+
+async function sendMessage() {
+  sending.value = true
+  messageError.value = ''
+  try {
+    const editing = messageModal.value.editing
+    if (editing) {
+      await api(`/admin/message/${editing}`, {
+        method: 'PUT', body: JSON.stringify({ body: messageModal.value.body }),
+      })
+      flash('Message updated.')
+    } else {
+      await api(`/admin/rater/${messageModal.value.rater.rater_id}/message`, {
+        method: 'POST', body: JSON.stringify({ body: messageModal.value.body }),
+      })
+      flash(`Message sent to ${messageModal.value.rater.name}.`)
+    }
+    messageModal.value = null
+  } catch (e) {
+    messageError.value = e.message
+  } finally {
+    sending.value = false
+  }
+}
+
+async function sendBroadcast() {
+  sending.value = true
+  messageError.value = ''
+  try {
+    const r = await api(`/admin/message/broadcast?team=${teamKey.value}`, {
+      method: 'POST', body: JSON.stringify({ body: broadcastModal.value.body }),
+    })
+    flash(r.message)
+    broadcastModal.value = null
+  } catch (e) {
+    messageError.value = e.message
+  } finally {
+    sending.value = false
+  }
+}
+
+async function loadPin() {
+  try {
+    signupPin.value = (await api('/admin/signup-key')).pin
+  } catch (e) {
+    flash(e.message)
+  }
+}
+function copyPin() {
+  navigator.clipboard?.writeText(signupPin.value)
+  pinCopied.value = true
+  setTimeout(() => (pinCopied.value = false), 1800)
+}
+
+/** Small reports come back in one response -- show a lightweight overlay. */
+async function exportSimple(path, filename, label) {
+  simpleExport.value = { state: 'busy', label }
+  try {
+    // paths may carry extra params as "&k=v"; team= always comes first
+    const endpoint = path.includes('&') ? `${API_BASE_URL}${path.replace('&', `?team=${teamKey.value}&`)}`
+                                        : `${API_BASE_URL}${path}?team=${teamKey.value}`
+    const res = await fetch(endpoint,
+                            { headers: { Authorization: `Bearer ${authToken()}` } })
+    if (!res.ok) throw new Error('The server refused the export.')
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    simpleExport.value = { state: 'done', label: `${label} downloaded` }
+    setTimeout(() => (simpleExport.value = null), 1200)
+  } catch (e) {
+    simpleExport.value = { state: 'error', label: e.message }
+    setTimeout(() => (simpleExport.value = null), 2600)
+  }
+}
+
+async function startExport() {
+  const body = { team: teamKey.value, format: exportFormat.value }
+  if (exportScope.value === 'done') body.only_done = true
+  if (exportLanguage.value) body.language = exportLanguage.value
+  if (exportTaskId.value) body.task_id = Number(exportTaskId.value)
+  if (exportCategory.value) body.category = exportCategory.value
+  try {
+    const res = await api('/pool/admin/export/start', { method: 'POST', body: JSON.stringify(body) })
+    exportJob.value = { id: res.job_id, status: 'queued', done: 0, total: 0, percent: 0 }
+    pollExport()
+  } catch (e) {
+    flash(e.message)
+  }
+}
+function pollExport() {
+  clearTimeout(pollTimer)
+  pollTimer = setTimeout(async () => {
+    if (!exportJob.value) return
+    try {
+      const s = await api(`/pool/admin/export/status/${exportJob.value.id}`)
+      exportJob.value = { ...exportJob.value, ...s }
+      if (s.status !== 'done' && s.status !== 'error') pollExport()
+    } catch {
+      pollExport()   // a transient blip must not strand the dialog
+    }
+  }, 700)
+}
+function closeExport() {
+  clearTimeout(pollTimer)
+  exportOpen.value = false
+  exportJob.value = null
+}
+
+/** The download needs the bearer header, so fetch it as a blob rather than pointing an <a href> at. */
+async function downloadExport() {
+  downloading.value = true
+  try {
+    const res = await fetch(`${API_BASE_URL}/pool/admin/export/download/${exportJob.value.id}`,
+                            { headers: { Authorization: `Bearer ${authToken()}` } })
+    if (!res.ok) throw new Error('The file could not be downloaded.')
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = exportJob.value.filename || `asr_pool_export.${exportJob.value.format || 'csv'}`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    setTimeout(closeExport, 600)
+  } catch (e) {
+    flash(e.message)
+  } finally {
+    downloading.value = false
+  }
+}
+
+function startTimers() {
+  clearInterval(countdownTimer)
+  countdown.value = refreshInterval
+  countdownTimer = setInterval(() => {
+    countdown.value -= 1
+    if (countdown.value <= 0) {
+      countdown.value = refreshInterval
+      // never fight the user: skip the tick while a dialog is open
+      if (!memberModal.value && !itemModal.value && !annotatorModal.value
+          && !exportOpen.value && !messageModal.value && !broadcastModal.value
+          && !taskModal.value && !assignModal.value) {
+        load()
+        if (tab.value === 'tasks') loadTasks()
+      }
+    }
+  }, 1000)
+}
+
+function toggleAutoRefresh() {
+  isAutoRefreshActive.value = !isAutoRefreshActive.value
+  if (isAutoRefreshActive.value) startTimers()
+  else clearInterval(countdownTimer)
+}
+
+onMounted(() => {
+  // Load-as-you-go: the overview and the task list arrive independently, and each section paints as soon as its own data is in.
+  load()
+  loadTasks()
+  if (isAutoRefreshActive.value) startTimers()
+})
+onBeforeUnmount(() => {
+  clearTimeout(pollTimer)
+  clearInterval(countdownTimer)
+})
+</script>
+
+<style scoped>
+/** Same visual language as the TTS admin dashboard. */
+.dashboard-container { max-width: 1400px; margin: 0 auto; padding: 0 20px; }
+.text-xs { font-size: 0.75rem; }
+.cursor-pointer { cursor: pointer; }
+
+.tabs-nav { position: sticky; top: 0; z-index: 5; }
+.tab-btn { border: none; transition: all .15s ease; min-width: 130px; }
+.tab-btn:hover { transform: translateY(-1px); }
+
+.kpi-card { transition: transform .15s ease, box-shadow .15s ease; }
+.kpi-card:hover { transform: translateY(-2px); box-shadow: 0 .5rem 1rem rgba(0,0,0,.1) !important; }
+.kpi-icon-wrapper { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; }
+
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: #cbd5e1; }
+.status-dot.active { background: #22c55e; }
+.animate-spin { animation: spin 1s linear infinite; }
+.animate-pulse { animation: pulse 2s cubic-bezier(.4,0,.6,1) infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/** Pop-menus. Teleported to <body>, which still carries this component's scope attribute, so scoped. */
+.menu-backdrop { position: fixed; inset: 0; z-index: 1080; }
+.pop-menu { position: fixed; z-index: 1081; background: #fff; border: 1px solid #e2e8f0;
+            border-radius: .6rem; box-shadow: 0 12px 28px rgba(15,23,42,.16); padding: .3rem; overflow: hidden; }
+.pop-menu-head { font-size: .62rem; text-transform: uppercase; letter-spacing: .04em;
+                 color: #94a3b8; font-weight: 700; padding: .4rem .6rem .3rem; }
+.pop-item { display: flex; align-items: flex-start; gap: .6rem; width: 100%; border: 0;
+            background: none; text-align: left; padding: .45rem .6rem; border-radius: .4rem; color: #0f172a; }
+.pop-item:hover { background: #f1f5f9; }
+.pop-item i { font-size: .9rem; line-height: 1.25; }
+.pop-item span { display: flex; flex-direction: column; min-width: 0; }
+.pop-item b { font-size: .78rem; font-weight: 600; }
+.pop-item small { font-size: .66rem; color: #94a3b8; }
+.pop-item.is-danger { color: #b91c1c; }
+.pop-sep { height: 1px; background: #e9ecef; margin: .25rem .3rem; }
+
+/** Annotators tab: the same toolbar, pills, drill-down and pop-menus as TTS. */
+.stale-alert { background: #fff8e6; border: 1px solid #ffe08a; color: #7a5b00; border-radius: .5rem; }
+.search-wrap { min-width: 230px; }
+.search-icon { position: absolute; left: .75rem; top: 50%; transform: translateY(-50%); color: #adb5bd; font-size: .85rem; }
+.search-clear { position: absolute; right: .25rem; top: 50%; transform: translateY(-50%); color: #adb5bd; border: none; }
+.rater-table thead th { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
+                        color: #6c757d; font-weight: 700; background: #f8f9fa; }
+.sortable-th { cursor: pointer; user-select: none; }
+.sortable-th:hover { color: #212529; }
+.stale-row { background: #fffdf5; }
+.row-open { background: #f8f9ff; }
+.avatar-off { background: #e9ecef !important; color: #adb5bd !important; }
+.assigned-chip-wrap { max-width: 220px; }
+.status-pill { display: inline-flex; align-items: center; gap: .3rem; border-radius: 2rem;
+               padding: .1rem .6rem; font-size: .72rem; font-weight: 700; }
+.status-pill.is-working { background: #fff4e0; color: #b45309; }
+.status-pill.is-active { background: #e6f7ee; color: #0f7b45; }
+.status-pill.is-idle { background: #fdecec; color: #b42318; }
+.status-pill.is-new { background: #f1f3f5; color: #6c757d; }
+.status-pill.is-off { background: #f1f3f5; color: #adb5bd; }
+.tasks-num { font-size: 1.05rem; font-weight: 700; color: #212529; }
+.stat-pill { border-radius: 2rem; padding: .05rem .5rem; font-size: .68rem; font-weight: 700; }
+.stat-pill.warn { background: #fff4e0; color: #b45309; }
+.stat-pill.info { background: #e7f1ff; color: #0d6efd; }
+.type-chip { display: inline-flex; align-items: center; gap: .35rem; background: #f1f3f5; color: #495057;
+             border-radius: 2rem; padding: .1rem .6rem; font-size: .72rem; font-weight: 600; }
+.type-chip b { color: #212529; }
+.drill-btn { border: none; background: transparent; color: #0d6efd; font-size: .72rem; font-weight: 600; padding: 0; }
+.drill-btn:hover { text-decoration: underline; }
+.drill-row > td { background: #f8f9ff; }
+.drill-panel { padding: .85rem 1rem; }
+.drill-table thead th { font-size: .66rem; text-transform: uppercase; letter-spacing: .04em;
+                        color: #adb5bd; font-weight: 700; }
+.rater-action-btn { width: 32px; height: 32px; padding: 0; display: inline-grid; place-items: center; }
+.rater-action-btn.is-open { background: #212529; color: #fff; border-color: #212529; }
+
+/** Task screens: the same segmented sub-nav, tiles and id badge the TTS dashboard uses, so the two. */
+.tasks-subnav { background: #fff; border: 1px solid #dee2e6; border-radius: 2rem; padding: .25rem; gap: .25rem; }
+.subnav-btn { border: none; background: transparent; color: #6c757d; font-weight: 600; font-size: .86rem;
+              border-radius: 2rem; padding: .45rem 1.15rem; display: inline-flex; align-items: center;
+              gap: .45rem; transition: all .15s ease; }
+.subnav-btn:hover { color: #212529; background: #f1f3f5; }
+.subnav-btn.active { background: #212529; color: #fff; }
+.subnav-badge { background: rgba(255,255,255,.2); border-radius: 1rem; padding: 0 .45rem; font-size: .72rem; }
+.subnav-btn:not(.active) .subnav-badge { background: #e9ecef; color: #6c757d; }
+
+.ov-tile { background: #fff; border: 1px solid #dee2e6; border-radius: .6rem; padding: .7rem .9rem;
+           min-width: 190px; flex: 1 1 190px; }
+.ov-tile .lbl { display: block; font-size: .66rem; font-weight: 700; letter-spacing: .05em;
+                text-transform: uppercase; color: #6c757d; }
+.ov-tile .val { display: block; font-size: 1.3rem; font-weight: 700; color: #212529; line-height: 1.3; }
+.ov-tile .sub { display: block; font-size: .7rem; color: #adb5bd; }
+
+.task-id-badge { display: inline-block; background: #eef2ff; color: #4338ca; border: 1px solid #c7d2fe;
+                 border-radius: .4rem; padding: .05rem .4rem; font-size: .75rem; font-weight: 700; }
+
+/** Dialogs. Same shell, spacing, chips and transition as the TTS dashboard, so assigning work or me. */
+.assign-modal-backdrop { position: fixed; inset: 0; background: rgba(15,23,42,.55);
+                         backdrop-filter: blur(3px); display: flex; align-items: center;
+                         justify-content: center; z-index: 1070; padding: 1rem; }
+.assign-modal-card { background: #fff; width: 100%; max-width: 620px; max-height: 90vh;
+                     border-radius: 18px; display: flex; flex-direction: column; overflow: hidden; }
+.assign-modal-header { padding: 1.1rem 1.5rem; border-bottom: 1px solid #eef2f7; flex-shrink: 0; }
+.assign-modal-body { padding: 1.25rem 1.5rem; overflow-y: auto; }
+.assign-modal-footer { padding: 1rem 1.5rem; border-top: 1px solid #eef2f7; background: #f8fafc; flex-shrink: 0; }
+.avatar-circle-lg { width: 46px; height: 46px; border-radius: 50%;
+                    background: linear-gradient(135deg, #d8661b, #f4a93c); color: #fff;
+                    display: flex; align-items: center; justify-content: center;
+                    font-weight: 700; font-size: 1.2rem; flex-shrink: 0; }
+.selected-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+.selected-chips .chip { display: inline-flex; align-items: center; gap: .35rem; background: #fceee3;
+                        color: #b4530f; border: 1px solid #f3cdaa; font-weight: 600;
+                        font-size: .8rem; padding: .25rem .65rem; border-radius: 999px; }
+.selected-chips .chip i { cursor: pointer; font-size: .65rem; opacity: .7; transition: opacity .15s ease; }
+.selected-chips .chip i:hover { opacity: 1; }
+.batch-picker { max-height: 300px; overflow-y: auto; }
+.batch-row { cursor: pointer; border-bottom: 1px solid #f1f5f9; margin: 0; transition: background .12s ease; }
+.batch-row:last-child { border-bottom: none; }
+.batch-row:hover { background-color: #fff7ee !important; box-shadow: inset 3px 0 0 #d8661b; }
+.batch-row.selected { background: #fceee3; }
+.msg-thread { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column;
+              gap: 8px; padding-right: 4px; }
+.msg-bubble { background: #f8fafc; border: 1px solid #eef2f7; border-radius: 10px; padding: 10px 12px; }
+.msg-bubble.broadcast { background: #fffaf3; border-color: #fbe3c4; }
+.lang-check { display: flex; align-items: center; gap: .35rem; border: 1px solid #dee2e6;
+              border-radius: 2rem; padding: .2rem .7rem; font-size: .8rem; cursor: pointer; }
+.fs-9 { font-size: .7rem; }
+.modal-fade-enter-from, .modal-fade-leave-to { opacity: 0; }
+.modal-fade-enter-active, .modal-fade-leave-active { transition: opacity .18s ease; }
+.modal-fade-enter-active .assign-modal-card,
+.modal-fade-leave-active .assign-modal-card { transition: transform .22s cubic-bezier(.34,1.56,.64,1); }
+.modal-fade-enter-from .assign-modal-card,
+.modal-fade-leave-to .assign-modal-card { transform: translateY(18px) scale(.97); }
+
+.lang-line { cursor: pointer; }
+.lang-line:hover { opacity: .85; }
+.lang-row { background: #fff; border: none; }
+.lang-row:hover { background: #f8f9fa; }
+
+.mini-stat { background: #fff; border: 1px solid #dee2e6; border-radius: .5rem; padding: .5rem .7rem; height: 100%; }
+.mini-stat span { display: block; font-size: .68rem; color: #6c757d; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
+.mini-stat strong { font-size: 1.05rem; color: #212529; }
+
+.avatar-circle { width: 32px; height: 32px; border-radius: 50%; background: #e7f1ff; color: #0d6efd;
+                 display: grid; place-items: center; font-weight: 700; font-size: .75rem; }
+.cell-text { max-width: 420px; }
+.text-muted-2 { color: #adb5bd; }
+.filter-bar { background: #f8f9fa; margin: 0 -1.5rem 1rem; padding-left: 1.5rem; padding-right: 1.5rem; }
+.date-input { width: 145px; }
+.stat-strip { gap: 1.25rem; }
+.stat { text-align: center; }
+.stat-val { font-weight: 700; font-size: 1.05rem; color: #212529; line-height: 1.1; }
+.stat-lbl { font-size: .64rem; text-transform: uppercase; letter-spacing: .05em; color: #adb5bd; font-weight: 700; }
+.pin-box { font-size: 1.35rem; letter-spacing: .18em; font-weight: 700; color: #0d6efd;
+           background: #e7f1ff; border-radius: .5rem; padding: .35rem .8rem; }
+.lang-check { display: flex; align-items: center; gap: .35rem; border: 1px solid #dee2e6;
+              border-radius: .5rem; padding: .3rem .6rem; font-size: .85rem; cursor: pointer; }
+
+.spark { display: flex; align-items: flex-end; gap: 2px; height: 80px; }
+.spark-bar { flex: 1; background: #0d6efd; border-radius: 2px 2px 0 0; min-height: 3px; opacity: .85; }
+
+.text-block { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: .5rem;
+              padding: .8rem 1rem; font-size: 1.05rem; line-height: 1.8; white-space: pre-wrap; }
+.edited-block { background: #fff9e6; border-color: #ffe08a; }
+
+.asr-modal-backdrop { position: fixed; inset: 0; background: rgba(33,37,41,.5); display: grid;
+                      place-items: center; z-index: 1080; padding: 1rem; }
+.asr-modal { background: #fff; border-radius: .75rem; width: 100%; max-width: 560px;
+             box-shadow: 0 1.5rem 3rem rgba(0,0,0,.25); display: flex; flex-direction: column; max-height: 90vh; }
+.asr-modal.wide { max-width: 960px; }
+.asr-modal-head { display: flex; justify-content: space-between; align-items: flex-start;
+                  padding: 1rem 1.25rem; border-bottom: 1px solid #dee2e6; flex-shrink: 0; }
+.asr-modal-body { padding: 1.25rem; overflow-y: auto; }
+.asr-modal-foot { display: flex; gap: .5rem; justify-content: flex-end; padding: 1rem 1.25rem;
+                  border-top: 1px solid #dee2e6; flex-shrink: 0; }
+
+.asr-toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+             background: #212529; color: #fff; padding: .6rem 1.1rem; border-radius: 2rem;
+             font-size: .86rem; z-index: 1100; box-shadow: 0 .5rem 1.5rem rgba(0,0,0,.25); }
+</style>

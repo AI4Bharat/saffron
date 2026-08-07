@@ -1,22 +1,5 @@
 #!/usr/bin/env python3
-"""
-audio_set_labels.py — how an audio-segmentation batch is LABELLED in the UI.
-
-The set number shown to users is the RECORDING EXCEL's set (English_Storyteller_Set2.xlsx
--> Set2), NOT the local setN directory (dir set5 can hold the Set2 excel).
-
-Because the same excel set can legitimately be recorded/loaded in more than one batch
-(e.g. dir set5 = Conv 1-19 and dir set6 = Conv 20-30 are both Set2), any set that appears
-more than once is disambiguated in brackets with the recorder and the conversation range:
-
-    Audio Segmentation - English - Storyteller - Set1
-    Audio Segmentation - English - Storyteller - Set2 (Soniya, Conv 1-19)
-    Audio Segmentation - English - Storyteller - Set2 (Soniya, Conv 20-30)
-
-Sets that appear only once stay clean (no brackets). `relabel_all()` is idempotent and
-recomputes every audio-segmentation description from scratch, so the loader can just call
-it after every load and the labels stay consistent.
-"""
+"""audio_set_labels.py — how an audio-segmentation batch is LABELLED in the UI."""
 import os
 import re
 

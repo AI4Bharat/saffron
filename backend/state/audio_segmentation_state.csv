@@ -1,0 +1,24 @@
+test_id,language,persona,set,set_dir,num_tasks,wav_files,updated_at
+20500,English,Calm Explainer,Set0,set0,52,52,2026-08-05T12:06:30
+20501,English,Calm Explainer,Set1,set1,140,140,2026-08-05T12:06:30
+20502,English,Calm Explainer,Set2,set2,92,92,2026-08-05T12:06:30
+20503,English,Calm Explainer,Set3,set3,135,135,2026-08-05T12:06:30
+20814,English,Storyteller,Set1,set4,116,116,2026-08-05T12:06:30
+20815,English,Storyteller,"Set2 (Soniya, Conv 1-19)",set5,76,76,2026-08-05T12:06:30
+20816,English,Storyteller,"Set2 (Soniya, Conv 20-30)",set6,43,43,2026-08-05T12:06:30
+20817,English,Storyteller,Set4,set7,119,119,2026-08-05T12:06:30
+20818,English,Storyteller,Set3,set8,116,116,2026-08-05T12:06:30
+20819,English,Storyteller,"Set5 (Soniya, Conv 1-21)",set9,84,84,2026-08-05T12:06:30
+20940,English,Relatable Peer,Set1,set10,103,103,2026-08-05T12:06:30
+20941,English,Calm Explainer,Set4,set11,116,116,2026-08-05T12:06:30
+20942,English,Calm Explainer,Set6,set12,116,116,2026-08-05T12:06:30
+20943,English,Calm Explainer,Set5,set13,78,78,2026-08-05T12:06:30
+21038,English,Calm Explainer,Set7,set14,76,76,2026-08-05T12:06:30
+21039,English,Warm Encourager,Set1,set15,120,120,2026-08-05T12:06:30
+21040,English,Energetic Enthusiast,Set1,set16,120,120,2026-08-05T12:06:30
+21041,English,Warm Encourager,Set2,set17,120,120,2026-08-05T12:06:30
+21130,English,Socratic Challenger,Set1,set18,116,116,2026-08-05T12:06:30
+21131,English,Storyteller,Set7,set19,120,120,2026-08-05T12:06:30
+21132,English,Storyteller,"Set5 (Soniya, Conv 22-30)",set20,35,35,2026-08-05T12:06:30
+21133,English,Storyteller,Set6,set21,119,119,2026-08-05T12:06:30
+21134,English,Storyteller,Set8,set22,120,120,2026-08-05T12:06:30

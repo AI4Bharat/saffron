@@ -366,9 +366,6 @@ function setup() {
   rawText.value = t.raw_text ?? ''
   spokenForm.value = t.spoken_form ?? ''
   // The backend merges an annotator's saved edits back into raw_text / spoken_form,
-  // so the pristine values it sends alongside are what "Reset" and the Edited badge
-  // must compare against — otherwise a resumed draft looks unedited and Reset
-  // restores the edit instead of the original.
   origRawText.value = t.original_raw_text ?? t.raw_text ?? ''
   origSpokenForm.value = t.original_spoken_form ?? t.spoken_form ?? ''
   decision.value = t.decision ?? ''
@@ -455,7 +452,6 @@ const isValid = computed(() => {
   if (!decision.value) return false
   if (!(rawText.value || '').trim() || !(spokenForm.value || '').trim()) return false
   // A rejection with no reason is useless downstream — the comment is the only
-  // record of *what* was wrong with the sentence.
   if (decision.value === 'reject' && !(comments.value || '').trim()) return false
   return true
 })
@@ -552,7 +548,7 @@ async function handleSkip() {
 .fs-7 { font-size: 0.85rem; } .fs-8 { font-size: 0.72rem; } .fs-9 { font-size: 0.68rem; }
 .tracking-wide { letter-spacing: 0.06em; }
 
-/* ---------- reference panel ---------- */
+/** ---------- reference panel ---------- */
 .ref-card { background: #fff; border: 1px solid rgba(0,0,0,0.07); overflow: hidden; }
 .ref-head {
   display: flex; align-items: center; justify-content: space-between; gap: .75rem;
@@ -602,7 +598,7 @@ async function handleSkip() {
 }
 .ref-hint { width: 100%; font-size: .74rem; color: #8a94a3; margin-top: .35rem; }
 
-/* ---------- edit blocks ---------- */
+/** ---------- edit blocks ---------- */
 .edit-block { background-color: #fcfdfe; border-color: rgba(0,0,0,0.06) !important; transition: border-color .2s ease, background-color .2s ease; }
 .edit-block.is-edited { background-color: #fffdf5; border-color: #f0dcae !important; }
 .field-hint { font-size: .64rem; font-weight: 600; color: #a4aebd; text-transform: none; letter-spacing: 0; margin-left: .4rem; }
@@ -613,7 +609,7 @@ async function handleSkip() {
 .diff-tag { font-size: .6rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #8b95a4; background: #e8ebf0; border-radius: 4px; padding: .1rem .35rem; flex-shrink: 0; margin-top: .15rem; }
 .diff-text { font-size: .95rem; color: #59626f; line-height: 1.5; word-break: break-word; }
 
-/* ---------- verdict ---------- */
+/** ---------- verdict ---------- */
 .verdict-btn { transition: all 0.15s ease; font-size: 1.05rem; position: relative; }
 .verdict-btn:active { transform: scale(0.98); }
 .verdict-kbd { position: absolute; right: .8rem; font-size: .65rem; opacity: .55; }

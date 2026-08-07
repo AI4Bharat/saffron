@@ -624,11 +624,6 @@ const availableReasons = [
 ]
 
 // Reasons that were retired from the list above (e.g. the old free-text "others")
-// can still be sitting on clips annotated before the change. Without this, such a
-// reason has no checkbox in the modal, so the annotator can never UNCHECK it: they
-// could only add a second reason on top of it, and re-submitting looked like it had
-// no effect. Render every stored reason, retired ones included, so an old decision
-// can be cleared and replaced.
 const legacyReasons = computed(() => {
   const stored = Array.isArray(props.currentTest?.rejection_reasons)
     ? props.currentTest.rejection_reasons
@@ -638,7 +633,6 @@ const legacyReasons = computed(() => {
 })
 
 // What the modal actually lists: the current reasons + any retired one still on
-// this clip (shown last, flagged as retired).
 const modalReasons = computed(() => [...availableReasons, ...legacyReasons.value])
 
 // Computed
@@ -693,7 +687,6 @@ function setupState() {
   transcript.value = props.currentTest.transcript || ''
   originalTranscript.value = props.currentTest._originalTranscript || props.currentTest.transcript || ''
   // Copy, never alias: rejectionReasons is mutated locally and must not write
-  // through into the task list the parent holds.
   rejectionReasons.value = Array.isArray(props.currentTest.rejection_reasons)
     ? [...props.currentTest.rejection_reasons]
     : []
@@ -1115,7 +1108,7 @@ onUnmounted(() => {
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.03);
 }
 
-/* Custom Audio Player UI Styling */
+/** Custom Audio Player UI Styling */
 .custom-player {
   background-color: #f8fafc;
   border-color: #e2e8f0 !important;
@@ -1193,7 +1186,7 @@ onUnmounted(() => {
   height: 10px;
 }
 
-/* Transcript and comments */
+/** Transcript and comments */
 .correction-textarea {
   background-color: #ffffff;
   border-color: #cbd5e1;
@@ -1209,7 +1202,7 @@ onUnmounted(() => {
   box-shadow: 0 0 0 4px rgba(216, 102, 27, 0.15);
 }
 
-/* Evaluation buttons */
+/** Evaluation buttons */
 .evaluation-choice-btn {
   background-color: white;
   min-height: 68px;
@@ -1259,7 +1252,7 @@ onUnmounted(() => {
   box-shadow: 0 0 0 4px rgba(216, 102, 27, 0.15);
 }
 
-/* Modal Popup Rejection reasons */
+/** Modal Popup Rejection reasons */
 .reject-modal-overlay {
   position: fixed;
   top: 0;
@@ -1291,7 +1284,7 @@ onUnmounted(() => {
   padding-right: 8px;
 }
 
-/* Reasons grid checkboxes styling */
+/** Reasons grid checkboxes styling */
 .reasons-grid {
   max-height: 45vh;
   overflow-y: auto;
@@ -1327,8 +1320,7 @@ onUnmounted(() => {
   border-color: #fca5a5;
 }
 
-/* A reason that has been retired from the list but is still stored on this clip.
-   Shown so it can be unchecked; styled so nobody picks it as a new reason. */
+/** A reason that has been retired from the list but is still stored on this clip. Shown so it can b. */
 .reason-retired {
   background-color: #fffbeb;
   border-style: dashed;
@@ -1349,7 +1341,7 @@ onUnmounted(() => {
   border-color: #ef4444;
 }
 
-/* Transitions and Helper utilities */
+/** Transitions and Helper utilities */
 .animate-fade-in {
   animation: fadeIn 0.25s ease-out;
 }
@@ -1389,7 +1381,7 @@ onUnmounted(() => {
   transform: translateY(-1px);
 }
 
-/* QC Guidelines button & modal styling */
+/** QC Guidelines button & modal styling */
 .qc-guidelines-btn {
   border-radius: 20px;
   background-color: #0d9488;

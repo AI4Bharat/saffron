@@ -119,6 +119,14 @@
           </div>
 
           <div class="mb-3">
+            <label for="team" class="form-label">Team you are joining</label>
+            <select id="team" v-model="team" class="form-select" required>
+              <option v-for="t in teams" :key="t.key" :value="t.key">{{ t.name }}</option>
+            </select>
+            <div class="form-text">{{ teamDescription }}</div>
+          </div>
+
+          <div class="mb-3">
             <label for="signupPin" class="form-label">Signup PIN</label>
             <input
               type="text"
@@ -135,14 +143,7 @@
             <div class="form-text">Ask the admin for the PIN.</div>
           </div>
 
-          <div class="mb-4 form-check">
-            <input type="checkbox" class="form-check-input" id="acceptTerms" v-model="acceptTerms">
-            <label class="form-check-label" for="acceptTerms">
-              I consent to all the tests
-            </label>
-          </div>
-
-          <button type="submit" class="btn btn-saffron w-100" :disabled="isSubmitting || !acceptTerms">
+          <button type="submit" class="btn btn-saffron w-100 mt-2" :disabled="isSubmitting">
             <span v-if="isSubmitting" class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
             {{ isSubmitting ? 'Signing up...' : 'Create account' }}
           </button>
@@ -163,7 +164,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { API_BASE_URL } from '@/config';
 
@@ -173,12 +174,13 @@ const router = useRouter()
 const name = ref('')
 const age = ref('')
 const gender = ref('')
+const team = ref('tts')
+const teams = ref([{ key: 'tts', name: 'TTS Team' }, { key: 'asr', name: 'ASR Team' }])
 const email = ref('')
 const password = ref('')
 const confirmPassword = ref('')
 const signupPin = ref('')
 const showPassword = ref(false)
-const acceptTerms = ref(false)
 
 // Form submission state
 const isSubmitting = ref(false)
@@ -197,12 +199,24 @@ const validateForm = () => {
     error.value = 'Passwords do not match.'
     return false
   }
-  if (!acceptTerms.value) {
-    error.value = 'You must accept the terms and conditions.'
-    return false
-  }
   return true
 }
+
+const teamDescription = computed(() =>
+  teams.value.find(t => t.key === team.value)?.description || '')
+
+onMounted(async () => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/teams`)
+    if (res.ok) {
+      const data = await res.json()
+      if (data.teams?.length) {
+        teams.value = data.teams
+        if (!data.teams.some(t => t.key === team.value)) team.value = data.teams[0].key
+      }
+    }
+  } catch { /* fall back to the built-in list */ }
+})
 
 const handleSubmit = async () => {
   if (!validateForm()) return
@@ -221,6 +235,7 @@ const handleSubmit = async () => {
       gender: gender.value,
       email: email.value,
       password: password.value,
+      team: team.value,
       signup_key: signupPin.value
     })
   })

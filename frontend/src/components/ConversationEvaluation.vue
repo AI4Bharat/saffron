@@ -450,7 +450,6 @@ const vAutoGrow = {
 }
 
 // Focus (and place the caret at the end of) a textarea the moment it mounts,
-// used by the click-to-edit fields so editing starts on the first click.
 const vFocus = {
   mounted(el) {
     el.focus();
@@ -462,8 +461,6 @@ const vFocus = {
 }
 
 // Click-to-edit state: a field shows its rendered math/text until clicked, then
-// becomes a raw textarea; on blur it renders again. Only one field edits at a
-// time, keyed by 'pre_scene' | 'post_scene' | 'turn:<idx>'.
 const editingKey = ref(null)
 function startEdit(key) { editingKey.value = key }
 function stopEdit() { editingKey.value = null }
@@ -490,7 +487,6 @@ const props = defineProps({
     required: true
   },
   // When true the component is a read-only preview (admin review): action buttons
-  // are hidden and all submit paths are inert.
   readonly: {
     type: Boolean,
     default: false
@@ -880,7 +876,6 @@ function renderMath(s) {
 }
 
 // True when the string contains any LaTeX math delimiter, so we only show the
-// equation preview for turns/scenes that actually contain math.
 function hasMath(s) {
   if (!s) return false
   return /\$[^$]+\$|\\\(|\\\[|\$\$/.test(String(s))
@@ -888,8 +883,7 @@ function hasMath(s) {
 </script>
 
 <style scoped>
-/* Click-to-edit field: shows rendered math/text, becomes a textarea on click,
-   renders again on blur. Styled to look editable (hover + focus affordance). */
+/** Click-to-edit field: shows rendered math/text, becomes a textarea on click, renders again on blu. */
 .editable-rendered {
   min-height: 2.6rem;
   padding: 0.5rem 0.75rem;
@@ -917,12 +911,12 @@ function hasMath(s) {
   color: #94a3b8;
   font-style: italic;
 }
-/* keep KaTeX from overflowing narrow columns */
+/** keep KaTeX from overflowing narrow columns */
 .editable-rendered :deep(.katex) {
   white-space: normal;
 }
 
-/* Gradient and visual card styles */
+/** Gradient and visual card styles */
 .pre-scene-box {
   background-color: #f0f7ff;
   border-left: 4px solid #3b82f6;
@@ -946,7 +940,7 @@ function hasMath(s) {
   background-color: #fffbeb;
 }
 
-/* Dialogue speech bubbles */
+/** Dialogue speech bubbles */
 .speech-bubble {
   position: relative;
   background-color: #fff;
@@ -967,7 +961,7 @@ function hasMath(s) {
   box-shadow: 0 4px 12px rgba(0,0,0,0.04);
 }
 
-/* Voice Direction Box styling - elegant dashboard card */
+/** Voice Direction Box styling - elegant dashboard card */
 .voice-direction-card {
   background-color: #fdfdfd;
   border: 1px dashed #cbd5e1;
@@ -1001,7 +995,7 @@ function hasMath(s) {
   background-color: #f9fafb;
 }
 
-/* Interactive Accept/Reject buttons */
+/** Interactive Accept/Reject buttons */
 .evaluation-choice-btn {
   font-size: 1.1rem;
   transition: all 0.2s ease;
@@ -1071,7 +1065,7 @@ function hasMath(s) {
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
-/* Animations */
+/** Animations */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(5px); }
   to { opacity: 1; transform: translateY(0); }

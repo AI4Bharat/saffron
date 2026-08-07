@@ -3,32 +3,46 @@
     <nav class="navbar navbar-expand-lg navbar-dark app-navbar py-0" style="min-height: 48px;">
       <div class="container">
         <div class="d-flex align-items-center me-auto">
-          <router-link to="/" class="navbar-brand d-flex align-items-center py-0 me-3">
-            <span class="brand-logo me-2" aria-hidden="true">
-              <svg viewBox="0 0 32 32" width="26" height="26" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                  <linearGradient id="sfrn" x1="4" y1="3" x2="28" y2="29" gradientUnits="userSpaceOnUse">
-                    <stop stop-color="#f4a93c"/><stop offset="1" stop-color="#d8661b"/>
-                  </linearGradient>
-                </defs>
-                <!-- three saffron stigmas radiating from a crocus base -->
-                <path d="M16 16 C16 16 11 9 9 4 C13 6 15 11 16 16Z" fill="url(#sfrn)"/>
-                <path d="M16 16 C16 16 21 9 23 4 C19 6 17 11 16 16Z" fill="url(#sfrn)"/>
-                <path d="M16 16 C16 16 16 7 16 2 C17.6 6 17 11 16 16Z" fill="url(#sfrn)"/>
-                <path d="M16 15 C10 16 6 20 5 27 C12 27 15 22 16 16 C17 22 20 27 27 27 C26 20 22 16 16 15Z" fill="url(#sfrn)" opacity="0.92"/>
-              </svg>
-            </span>
-            <span class="brand-text">Saffron</span>
+          <router-link :to="homePath" class="navbar-brand d-flex align-items-center py-0 me-3">
+            <SaffronLogo :size="26" class="me-2" />
+                        <span class="brand-text">Saffron</span>
             <span class="brand-sub d-none d-md-inline">Annotation Studio</span>
           </router-link>
+
+          <!-- Workspace switcher: only shown when the account really has a choice -->
+          <div v-if="isLoggedIn && workspaces.length > 1" class="ws-switch">
+            <button class="ws-current" @click="showWs = !showWs">
+              <span class="ws-dot" :style="{ background: currentWorkspace?.accent || '#94a3b8' }"></span>
+              <span class="ws-name">{{ currentWorkspace?.name || 'Workspace' }}</span>
+              <i class="bi bi-chevron-down"></i>
+            </button>
+            <div v-if="showWs" class="ws-menu-backdrop" @click="showWs = false"></div>
+            <div v-if="showWs" class="ws-menu">
+              <div class="ws-menu-head">{{ isAdmin ? 'Team dashboards' : 'Your workspaces' }}</div>
+              <button v-for="t in workspaces" :key="t.key" class="ws-item"
+                      :class="{ active: t.key === session.activeTeamKey }" @click="switchWorkspace(t)">
+                <span class="ws-dot" :style="{ background: t.accent || '#94a3b8' }"></span>
+                <span>
+                  <span class="ws-item-name">{{ t.name }}</span>
+                  <span class="ws-item-sub">{{ t.workflow === 'pool' ? 'pull-based pool' : 'assigned batches' }}</span>
+                </span>
+                <i v-if="t.key === session.activeTeamKey" class="bi bi-check2 ms-auto"></i>
+              </button>
+              <router-link v-if="isAdmin && session.scope === 'org'" to="/org" class="ws-item ws-item-org"
+                           @click="showWs = false">
+                <i class="bi bi-diagram-3 me-2"></i>Organisation overview
+              </router-link>
+            </div>
+          </div>
           
+          <!-- Annotators get a way back to their task list; an admin's brand -->
           <router-link
-            v-if="isLoggedIn && route.path !== '/'"
-            to="/"
+            v-if="isLoggedIn && !isAdmin && route.path !== homePath"
+            :to="homePath"
             class="nav-pill nav-pill-ghost"
           >
-            <i class="bi bi-arrow-left"></i>
-            <span>Back</span>
+            <i class="bi bi-house-door"></i>
+            <span>My tasks</span>
           </router-link>
         </div>
 
@@ -48,14 +62,14 @@
         <div class="collapse navbar-collapse" id="navbar">
           <div class="ms-auto d-flex align-items-center gap-2 nav-cluster py-2 py-lg-0">
 
-            <!-- Admin dashboard (admin only) -->
+            <!-- Organisation overview: only an org admin has more than one team -->
             <router-link
-              v-if="isLoggedIn && isAdmin && route.name !== 'DynamicTest'"
-              to="/tracking"
+              v-if="isLoggedIn && isAdmin && session.scope === 'org' && route.path !== '/org'"
+              to="/org"
               class="nav-pill"
             >
-              <i class="bi bi-speedometer2"></i>
-              <span>Dashboard</span>
+              <i class="bi bi-diagram-3"></i>
+              <span>Organisation</span>
             </router-link>
 
             <!-- Notification bell (annotators only) — its own spot, always visible -->
@@ -118,14 +132,14 @@
               <span>Logout</span>
             </a>
 
-            <!-- Login / Signup (logged out) -->
+            <!-- Signed out: one way in. The auth pages carry their own links, so -->
             <router-link
-              v-else-if="route.name !== 'DynamicTest'"
-              :to="isLoginPage ? '/signup' : '/login'"
+              v-else-if="route.name !== 'DynamicTest' && !isAuthPage"
+              to="/login"
               class="nav-pill nav-pill-accent"
             >
-              <i class="bi" :class="isLoginPage ? 'bi-person-plus-fill' : 'bi-box-arrow-in-right'"></i>
-              <span>{{ isLoginPage ? 'Signup' : 'Log-in' }}</span>
+              <i class="bi bi-box-arrow-in-right"></i>
+              <span>Sign in</span>
             </router-link>
           </div>
         </div>
@@ -145,6 +159,9 @@
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { API_BASE_URL } from '@/config';
+import SaffronLogo from '@/components/SaffronLogo.vue';
+import { session, loadIdentity, setActiveTeam, clearSession,
+         workspacePath, dashboardPath, activeTeam } from '@/session';
 
 console.log('API Base URL:', API_BASE_URL);
 
@@ -155,8 +172,26 @@ const route = useRoute()
 // State
 const isLoggedIn = ref(false)
 const isAdmin = ref(false)
-const isLoginPage = computed(() => route.path === '/login')
+const isAuthPage = computed(() =>
+  ['/login', '/admin/login', '/signup'].includes(route.path))
+/** Where the brand and the home pill point: an annotator's workspace, a team admin's dashboard, an. */
+const homePath = computed(() => {
+  if (!isLoggedIn.value) return '/login'
+  if (isAdmin.value) return session.scope === 'org' ? '/org' : dashboardPath(currentWorkspace.value)
+  return workspacePath(currentWorkspace.value)
+})
 const isBackendMaintenance = ref(false)
+
+// ---- team workspaces ----
+const showWs = ref(false)
+const workspaces = computed(() => session.teams || [])
+const currentWorkspace = computed(() => activeTeam.value)
+
+const switchWorkspace = (team) => {
+  setActiveTeam(team.key)
+  showWs.value = false
+  router.push(isAdmin.value ? dashboardPath(team) : workspacePath(team))
+}
 
 // ---- Annotator notifications (admin -> annotator messages) ----
 const messages = ref([])
@@ -238,7 +273,7 @@ const checkLoginStatus = () => {
     if (token) {
       try {
         const payload = JSON.parse(atob(token.split('.')[1]))
-        isAdmin.value = (payload.username === 'admin')
+        isAdmin.value = payload.kind === 'admin' || payload.username === 'admin'
       } catch (e) {
         isAdmin.value = false
       }
@@ -250,6 +285,9 @@ const checkLoginStatus = () => {
     isLoggedIn.value = false
     isAdmin.value = false
   }
+  // Which team workspaces this account can open (drives the switcher).
+  if (isLoggedIn.value) loadIdentity()
+
   // Start/stop the annotator message poll based on the resolved auth state.
   if (isLoggedIn.value && !isAdmin.value) startMsgPolling()
   else stopMsgPolling()
@@ -275,11 +313,12 @@ const checkTokenExpiration = () => {
 
 const logout = async () => {
   try {
-    localStorage.removeItem('authToken')
+    const wasAdmin = isAdmin.value
+    clearSession()
     isLoggedIn.value = false
     isAdmin.value = false
     stopMsgPolling()
-    router.push('/login')
+    router.push(wasAdmin ? '/admin/login' : '/login')
   } catch (error) {
     console.error('Error during logout:', error)
   }
@@ -330,6 +369,22 @@ onUnmounted(() => {
 
 <style scoped>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+/** ---- workspace switcher ---- */
+.ws-switch { position: relative; margin-left: 1rem; padding-left: 1rem; border-left: 1px solid rgba(255,255,255,.18); }
+.ws-current { display: flex; align-items: center; gap: .45rem; background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.18); color: #fff; border-radius: 8px; padding: .28rem .6rem; font-size: .82rem; font-weight: 600; }
+.ws-current:hover { background: rgba(255,255,255,.2); }
+.ws-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.ws-name { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-menu-backdrop { position: fixed; inset: 0; z-index: 1040; }
+.ws-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 1050; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 12px 32px rgba(15,23,42,.18); min-width: 250px; overflow: hidden; }
+.ws-menu-head { font-size: .68rem; text-transform: uppercase; letter-spacing: .07em; color: #94a3b8; font-weight: 700; padding: .55rem .8rem .3rem; }
+.ws-item { display: flex; align-items: center; gap: .55rem; width: 100%; border: none; background: none; padding: .55rem .8rem; text-align: left; color: #334155; font-size: .86rem; text-decoration: none; }
+.ws-item:hover { background: #f8fafc; }
+.ws-item.active { background: #f1f5f9; }
+.ws-item-name { display: block; font-weight: 600; color: #0f172a; }
+.ws-item-sub { display: block; font-size: .72rem; color: #94a3b8; }
+.ws-item-org { border-top: 1px solid #f1f5f9; color: #4f46e5; font-weight: 600; }
 
 :root {
   --primary-color: #d8661b;
@@ -390,7 +445,7 @@ onUnmounted(() => {
   }
 }
 
-/* ---- Interesting dark top bar ---- */
+/** ---- Interesting dark top bar ---- */
 .app-navbar {
   background: linear-gradient(90deg, #0f141d 0%, #1b2333 50%, #0f141d 100%);
   border-bottom: 1px solid rgba(255,255,255,0.06);
@@ -406,7 +461,7 @@ onUnmounted(() => {
   opacity: 0.9;
 }
 
-/* Pill-style nav actions (Back / Dashboard / Logout / Login) */
+/** Pill-style nav actions (Back / Dashboard / Logout / Login) */
 .nav-cluster { line-height: normal; }
 .nav-pill {
   display: inline-flex;
@@ -432,7 +487,7 @@ onUnmounted(() => {
 .nav-pill-accent:hover { filter: brightness(1.08); color: #fff; box-shadow: 0 4px 12px rgba(216,102,27,0.4); }
 .nav-divider { width: 1px; height: 24px; background: rgba(255,255,255,0.18); display: inline-block; }
 
-/* ---- Notification bell + inbox panel ---- */
+/** ---- Notification bell + inbox panel ---- */
 .notif-wrap { position: relative; display: inline-flex; align-items: center; }
 .notif-bell {
   position: relative;
@@ -521,7 +576,7 @@ onUnmounted(() => {
 .notif-item:hover { background: #f8fafc; }
 .notif-item.unread { background: #fff8f0; box-shadow: inset 3px 0 0 #d8661b; }
 .notif-item.unread:hover { background: #fff3e6; }
-/* Coloured avatar circle per message type */
+/** Coloured avatar circle per message type */
 .notif-avatar {
   width: 36px; height: 36px; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
@@ -530,7 +585,7 @@ onUnmounted(() => {
 .notif-avatar.broadcast { background: linear-gradient(135deg, #f4a93c, #d8661b); }
 .notif-avatar.nudge { background: linear-gradient(135deg, #fbbf24, #f59e0b); }
 .notif-avatar.message { background: linear-gradient(135deg, #818cf8, #4f46e5); }
-/* Category chip */
+/** Category chip */
 .notif-cat-chip {
   font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
   padding: 2px 9px; border-radius: 999px;
@@ -545,7 +600,7 @@ onUnmounted(() => {
 .notif-fade-enter-active, .notif-fade-leave-active { transition: opacity .15s ease; }
 .notif-fade-enter-from, .notif-fade-leave-to { opacity: 0; }
 
-/* Stacked nav (mobile hamburger): drop the vertical divider, left-align actions */
+/** Stacked nav (mobile hamburger): drop the vertical divider, left-align actions */
 @media (max-width: 991.98px) {
   .nav-cluster { align-items: flex-start !important; gap: 8px; padding-bottom: 10px; }
   .nav-divider { display: none; }

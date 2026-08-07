@@ -1,7 +1,9 @@
 from flask import jsonify, request
+import os
 from werkzeug.security import generate_password_hash
 from flask import current_app as app
-from application.models import db, Rater, Test, Rating, Study, Session, Consent, Message
+from application.models import (db, Rater, Test, Rating, Message,
+                                Team, TeamMember, AdminUser, PoolItem, PoolUpload)
 from datetime import datetime, timedelta
 import jwt
 import uuid
@@ -27,8 +29,7 @@ def get_screening_timer_key(rater_id, study_id):
     return f"screening_timer_{rater_id}_{study_id}"
 
 
-# Duration of the audio_segmentation WAV files, cached per (path, mtime) so the
-# headers are only read once per file per worker.
+# Duration of the audio_segmentation WAV files, cached per (path, mtime) so the headers are only read once per file per worker.
 _WAV_DURATION_CACHE = {}
 
 
@@ -52,18 +53,10 @@ def _wav_duration_seconds(filepath):
     return dur
 
 
-# ---------------------------------------------------------------------------
-# Audio-segmentation "hours done" helpers
-# ---------------------------------------------------------------------------
-# Every annotator on this project works in India and reads "today" as an IST day,
-# but time_of_submission is stored in UTC (datetime.utcnow). Every day bucket in
-# the hour reports below is therefore computed on UTC + 5:30 so a clip reviewed at
-# 09:00 IST lands on the same date the annotator sees on their own clock.
+# Audio-segmentation "hours done" helpers Every annotator on this project works in India and reads "today" as an IST day, but time_of_submission is stored in UTC.
 _IST_OFFSET = timedelta(hours=5, minutes=30)
 
-# Hours are credited for CLIPS THE ANNOTATOR ACTUALLY REVIEWED. A skipped clip was
-# handed back without a verdict, so it is counted and reported separately and never
-# added to the hours total.
+# Hours are credited for CLIPS THE ANNOTATOR ACTUALLY REVIEWED. A skipped clip was handed back without a verdict, so it is counted and reported separately and.
 _SEG_HOURS_STATUS = 'completed'
 
 
@@ -87,10 +80,7 @@ def _audio_root():
 
 
 def _seg_durations_for_test(test, audio_root=None):
-    """{task_id (str): clip duration in seconds} for one audio-segmentation Test.
-
-    Durations come from the WAV headers and are memoised per (path, mtime), so the
-    files are only opened once per worker no matter how often this runs."""
+    """{task_id (str): clip duration in seconds} for one audio-segmentation Test."""
     import os as _os
     audio_root = audio_root or _audio_root()
     out = {}
@@ -130,10 +120,7 @@ def _bucket_summary(b):
 
 
 def _daily_series(daily_map, days=30, end_date=None):
-    """Dense, newest-first list of the last `days` IST days from {date_str: bucket}.
-
-    Dense (zero-filled) so the UI can draw a real trend instead of silently closing
-    the gap over days the annotator did not work."""
+    """Dense, newest-first list of the last `days` IST days from {date_str: bucket}."""
     end = end_date or (datetime.utcnow() + _IST_OFFSET).date()
     out = []
     for i in range(days):
@@ -147,7 +134,10 @@ def _daily_series(daily_map, days=30, end_date=None):
 
 # Set up logging
 if not app.debug:
-    handler = RotatingFileHandler('error.log', maxBytes=10000, backupCount=1)
+    _log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
+    os.makedirs(_log_dir, exist_ok=True)
+    handler = RotatingFileHandler(os.path.join(_log_dir, 'error.log'),
+                                  maxBytes=10000, backupCount=1)
     handler.setLevel(logging.ERROR)
     app.logger.addHandler(handler)
 
@@ -156,26 +146,21 @@ if not app.debug:
 def unhandled_exception(e):
     from werkzeug.exceptions import HTTPException
     if isinstance(e, HTTPException):
-        # Return the error as JSON (never Werkzeug's HTML page) so the SPA can
-        # always parse a `message`. `description` carries the specific reason
-        # (e.g. the abort() text below); `error` is the HTTP status name.
+        # Return the error as JSON (never Werkzeug's HTML page) so the SPA can always parse a `message`.
         payload = {
             'message': e.description or e.name,
             'error': e.name,
             'status': e.code,
         }
         return jsonify(payload), e.code
-    # exc_info=True records the full traceback in error.log for real debugging,
-    # while the client only ever sees a generic message (no internals leaked).
+    # exc_info=True records the full traceback in error.log for real debugging, while the client only ever sees a generic message (no internals leaked).
     app.logger.error('Unhandled Exception: %s', e, exc_info=True)
     return jsonify({'message': 'Something went wrong on our end. Please try again.',
                     'error': 'Internal Server Error', 'status': 500}), 500
 
 
 def _require_bearer_token():
-    """Return the bearer token from the Authorization header, or abort(401) with a
-    clear JSON message. Replaces the old ``.split()[1]`` pattern that raised an
-    opaque 500 when the header was missing or malformed."""
+    """Return the bearer token from the Authorization header, or abort(401) with a clear JSON message."""
     from flask import abort
     parts = (request.headers.get('Authorization') or '').split()
     if len(parts) == 2 and parts[0].lower() == 'bearer':
@@ -188,15 +173,19 @@ def _require_bearer_token():
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        token = request.headers.get('Authorization')
-        if not token:
-            return jsonify({'message': 'Token is missing!'}), 401
+        # Accept 'Bearer <token>' or a bare token; anything else is a clean 401, never a 500.
+        parts = (request.headers.get('Authorization') or '').split()
+        if len(parts) == 2 and parts[0].lower() == 'bearer':
+            token = parts[1]
+        elif len(parts) == 1 and parts[0]:
+            token = parts[0]
+        else:
+            return jsonify({'message': 'Authorization token is missing or malformed.'}), 401
         try:
-            token = token.split()[1]
             data = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
             current_user = data['username']
         except jwt.ExpiredSignatureError:
-            return jsonify({'message': 'Token has expired!'}), 401
+            return jsonify({'message': 'Your session has expired. Please sign in again.'}), 401
         except jwt.InvalidTokenError:
             return jsonify({'message': 'Invalid token!'}), 401
         return f(current_user, *args, **kwargs)
@@ -286,70 +275,291 @@ def serve_audio(filename):
     return rv
 
 
-# =====================
-# CRUD Rater 
-# =====================
+# CRUD Rater
 
 
-def generate_token(username):
+def generate_token(username, kind='rater', team=None, scope=None):
+    """JWT for an annotator or an admin."""
     payload = {
         'username': username,
-        # 'language': language,
-        # 'speakers': speakers,
+        'kind': kind,
+        'team': team,
+        'scope': scope,
         'exp': datetime.utcnow() + timedelta(hours=24)
     }
     return jwt.encode(payload, app.config['JWT_SECRET_KEY'], algorithm='HS256')
 
 
+# Bodhan.AI identity helpers Two kinds of login exist: * ANNOTATOR -- a Rater row; their workspaces are their TeamMember rows.
+
+ORG_NAME = os.environ.get('ORG_NAME', 'Bodhan.AI')
+
+# Languages recognised when inferring a batch's language from its description. Extendable through the environment without a code change; the dashboard also unions in every language already present in the data.
+KNOWN_LANGUAGES = [l.strip().lower() for l in os.environ.get(
+    'SAFFRON_LANGUAGES',
+    'hindi,bengali,gujarati,kannada,malayalam,marathi,odia,tamil,telugu,urdu,english'
+).split(',') if l.strip()]
+
+
+def _infer_language(description, known=None):
+    """The first known language named in a batch description, '' if none."""
+    desc_lower = (description or '').lower()
+    for l in known if known is not None else KNOWN_LANGUAGES:
+        if l in desc_lower:
+            return l.capitalize()
+    return ''
+
+
+def _admin_row(username):
+    """The AdminUser row for this username, or None."""
+    if not username:
+        return None
+    try:
+        return AdminUser.query.filter_by(username=username, is_active=True).first()
+    except Exception:
+        return None
+
+
+def _is_admin(username):
+    """True for the org admin and for every active team admin."""
+    return username == 'admin' or _admin_row(username) is not None
+
+
+def _admin_scope(username):
+    """(scope, team_id) for an admin login. ('org', None) sees everything."""
+    if username == 'admin':
+        row = _admin_row('admin')
+        if row is None or row.team_id is None:
+            return 'org', None
+        return 'team', row.team_id
+    row = _admin_row(username)
+    if row is None:
+        return None, None
+    return ('org', None) if row.team_id is None else ('team', row.team_id)
+
+
+def _team_by_key(key):
+    if not key:
+        return None
+    return Team.query.filter_by(key=str(key).strip().lower()).first()
+
+
+def _default_team_id():
+    """The team an unscoped admin request falls back to: the first active team."""
+    t = _team_by_key(os.environ.get('DEFAULT_TEAM_KEY', '')) or \
+        Team.query.filter_by(is_active=True).order_by(Team.id).first()
+    return t.id if t else None
+
+
+def _request_team_id(username):
+    """The team this admin request is about."""
+    scope, team_id = _admin_scope(username)
+    if scope == 'team':
+        return team_id
+    requested = request.args.get('team') or request.headers.get('X-Team')
+    team = _team_by_key(requested)
+    if team:
+        return team.id
+    return _default_team_id()
+
+
+def _team_test_ids(team_id):
+    """Ids of the batches owned by a team (None = every batch)."""
+    if team_id is None:
+        return None
+    return {tid for (tid,) in db.session.query(Test.id).filter(Test.team_id == team_id).all()}
+
+
+def _team_rater_ids(team_id):
+    """Ids of the annotators who belong to a team (None = every annotator)."""
+    if team_id is None:
+        return None
+    return {r for (r,) in db.session.query(TeamMember.rater_id)
+            .filter(TeamMember.team_id == team_id).all()}
+
+
+def _scoped_tests(team_id, query=None):
+    q = query if query is not None else Test.query
+    if team_id is None:
+        return q
+    return q.filter(Test.team_id == team_id)
+
+
+def _scoped_raters(team_id, query=None):
+    """The annotators of a team."""
+    q = query if query is not None else Rater.query
+    if team_id is None:
+        return q
+    return q.join(TeamMember, TeamMember.rater_id == Rater.id).filter(
+        TeamMember.team_id == team_id, TeamMember.is_active == True)  # noqa: E712
+
+
+def _rater_in_scope(username, rater):
+    """Can this admin act on this annotator? An org admin can act on anyone; a team admin only on the members of their own team."""
+    scope, team_id = _admin_scope(username)
+    if scope != 'team' or team_id is None or rater is None:
+        return True
+    return TeamMember.query.filter_by(team_id=team_id, rater_id=rater.id).first() is not None
+
+
+def _serialize_team(team):
+    return {
+        'id': team.id,
+        'key': team.key,
+        'name': team.name,
+        'description': team.description,
+        'workflow': team.workflow,
+        'accent': team.accent,
+        'is_active': bool(team.is_active),
+    }
+
+
+def _rater_teams(rater):
+    """Every active workspace this annotator can enter, in a stable order."""
+    rows = (TeamMember.query.filter_by(rater_id=rater.id, is_active=True)
+            .join(Team, Team.id == TeamMember.team_id)
+            .filter(Team.is_active == True)  # noqa: E712
+            .order_by(Team.id).all())
+    out = []
+    for m in rows:
+        entry = _serialize_team(m.team)
+        entry['role'] = m.role
+        entry['languages'] = [x.strip() for x in (m.languages or '').split(',') if x.strip()]
+        entry['pull_size'] = m.pull_size
+        out.append(entry)
+    return out
+
+
 @app.route('/api/login', methods=['POST'])
 def login():
+    """Single entry point for annotators and admins."""
     import os
-    data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
+    from werkzeug.security import check_password_hash
+
+    data = request.get_json() or {}
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
+
+    # 1. Annotator login.
     user = Rater.query.filter_by(name=username).first()
     if user and user.password == password:
         # Deactivated annotators cannot log in (reversible via admin reactivate).
         if getattr(user, 'is_active', True) is False:
             return jsonify({'message': 'This account has been deactivated. Please contact the admin.'}), 403
-        auth_token = generate_token(username)
-        return jsonify({'token': auth_token}), 200
-    elif username == 'admin':
-        admin_pass = os.getenv('ADMIN_PASSWORD', 'admin')
-        if password == admin_pass:
-            auth_token = generate_token('admin')
-            return jsonify({'token': auth_token}), 200
-        else:
-            return jsonify({'message': 'Invalid username or password'}), 401
-    else:
+        teams = _rater_teams(user)
+        return jsonify({
+            'token': generate_token(username, kind='rater'),
+            'role': 'annotator',
+            'name': user.name,
+            'organization': ORG_NAME,
+            'teams': teams,
+        }), 200
+
+    # 2. Admin login -- team admins live in admin_user, hashed.
+    admin = AdminUser.query.filter_by(username=username).first()
+    if admin is not None:
+        if not admin.is_active:
+            return jsonify({'message': 'This admin account has been disabled.'}), 403
+        ok = False
+        try:
+            ok = check_password_hash(admin.password, password)
+        except Exception:
+            ok = False
+        # The org admin's password may also be rotated through the environment without touching the DB -- keep honouring ADMIN_PASSWORD for it.
+        if not ok and admin.username == 'admin':
+            ok = password == os.getenv('ADMIN_PASSWORD', 'admin')
+        if ok:
+            admin.last_login = datetime.utcnow()
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+            team = admin.team
+            return jsonify({
+                'token': generate_token(admin.username, kind='admin',
+                                        team=team.key if team else None,
+                                        scope=admin.scope),
+                'role': 'admin',
+                'scope': admin.scope,
+                'name': admin.display_name or admin.username,
+                'organization': ORG_NAME,
+                'team': _serialize_team(team) if team else None,
+                'teams': [_serialize_team(t) for t in
+                          Team.query.filter_by(is_active=True).order_by(Team.id).all()]
+                         if admin.team_id is None else [_serialize_team(team)],
+            }), 200
         return jsonify({'message': 'Invalid username or password'}), 401
 
+    # 3. Fallback for the historical env-only admin (before admin_user is seeded).
+    if username == 'admin' and password == os.getenv('ADMIN_PASSWORD', 'admin'):
+        return jsonify({
+            'token': generate_token('admin', kind='admin', scope='org'),
+            'role': 'admin', 'scope': 'org', 'name': f'{ORG_NAME} Admin',
+            'organization': ORG_NAME,
+            'teams': [_serialize_team(t) for t in Team.query.order_by(Team.id).all()],
+        }), 200
 
-# ---------------------------------------------------------------------------
-# Daily signup PIN
-# ---------------------------------------------------------------------------
-# New annotators must enter an 8-digit PIN that the admin shares. The PIN rotates
-# once per day and is stored in backend/signup_key.txt as "YYYY-MM-DD PIN".
+    return jsonify({'message': 'Invalid username or password'}), 401
+
+
+@app.route('/api/health', methods=['GET'])
+def health():
+    """Liveness + DB reachability probe for monitors and load balancers."""
+    try:
+        db.session.execute(db.text('SELECT 1'))
+        return jsonify({'status': 'ok', 'database': 'ok',
+                        'time': datetime.utcnow().isoformat()}), 200
+    except Exception as e:
+        return jsonify({'status': 'degraded', 'database': 'unreachable',
+                        'detail': str(e)}), 503
+
+
+@app.route('/api/me', methods=['GET'])
+@token_required
+def whoami(current_user):
+    """Identity + workspaces for the signed-in user."""
+    if _is_admin(current_user):
+        scope, team_id = _admin_scope(current_user)
+        row = _admin_row(current_user)
+        team = Team.query.get(team_id) if team_id else None
+        return jsonify({
+            'role': 'admin',
+            'scope': scope or 'org',
+            'username': current_user,
+            'name': (row.display_name if row else None) or current_user,
+            'organization': ORG_NAME,
+            'team': _serialize_team(team) if team else None,
+            'teams': [_serialize_team(t) for t in
+                      Team.query.filter_by(is_active=True).order_by(Team.id).all()]
+                     if team is None else [_serialize_team(team)],
+        }), 200
+
+    rater = Rater.query.filter_by(name=current_user).first()
+    if not rater:
+        return jsonify({'message': 'User not found'}), 404
+    return jsonify({
+        'role': 'annotator',
+        'username': rater.name,
+        'name': rater.name,
+        'email': rater.email,
+        'organization': ORG_NAME,
+        'teams': _rater_teams(rater),
+    }), 200
+
+
+# Daily signup PIN New annotators must enter an 8-digit PIN that the admin shares.
 import os  # noqa: E402  (views.py imports os further down; needed at module level here)
 
 # Public base URL used to build deep links into a specific task (see TestView ?task=).
 _SAFFRON_BASE_URL = os.environ.get('SAFFRON_BASE_URL', 'https://tts-saffron.ai4bharat.org')
 
 SIGNUP_KEY_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'signup_key.txt'
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'state', 'signup_key.txt'
 )
 
 
 def _daily_signup_pin():
-    """Return today's 8-digit PIN, generating + persisting a new one if the stored
-    PIN is from a previous day (or the file is missing/corrupt).
-
-    Concurrency: the whole read-check-write runs under an exclusive lock on the key
-    file, so with N gunicorn workers only one can ever be minting a PIN. Any worker
-    that arrives during a rotation blocks on the lock, then re-reads and returns the
-    PIN the winner just wrote -- two workers can never hand out different PINs for
-    the same day, not even on the midnight boundary.
-    """
+    """Return today's 8-digit PIN, generating + persisting a new one if the stored PIN is from a previous day (or the file is missing/corrupt)."""
     import datetime as _dt
     import fcntl as _fcntl
     import secrets as _secrets
@@ -379,7 +589,7 @@ def _daily_signup_pin():
 @token_required
 def get_signup_key(current_user):
     """Admin-only: today's signup PIN, to share with people who should sign up."""
-    if current_user != "admin":
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     import datetime as _dt
     return jsonify({'pin': _daily_signup_pin(), 'date': _dt.date.today().isoformat()}), 200
@@ -403,6 +613,13 @@ def signup():
     email = data.get('email')
     password = data.get('password')
 
+    # Which team is this person joining? (defaults to TTS so an old client that does not send a team still works.)
+    team = _team_by_key(data.get('team') or 'tts')
+    if team is None or not team.is_active:
+        return jsonify({'message': 'Please choose a valid team to join.'}), 400
+    if AdminUser.query.filter_by(username=(name or '').strip()).first():
+        return jsonify({'message': 'That username is reserved.'}), 400
+
     # Check if the username or email already exists
     existing_user = Rater.query.filter_by(email=email).first()  # Check if email exists in the database
     if existing_user:
@@ -423,24 +640,26 @@ def signup():
         password=password.strip()
     )
 
-    # Add the new user to the database
+    # Add the new user to the database, and put them in the team they chose.
     try:
         db.session.add(new_user)
+        db.session.flush()          # need the id for the membership row
+        db.session.add(TeamMember(team_id=team.id, rater_id=new_user.id, role='annotator'))
         db.session.commit()  # Commit to save the user in the database
     except Exception as e:
         db.session.rollback()  # In case of error, rollback the transaction
         return jsonify({'message': 'Error occurred while signing up. Please try again.',
-                        'error': e}), 500
+                        'error': str(e)}), 500
 
     # Generate an authentication token for the new user
-    auth_token = generate_token(name)
+    auth_token = generate_token(name, kind='rater')
 
     # Return the token in the response
-    return jsonify({'token': auth_token}), 201  # 201 status code for successful resource creation
+    return jsonify({'token': auth_token, 'role': 'annotator',
+                    'organization': ORG_NAME,
+                    'teams': _rater_teams(new_user)}), 201
 
-# =====================
 # CRUD Tests via Login
-# =====================
 @app.route('/api/test/<int:test_id>', methods=['GET'])
 @token_required
 def get_test(current_user, test_id):
@@ -449,7 +668,7 @@ def get_test(current_user, test_id):
     username = required["username"]
     rater = Rater.query.filter_by(name=username).first()
     if not rater:
-        if username == "admin":
+        if _is_admin(username):
             rater = Rater.query.first()
         if not rater:
             return jsonify({'message': 'Rater not found'}), 404
@@ -457,10 +676,8 @@ def get_test(current_user, test_id):
     test = Test.query.filter_by(id=test_id).first_or_404()
 
     # Task assignment locking protection.
-    # A task assigned to THIS rater is always accessible to them; a task assigned to
-    # someone else is locked; a task assigned to nobody stays open (legacy behaviour).
     my_assigned_ids = []
-    if username != "admin":
+    if not _is_admin(username):
         my_assigned_ids = [int(x.strip()) for x in (rater.assigned_tasks or "").split(',') if x.strip().isdigit()]
         if test_id not in my_assigned_ids:
             other_raters = Rater.query.filter(
@@ -474,10 +691,7 @@ def get_test(current_user, test_id):
                     return jsonify({'message': 'This task is locked to another annotator.'}), 403
 
     # Get the page numbers and ratings that the rater has already done.
-    # Admin uses 'Direct Task Preview' to inspect the pristine annotation
-    # flow, so it must NEVER load another annotator's saved work (admin has
-    # no Rater row and only borrows Rater.query.first() for auth above).
-    if username == "admin":
+    if _is_admin(username):
         ratings = []
     else:
         ratings = Rating.query.filter_by(rater_id=rater_id, test_id=test_id).all()
@@ -492,13 +706,8 @@ def get_test(current_user, test_id):
                 }
 
     # Leftover reassignment / handoff (ADMIN-CONTROLLED via test.handoff_mode).
-    # OFF (default): open task — every annotator sees every item, nothing hidden, so
-    # a task can intentionally be annotated by multiple annotators. ON: when this task
-    # is ASSIGNED to the current rater, hide items ANOTHER annotator already COMPLETED,
-    # so a batch can be handed over mid-way (A did 1-100 -> B sees only 101-N). Skips
-    # are NOT hidden (still open work). Order is ALWAYS the original json_entry order.
     others_completed_ids = set()
-    if username != "admin" and test_id in my_assigned_ids and bool(getattr(test, 'handoff_mode', False)):
+    if not _is_admin(username) and test_id in my_assigned_ids and bool(getattr(test, 'handoff_mode', False)):
         for r in Rating.query.filter(
             Rating.test_id == test_id,
             Rating.rater_id != rater_id,
@@ -507,9 +716,7 @@ def get_test(current_user, test_id):
             if r.page_no_progress:
                 others_completed_ids.add(str(r.page_no_progress))
 
-    # ALWAYS preserve the original json_entry order (no done-first shuffling) so the
-    # task list looks identical on every visit. Items completed by OTHER annotators
-    # (the handoff case above) are dropped from this rater's view.
+    # ALWAYS preserve the original json_entry order (no done-first shuffling) so the task list looks identical on every visit.
     ordered_samples = [s for s in test.json_entry if str(s['id']) not in others_completed_ids]
 
     # Map latest ratings by task ID to merge corrections
@@ -523,15 +730,11 @@ def get_test(current_user, test_id):
     # Inject completion_status and merge corrected translations into each entry
     required_response = []
     for sample in ordered_samples:
-        # Performance optimization: shallow copy dictionary and copy nested dialogue lists to avoid copy.deepcopy
         sample_copy = {k: v for k, v in sample.items()}
         for k in ['dialogue', 'conversation', 'turns']:
             if k in sample_copy and isinstance(sample_copy[k], list):
                 sample_copy[k] = [dict(turn) for turn in sample_copy[k]]
-        # Benchmark verification merges the annotator's edits over raw_text /
-        # spoken_form below. Carry the pristine values alongside so the UI can tell
-        # "edited" from "original", and so its Reset button restores the true
-        # original instead of the annotator's own earlier edit.
+        # Benchmark verification merges the annotator's edits over raw_text / spoken_form below.
         if 'raw_text' in sample_copy:
             sample_copy['original_raw_text'] = sample_copy['raw_text']
         if 'spoken_form' in sample_copy:
@@ -562,9 +765,7 @@ def get_test(current_user, test_id):
                     sample_copy['rejection_reasons'] = rating_data['rejection_reasons']
                 if 'custom_rejection_reason' in rating_data:
                     sample_copy['custom_rejection_reason'] = rating_data['custom_rejection_reason']
-                # Benchmark verification: reload the annotator's edited raw_text /
-                # spoken_form and their accept/reject decision so a saved draft or a
-                # completed item re-opens exactly as they left it.
+                # Benchmark verification: reload the annotator's edited raw_text / spoken_form and their accept/reject decision so a saved draft or a completed item re-opens.
                 if 'raw_text' in rating_data:
                     sample_copy['raw_text'] = rating_data['raw_text']
                 if 'spoken_form' in rating_data:
@@ -588,8 +789,7 @@ def get_test(current_user, test_id):
             sample_copy['completion_status'] = 'uncompleted'
         required_response.append(sample_copy)
 
-    # Resume at the first item THIS rater hasn't finished (in original order). If
-    # everything is done, point past the end so the frontend shows the complete state.
+    # Resume at the first item THIS rater hasn't finished (in original order).
     page_no = next(
         (i for i, s in enumerate(required_response)
          if s.get('completion_status') not in ('completed', 'skipped')),
@@ -607,10 +807,7 @@ def get_test(current_user, test_id):
 
 @app.teardown_request
 def _rollback_failed_session(exc=None):
-    # main.py keeps one app context pushed forever, so Flask-SQLAlchemy never
-    # removes the scoped session between requests. If a flush failed and the
-    # view swallowed it, the session stays unusable for every later request on
-    # this worker. Roll it back here so one bad request can't poison the rest.
+    # main.py keeps one app context pushed forever, so Flask-SQLAlchemy never removes the scoped session between requests.
     try:
         if exc is not None or not db.session.is_active:
             db.session.rollback()
@@ -626,7 +823,7 @@ def create_rating(current_user):
         required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
         rater = Rater.query.filter_by(name=required["username"]).first()
         if not rater:
-            if required["username"] == "admin":
+            if _is_admin(required["username"]):
                 rater = Rater.query.first()
             if not rater:
                 return jsonify({'message': 'Rater not found'}), 404
@@ -635,7 +832,7 @@ def create_rating(current_user):
         # Task assignment locking protection (a rater may always submit to their own assigned task)
         username = required["username"]
         test_id = data.get('test_id')
-        if test_id and username != "admin":
+        if test_id and not _is_admin(username):
             my_assigned_ids = [int(x.strip()) for x in (rater.assigned_tasks or "").split(',') if x.strip().isdigit()]
             if test_id not in my_assigned_ids:
                 other_raters = Rater.query.filter(
@@ -657,6 +854,9 @@ def create_rating(current_user):
         data['results_json']['time_taken'] = data['time_taken_to_submit'] / 1000
         data['results_json']['data_id'] = data.get('pageNo_progress')
         completion_status = data.get('completion_status', 'completed')
+        # Denormalise the accept/reject verdict so no dashboard ever has to re-parse this blob to find it (see Rating.verdict).
+        _v = data['results_json'].get('evaluation') or data['results_json'].get('decision')
+        verdict = str(_v).strip().lower() if _v else ''
 
         existing_rating = Rating.query.filter_by(
             rater_id=rater.id,
@@ -668,6 +868,7 @@ def create_rating(current_user):
             existing_rating.results_json = data['results_json']
             existing_rating.time_taken_to_submit = data['time_taken_to_submit']
             existing_rating.completion_status = completion_status
+            existing_rating.verdict = verdict
             existing_rating.time_of_submission = datetime.utcnow()
             db.session.commit()
             return jsonify({'message': 'Rating updated successfully'}), 200
@@ -678,7 +879,8 @@ def create_rating(current_user):
                 results_json=data['results_json'],
                 time_taken_to_submit=data['time_taken_to_submit'],
                 page_no_progress=data.get('pageNo_progress'),
-                completion_status=completion_status
+                completion_status=completion_status,
+                verdict=verdict,
             )
             db.session.add(rating)
             db.session.commit()
@@ -693,16 +895,16 @@ def create_rating(current_user):
 @app.route('/api/ratings/<int:rating_id>', methods=['PUT'])
 @token_required
 def update_rating(current_user, rating_id):
-    # This endpoint used to be completely unauthenticated: anyone who could reach
-    # the API could overwrite any annotator's submission by id. A rating may now
-    # only be edited by the rater who made it, or by an admin.
+    # This endpoint used to be completely unauthenticated: anyone who could reach the API could overwrite any annotator's submission by id.
     rater = Rater.query.filter_by(name=current_user).first()
     rating = Rating.query.get_or_404(rating_id)
-    if current_user != "admin" and (not rater or rating.rater_id != rater.id):
+    if not _is_admin(current_user) and (not rater or rating.rater_id != rater.id):
         return jsonify({'message': 'Unauthorized'}), 403
     data = request.get_json() or {}
     if 'results_json' in data:
         rating.results_json = data['results_json']
+        _v = (data['results_json'] or {}).get('evaluation') or (data['results_json'] or {}).get('decision')
+        rating.verdict = str(_v).strip().lower() if _v else ''
     if 'time_taken_to_submit' in data:
         rating.time_taken_to_submit = data['time_taken_to_submit']
     if 'page_no_progress' in data:
@@ -711,386 +913,12 @@ def update_rating(current_user, rating_id):
     return jsonify({'message': 'Rating updated successfully'})
 
 
-# =======================
-# CRUD Tests via Prolific
-# =======================
+# Prolific recruitment flow (RETIRED 2026-08-06) The /api/prolific/* endpoints, the Study/Session/Consent models and their three (empty) tables were removed when.
 
-
-@app.route('/api/prolific/study', methods=['POST'])
-def create_study():
-    """
-    Create a new study and link it to a test.
-    Example Request Body:
-    {
-        "study_id": "675f98c80c6433c976165f3e",
-        "test_id": 123,
-        "completion_url": "https://app.prolific.com/submissions/complete?cc=COGEJ6Y9"
-    }
-    """
-    data = request.get_json()
-    study_id = data.get('study_id')
-    test_id = data.get('test_id')
-    completion_url = data.get('completion_url')
-
-    if not study_id or not test_id or not completion_url:
-        return jsonify({'message': 'Missing required fields'}), 400
-
-    test = Test.query.get(test_id)
-    if not test:
-        return jsonify({'message': 'Test not found'}), 404
-
-    # Check if study already exists
-    existing_study = Study.query.filter_by(study_id=str(study_id)).first()
-    if existing_study:
-        return jsonify({'message': 'Study already exists'}), 400
-
-    new_study = Study(
-        study_id=study_id,
-        test_id=test_id,
-        completion_url=completion_url
-    )
-
-    try:
-        db.session.add(new_study)
-        db.session.commit()
-        return jsonify({'message': 'Study created successfully',
-                        'study_id': study_id}), 201
-    except Exception as e:
-        db.session.rollback()
-        app.logger.error('Error creating study: %s', e)
-        print(e)
-        return jsonify({'message': 'Error creating study'}), 500
-
-
-@app.route('/api/prolific/session', methods=['POST'])
-def create_session():
-    """
-    Create a new session when a Prolific user accesses the test URL.
-    Request Query Parameters:
-    - PROLIFIC_PID
-    - STUDY_ID
-    - SESSION_ID
-    """
-    prolific_pid = request.args.get('PROLIFIC_PID')
-    study_id = request.args.get('STUDY_ID')
-    session_id = request.args.get('SESSION_ID')
-
-    if not prolific_pid or not study_id or not session_id:
-        return jsonify({'message': 'Missing required query parameters'}), 400
-
-    # Check if the study exists
-    study = Study.query.filter_by(study_id=str(study_id)).first()
-    if not study:
-        return jsonify({'message': 'Study not found'}), 404
-
-    # Check if the session already exists
-    existing_session = Session.query.filter_by(session_id=session_id).first()
-    if existing_session:
-        return jsonify({'message': 'Session already exists'}), 400
-
-    new_session = Session(
-        session_id=session_id,
-        study_id=study.id,
-        prolific_pid=prolific_pid
-    )
-
-    try:
-        db.session.add(new_session)
-        db.session.commit()
-        return jsonify({'message': 'Session created successfully', 'session_id': session_id}), 201
-    except Exception as e:
-        db.session.rollback()
-        app.logger.error('Error creating session: %s', e)
-        return jsonify({'message': 'Error creating session'}), 500
-
-
-@app.route('/api/prolific/study', methods=['GET'])
-def get_test_for_prolific_user():
-    """
-    Serve the test to a Prolific user without requiring login.
-    Query Parameters:
-    - PROLIFIC_PID: Prolific participant ID
-    - STUDY_ID: Prolific study ID
-    - SESSION_ID: Prolific session ID
-    """
-    prolific_pid = request.args.get('PROLIFIC_PID')
-    study_id = request.args.get('STUDY_ID')
-    session_id = request.args.get('SESSION_ID')
-
-    if not prolific_pid:
-        return jsonify({'message': 'Missing required parameter: PROLIFIC_PID'}), 400
-    if not study_id:
-        return jsonify({'message': 'Missing required parameter: STUDY_ID'}), 400
-    if not session_id:
-        return jsonify({'message': 'Missing required parameter: SESSION_ID'}), 400
-    
-    # Step 1: Check if a rater exists for the Prolific ID, create one if not
-    rater = Rater.query.filter_by(email=prolific_pid).first()
-    if not rater:
-        # Generate a random password
-        random_password = generate_password_hash(
-            f"{prolific_pid}_{study_id}",
-            # method='pbkdf2:sha256'
-        )
-        rater = Rater(
-            name=f"Prolific_{prolific_pid}",
-            age=0,  # Default age as it's not collected
-            gender="Unknown",  # Default gender
-            email=prolific_pid,  # Using Prolific PID as email
-            password=random_password
-        )
-
-        db.session.add(rater)
-        db.session.commit()
-
-    
-    # Step 2: Get the test ID associated with the study
-    study = Study.query.filter_by(study_id=study_id).first()
-    if not study:
-        return jsonify({'message': 'Study not found'}), 404
-
-    test = Test.query.get(study.test_id)
-    if not test:
-        return jsonify({'message': 'Test not found'}), 404
-
-    # Step 3: Check if a session exists for the Prolific user, create one if not
-    session = Session.query.filter_by(session_id=session_id).first()
-    if not session:
-        session = Session(
-            session_id=session_id,
-            study_id=study.id,
-            prolific_pid=prolific_pid
-        )
-        
-        db.session.add(session)
-        db.session.commit()
-
-
-
-    # Step 4: Query the Rating table to get page numbers already completed
-    ratings = Rating.query.filter_by(
-        rater_id=rater.id, test_id=test.id
-    ).all()
-    
-    latest_status = {}
-    for r in ratings:
-        if r.page_no_progress:
-            pid = str(r.page_no_progress)
-            if pid not in latest_status or r.time_of_submission > latest_status[pid]['time']:
-                latest_status[pid] = {
-                    'status': r.completion_status or 'completed',
-                    'time': r.time_of_submission
-                }
-    
-    completed_pages_raw = {pid for pid, val in latest_status.items() if val['status'] in ['completed', 'skipped']}
-
-    # Get all pages in the test
-    all_pages = [entry['id'] for entry in test.json_entry]
-
-    # Filter out completed pages and shuffle the remaining ones deterministically per user
-    completed_pages = {page for page in all_pages if str(page) in completed_pages_raw}
-    remaining_pages = [page for page in all_pages if page not in completed_pages]
-    
-    user_seed = f"saffron_{rater.id}_{test.id}"
-    user_random = random.Random(user_seed)
-    user_random.shuffle(remaining_pages)
-
-    # Create a dictionary for quick lookup of entries by ID
-    entry_dict = {entry['id']: entry for entry in test.json_entry}
-
-    # Combine completed pages (preserving their order) with shuffled remaining pages
-    shuffled_sequence = [entry_dict[page_id] for page_id in completed_pages] + \
-                        [entry_dict[page_id] for page_id in remaining_pages]
-                        
-    # Map latest ratings by task ID to merge corrections
-    latest_ratings = {}
-    for r in ratings:
-        if r.page_no_progress:
-            pid = str(r.page_no_progress)
-            if pid not in latest_ratings or r.time_of_submission > latest_ratings[pid].time_of_submission:
-                latest_ratings[pid] = r
-
-    full_test_sequence = []
-    for sample in shuffled_sequence:
-        # Performance optimization: shallow copy dictionary and copy nested dialogue lists to avoid copy.deepcopy
-        sample_copy = {k: v for k, v in sample.items()}
-        for k in ['dialogue', 'conversation', 'turns']:
-            if k in sample_copy and isinstance(sample_copy[k], list):
-                sample_copy[k] = [dict(turn) for turn in sample_copy[k]]
-        
-        pid = str(sample_copy['id'])
-        if pid in latest_ratings:
-            rating = latest_ratings[pid]
-            sample_copy['completion_status'] = rating.completion_status or 'completed'
-            
-            # Merge corrected translations and evaluation decisions from results_json
-            rating_data = rating.results_json
-            if isinstance(rating_data, dict):
-                if 'pre_scene' in rating_data:
-                    sample_copy['pre_scene'] = rating_data['pre_scene']
-                if 'post_scene' in rating_data:
-                    sample_copy['post_scene'] = rating_data['post_scene']
-                # Sentence-correction tasks carry a single top-level corrected text.
-                if 'text' in rating_data:
-                    sample_copy['text'] = rating_data['text']
-                # Merge conversation evaluation decisions
-                if 'evaluation' in rating_data:
-                    sample_copy['evaluation'] = rating_data['evaluation']
-                if 'comments' in rating_data:
-                    sample_copy['comments'] = rating_data['comments']
-                if 'transcript' in rating_data:
-                    sample_copy['transcript'] = rating_data['transcript']
-                if 'rejection_reasons' in rating_data:
-                    sample_copy['rejection_reasons'] = rating_data['rejection_reasons']
-                if 'custom_rejection_reason' in rating_data:
-                    sample_copy['custom_rejection_reason'] = rating_data['custom_rejection_reason']
-                # Benchmark verification: reload the annotator's edited raw_text /
-                # spoken_form and their accept/reject decision so a saved draft or a
-                # completed item re-opens exactly as they left it.
-                if 'raw_text' in rating_data:
-                    sample_copy['raw_text'] = rating_data['raw_text']
-                if 'spoken_form' in rating_data:
-                    sample_copy['spoken_form'] = rating_data['spoken_form']
-                if 'decision' in rating_data:
-                    sample_copy['decision'] = rating_data['decision']
-
-                orig_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in sample_copy and isinstance(sample_copy[k], list)), None)
-                rated_conv_key = next((k for k in ['dialogue', 'conversation', 'turns'] if k in rating_data and isinstance(rating_data[k], list)), None)
-                
-                if orig_conv_key and rated_conv_key:
-                    orig_list = sample_copy[orig_conv_key]
-                    rated_list = rating_data[rated_conv_key]
-                    for i, orig_turn in enumerate(orig_list):
-                        if i < len(rated_list):
-                            rated_turn = rated_list[i]
-                            for k, v in rated_turn.items():
-                                if k not in ['role', 'english', 'english_text', 'original', 'original_text', 'en', 'text_en', 'speaker', 'user']:
-                                    orig_turn[k] = v
-        else:
-            sample_copy['completion_status'] = 'uncompleted'
-        full_test_sequence.append(sample_copy)
-
-    auth_token = generate_token(rater.name)
-
-    # Step 5: Check if the user has given consent for the test
-    consent = Consent.query.filter_by(rater_id=rater.id, test_id=test.id).first()
-    if consent:
-        consent_status = True
-    else:
-        consent_status = False
-
-    remaining_time = get_remaining_time(rater.id, study.id)
-
-    # Step 6: Serve the test
-    return jsonify({
-        'test_id': test.id,
-        'test_type': test.test_type,
-        'description': test.description,
-        'json_entry': full_test_sequence,
-        'page_no': len(completed_pages),
-        'completion_url': study.completion_url,
-        'token': auth_token,
-        'consent': consent_status,
-        'rejection_url': "https://app.prolific.com/submissions/complete?cc=C8S11MVG",
-        'remaining_time': remaining_time
-    })
-
-# add a new point to give consent
-@app.route('/api/prolific/consent/<int:test_id>', methods=['GET'])
-def give_consent(test_id):
-    token = _require_bearer_token()
-    required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
-    rater = Rater.query.filter_by(name=required["username"]).first_or_404()
-    test = Test.query.filter_by(id=test_id).first_or_404()
-    if rater is None or test is None:
-        return jsonify({'message': 'Rater or Test not found'}), 404
-    consent = Consent(
-        rater_id=rater.id,
-        test_id=test_id
-    )
-    db.session.add(consent)
-    db.session.commit()
-
-    return jsonify({'message': 'Consent given successfully'}), 201
-
-@app.route('/api/prolific/rating', methods=['POST'])
-def save_rating():
-    """
-    Save the ratings submitted by Prolific users.
-    Request Body:
-    {
-        "session_id": "session_id",
-        "test_id": 123,
-        "results_json": {...},
-        "time_taken_to_submit": 300,
-        "completion_status": "completed"
-    }
-    """
-    data = request.get_json()
-    session_id = data.get('session_id')
-    test_id = data.get('test_id')
-    results_json = data.get('results_json')
-    time_taken_to_submit = data.get('time_taken_to_submit')
-    completion_status = data.get('completion_status', 'completed')
-
-    if not session_id or not test_id or not results_json or not time_taken_to_submit:
-        return jsonify({'message': 'Missing required fields'}), 400
-
-    session = Session.query.filter_by(session_id=session_id).first()
-    if not session:
-        return jsonify({'message': 'Session not found'}), 404
-
-    rater = Rater.query.filter_by(email=session.prolific_pid).first()
-
-    # Append additional fields to results_json
-    if not isinstance(results_json, dict):
-        return jsonify({'message': 'Invalid results_json format'}), 400
-
-    results_json.update({
-        'session_id': session_id,
-        'prolific_id': session.prolific_pid,
-        'study_id': session.study_id,
-        'test_id': test_id,
-        'time': datetime.now().isoformat(),  # Current timestamp
-        'time_taken': time_taken_to_submit / 1000,  # Convert to seconds
-        'data_id': data.get('pageNo_progress')  # Optional field
-    })
-
-    new_rating = Rating(
-        rater_id=rater.id,  # Prolific users are anonymous, no Rater ID
-        test_id=test_id,
-        results_json=results_json,
-        time_taken_to_submit=time_taken_to_submit,
-        page_no_progress=data.get('pageNo_progress'),
-        completion_status=completion_status
-    )
-
-    try:
-        db.session.add(new_rating)
-        db.session.commit()
-        return jsonify({'message': 'Rating created successfully'}), 201
-    except Exception as e:
-        db.session.rollback()
-        app.logger.error('Error saving rating: %s', e)
-        return jsonify({'message': 'Error saving rating'}), 500
-
-# =======================
-# CRUD Basic 
-# =======================
+# CRUD Basic
 @app.route('/api/test', methods=['POST'])
 def create_test():
-    """
-    Create a new test.
-    Example Request Body:
-    {
-        "test_type": "Multiple Choice",
-        "description": "A test for evaluating multiple-choice questions.",
-        "json_entry": [
-            {"id": 1, "question": "What is 2+2?", "options": ["3", "4", "5"], "answer": "4"},
-            {"id": 2, "question": "What is the capital of France?", "options": ["Paris", "London", "Berlin"], "answer": "Paris"}
-        ]
-    }
-    """
+    """Create a new test."""
     try:
         data = request.get_json()
 
@@ -1127,9 +955,7 @@ def create_test():
 
 @app.route('/api/results', methods=['GET'])
 def get_database():
-    """
-    Get the contents of the database.
-    """
+    """Get the contents of the database."""
     # Verify token
     token = _require_bearer_token()
     if token != "tts_ai4b":
@@ -1177,7 +1003,7 @@ def verify_test(test_id):
     username = required["username"]
     rater = Rater.query.filter_by(name=username).first()
     if not rater:
-        if username == "admin":
+        if _is_admin(username):
             rater = Rater.query.first()
         if not rater:
             return jsonify({'message': 'Rater not found'}), 404
@@ -1185,7 +1011,7 @@ def verify_test(test_id):
     test = Test.query.filter_by(id=test_id).first_or_404()
 
     # Task assignment locking protection (a rater may always access their own assigned task)
-    if username != "admin":
+    if not _is_admin(username):
         my_assigned_ids = [int(x.strip()) for x in (rater.assigned_tasks or "").split(',') if x.strip().isdigit()]
         if test_id not in my_assigned_ids:
             other_raters = Rater.query.filter(
@@ -1223,7 +1049,7 @@ def get_tracking():
     token = _require_bearer_token()
     required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
 
-    if not token or required["username"] != "admin":
+    if not token or not _is_admin(required["username"]):
         return jsonify({'message': 'Unauthorized'}), 401
     try:
         raters = Rater.query.all()
@@ -1242,8 +1068,7 @@ def get_tracking():
 
             for test_id, completed in test_groups.items():
                 test = Test.query.get(test_id)
-                # Ratings can outlive their Test (e.g. a test was deleted). Skip
-                # those orphans instead of crashing the whole endpoint on None.id.
+                # Ratings can outlive their Test (e.g.
                 if test is None:
                     continue
                 total = len(test.json_entry) if test.json_entry else 0
@@ -1266,7 +1091,7 @@ def get_tracking():
 @app.route('/api/admin/export_csv/<int:test_id>', methods=['GET'])
 @token_required
 def export_csv(current_user, test_id):
-    if current_user != "admin":
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     try:
         from application.models import Rating, Test, Rater
@@ -1340,7 +1165,7 @@ def export_csv(current_user, test_id):
                 'Custom Rejection Reason',
                 'Comments'
             ]
-        elif test.test_type in ('benchmark-verification', 'benchmark-parallel'):
+        elif test.test_type in ('benchmark-verification', 'benchmark-parallel', 'benchmark-evaluation-v2'):
             headers += [
                 'Language',
                 'Suite',
@@ -1407,9 +1232,6 @@ def export_csv(current_user, test_id):
                 r.completion_status or 'completed',
                 r.time_of_submission.isoformat() if r.time_of_submission else "",
                 # Stored in MILLISECONDS (every frontend sends a Date.now() delta).
-                # This column is headed "seconds" and used to emit the raw ms value,
-                # so every per-task export read 1000x too high. Every other report
-                # (admin_reports.py, rater_activity) already divides by 1000.
                 round((r.time_taken_to_submit or 0.0) / 1000.0, 1)
             ]
             
@@ -1462,9 +1284,8 @@ def export_csv(current_user, test_id):
                     res_json.get('custom_rejection_reason') or "",
                     res_json.get('comments') or ""
                 ]
-            elif test.test_type in ('benchmark-verification', 'benchmark-parallel'):
-                # The stored item is the pristine source row; the rating carries the
-                # annotator's edit. Emit both so a reviewer sees exactly what changed.
+            elif test.test_type in ('benchmark-verification', 'benchmark-parallel', 'benchmark-evaluation-v2'):
+                # The stored item is the pristine source row; the rating carries the annotator's edit.
                 orig_raw = orig_item.get('raw_text') or ""
                 orig_spoken = orig_item.get('spoken_form') or ""
                 corr_raw = res_json.get('raw_text', orig_raw)
@@ -1599,13 +1420,8 @@ def _artist_stats_safe(tests, ratings_by_test):
 @app.route('/api/admin/rater_activity', methods=['GET'])
 @token_required
 def rater_activity(current_user):
-    """Per-annotator work done inside a date window (default: all time).
-
-    ?from=YYYY-MM-DD&to=YYYY-MM-DD  (both inclusive; either may be omitted)
-    Counts DISTINCT completed/skipped task ids, submissions and time spent, so the
-    admin can see "what did this person do last week" instead of only lifetime totals.
-    """
-    if current_user != "admin":
+    """Per-annotator work done inside a date window (default: all time)."""
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     from sqlalchemy.orm import defer
     from datetime import datetime as _dt, timedelta as _td
@@ -1619,6 +1435,8 @@ def rater_activity(current_user):
     d_from = _parse(request.args.get('from') or '')
     d_to = _parse(request.args.get('to') or '')
 
+    import admin_reports
+
     q = Rating.query.options(defer(Rating.results_json))
     if d_from:
         q = q.filter(Rating.time_of_submission >= d_from)
@@ -1626,18 +1444,57 @@ def rater_activity(current_user):
         q = q.filter(Rating.time_of_submission < d_to + _td(days=1))   # inclusive end day
     ratings = q.all()
 
+    # test_id -> (test_type, description), so every submission can be attributed to a task type AND to the specific batch it came from.
+    meta_of_test = {tid: (tt, desc)
+                    for tid, tt, desc in db.session.query(Test.id, Test.test_type, Test.description).all()}
+
     per = {}
     for r in ratings:
-        p = per.setdefault(r.rater_id, {'tasks': set(), 'submissions': 0, 'secs': 0.0, 'last': None})
+        p = per.setdefault(r.rater_id, {'tasks': set(), 'skipped': set(), 'drafts': 0,
+                                        'by_type': {}, 'type_subs': {}, 'type_skipped': {},
+                                        'type_drafts': {}, 'by_test': {}, 'submissions': 0,
+                                        'secs': 0.0, 'last': None})
+        ttype = (meta_of_test.get(r.test_id) or (None, None))[0] or 'unknown'
         p['submissions'] += 1
-        if r.page_no_progress and r.completion_status in ('completed', 'skipped'):
-            p['tasks'].add(str(r.page_no_progress))
+        p['type_subs'][ttype] = p['type_subs'].get(ttype, 0) + 1
+        bt = p['by_test'].setdefault(r.test_id, {'tasks': set(), 'skipped': set(), 'drafts': 0,
+                                                 'subs': 0, 'secs': 0.0, 'last': None})
+        bt['subs'] += 1
+        # Key on (test_id, item) — item ids restart at 1 in every batch, so a bare item id collapses genuinely different tasks into one.
+        key = (r.test_id, str(r.page_no_progress)) if r.page_no_progress else None
+        if key and r.completion_status == 'completed':
+            p['tasks'].add(key)
+            p['by_type'].setdefault(ttype, set()).add(key)
+            bt['tasks'].add(key)
+        elif key and r.completion_status == 'skipped':
+            p['skipped'].add(key)
+            p['type_skipped'].setdefault(ttype, set()).add(key)
+            bt['skipped'].add(key)
+        else:
+            p['drafts'] += 1
+            p['type_drafts'][ttype] = p['type_drafts'].get(ttype, 0) + 1
+            bt['drafts'] += 1
         if r.time_taken_to_submit:
             secs = r.time_taken_to_submit / 1000.0
             if 0 < secs < 7200:          # ignore tab-left-open outliers
                 p['secs'] += secs
+                bt['secs'] += secs
         if r.time_of_submission and (p['last'] is None or r.time_of_submission > p['last']):
             p['last'] = r.time_of_submission
+        if r.time_of_submission and (bt['last'] is None or r.time_of_submission > bt['last']):
+            bt['last'] = r.time_of_submission
+
+    # Batch sizes, looked up only for the batches that actually appear in this window (json_array_length reads the JSON blob, so scanning all ~1k tests is wasteful).
+    touched = {tid for pp in per.values() for tid in pp['by_test']}
+    size_of_test = {}
+    if touched:
+        ids = list(touched)
+        for chunk in (ids[i:i + 400] for i in range(0, len(ids), 400)):
+            rows_ = db.session.execute(
+                db.text("SELECT id, json_array_length(json_entry) FROM test WHERE id IN :ids")
+                .bindparams(db.bindparam('ids', expanding=True)), {'ids': chunk}
+            ).all()
+            size_of_test.update({r_[0]: r_[1] or 0 for r_ in rows_})
 
     raters = {x.id: x for x in Rater.query.all()}
     rows = []
@@ -1648,40 +1505,237 @@ def rater_activity(current_user):
             'name': rt.name if rt else f'Rater {rid}',
             'email': rt.email if rt else '',
             'completed_tasks': len(p['tasks']),
+            # An item completed on one row and skipped on another is paid, not skipped.
+            'skipped_tasks': len(p['skipped'] - p['tasks']),
+            'draft_tasks': p['drafts'],
+            'by_type': {k: len(v) for k, v in p['by_type'].items()},
+            'submissions_by_type': dict(p['type_subs']),
+            'skipped_by_type': {k: len(v - p['tasks']) for k, v in p['type_skipped'].items()},
+            'drafts_by_type': dict(p['type_drafts']),
+            # Task-wise (per batch) breakdown behind the annotator's period total.
+            'by_test': sorted(
+                [{
+                    'test_id': tid,
+                    'test_type': (meta_of_test.get(tid) or (None, None))[0] or 'unknown',
+                    'type_label': admin_reports.pretty_test_type(
+                        (meta_of_test.get(tid) or (None, None))[0] or 'unknown'),
+                    'description': (meta_of_test.get(tid) or (None, ''))[1] or '',
+                    'language': admin_reports.test_language((meta_of_test.get(tid) or (None, ''))[1] or ''),
+                    'tasks': len(bt['tasks']),
+                    'skipped': len(bt['skipped'] - bt['tasks']),
+                    'drafts': bt['drafts'],
+                    'submissions': bt['subs'],
+                    'total_items': size_of_test.get(tid, 0),
+                    'hours': round(bt['secs'] / 3600.0, 2),
+                    'last_active': bt['last'].isoformat() if bt['last'] else None,
+                } for tid, bt in p['by_test'].items()],
+                key=lambda x: (-x['tasks'], x['test_id']),
+            ),
             'submissions': p['submissions'],
             'hours': round(p['secs'] / 3600.0, 2),
             'avg_seconds': round(p['secs'] / p['submissions'], 1) if p['submissions'] else 0,
             'last_active': p['last'].isoformat() if p['last'] else None,
         })
     rows.sort(key=lambda x: -x['completed_tasks'])
+
+    totals_by_type, totals_subs_by_type = {}, {}
+    totals_skipped_by_type, totals_drafts_by_type = {}, {}
+    for r in rows:
+        for k, v in r['by_type'].items():
+            totals_by_type[k] = totals_by_type.get(k, 0) + v
+        for k, v in r['submissions_by_type'].items():
+            totals_subs_by_type[k] = totals_subs_by_type.get(k, 0) + v
+        for k, v in r['skipped_by_type'].items():
+            totals_skipped_by_type[k] = totals_skipped_by_type.get(k, 0) + v
+        for k, v in r['drafts_by_type'].items():
+            totals_drafts_by_type[k] = totals_drafts_by_type.get(k, 0) + v
+
+    # Stable column order for the UI: busiest task type first.
+    type_order = sorted(set(totals_by_type) | set(totals_subs_by_type),
+                        key=lambda k: (-totals_by_type.get(k, 0), k))
+
     return jsonify({
         'from': request.args.get('from') or None,
         'to': request.args.get('to') or None,
         'raters': rows,
+        'task_types': [
+            {'key': k, 'label': admin_reports.pretty_test_type(k),
+             'completed_tasks': totals_by_type.get(k, 0),
+             'skipped_tasks': totals_skipped_by_type.get(k, 0),
+             'draft_tasks': totals_drafts_by_type.get(k, 0),
+             'submissions': totals_subs_by_type.get(k, 0)}
+            for k in type_order
+        ],
         'totals': {
             'completed_tasks': sum(r['completed_tasks'] for r in rows),
+            'skipped_tasks': sum(r['skipped_tasks'] for r in rows),
+            'draft_tasks': sum(r['draft_tasks'] for r in rows),
             'submissions': sum(r['submissions'] for r in rows),
             'hours': round(sum(r['hours'] for r in rows), 2),
             'active_raters': len(rows),
+            'by_type': totals_by_type,
+            'submissions_by_type': totals_subs_by_type,
+            'skipped_by_type': totals_skipped_by_type,
+            'drafts_by_type': totals_drafts_by_type,
         }
     }), 200
+
+
+# "Upload QC Task" pane — download an audio-segmentation set straight from a Drive link instead of SSHing in and running load_audio_set.py by hand.
+@app.route('/api/admin/qc_upload/inspect', methods=['POST'])
+@token_required
+def qc_upload_inspect(current_user):
+    """Start a background inspection of a Drive recordings link."""
+    if not _is_admin(current_user):
+        return jsonify({'message': 'Unauthorized'}), 401
+    from tools import qc_upload_jobs
+
+    data = request.get_json(silent=True) or {}
+    link = (data.get('audio_link') or '').strip()
+    if not link:
+        return jsonify({'message': 'audio_link is required'}), 400
+    if 'drive.google.com' not in link:
+        return jsonify({'message': 'That does not look like a Google Drive link.'}), 400
+
+    job = qc_upload_jobs.spawn('inspect', {
+        'audio_link': link,
+        'id_subfolder': (data.get('id_subfolder') or 'EXPORTED ID').strip(),
+        'excel_link': (data.get('excel_link') or '').strip() or None,
+    }, 'tools/qc_inspect_worker.py')
+    return jsonify(job), 202
+
+
+@app.route('/api/admin/qc_upload/start', methods=['POST'])
+@token_required
+def qc_upload_start(current_user):
+    """Start the real download + DB load, after the admin confirmed the dialog."""
+    if not _is_admin(current_user):
+        return jsonify({'message': 'Unauthorized'}), 401
+    from tools import qc_upload_jobs
+
+    data = request.get_json(silent=True) or {}
+    link = (data.get('audio_link') or '').strip()
+    persona = (data.get('persona') or '').strip()
+    excel_set = str(data.get('excel_set') or '').strip()
+    if not link or not persona or not excel_set:
+        return jsonify({'message': 'audio_link, persona and excel_set are required'}), 400
+
+    # One load at a time: load_audio_set.py picks the next free setN when it starts, so two overlapping loads could both claim the same directory.
+    busy = qc_upload_jobs.active_load_job()
+    if busy:
+        return jsonify({'message': 'Another QC upload is still running.',
+                        'job': busy}), 409
+    # ...and claim the slot atomically, because the check above and the spawn below are two steps across 12 workers.
+    if not qc_upload_jobs.acquire_load_lock('pending'):
+        return jsonify({'message': 'Another QC upload just started.'}), 409
+
+    job = qc_upload_jobs.spawn('load', {
+        'audio_link': link,
+        'persona': persona,
+        'excel_set': excel_set,
+        'language': (data.get('language') or 'english').strip().lower(),
+        'set_name': (data.get('set_name') or '').strip(),
+        'id_subfolder': (data.get('id_subfolder') or 'EXPORTED ID').strip(),
+        'no_load': bool(data.get('no_load')),
+    }, 'tools/qc_load_worker.py')
+    if job.get('status') == 'failed':
+        qc_upload_jobs.release_load_lock()      # never spawned; don't hold the slot
+    else:
+        qc_upload_jobs.restamp_load_lock(job['id'])
+    return jsonify(job), 202
+
+
+@app.route('/api/admin/qc_upload/jobs', methods=['GET'])
+@token_required
+def qc_upload_jobs_list(current_user):
+    if not _is_admin(current_user):
+        return jsonify({'message': 'Unauthorized'}), 401
+    from tools import qc_upload_jobs
+
+    limit = request.args.get('limit', type=int) or 25
+    kind = request.args.get('kind') or None
+    return jsonify({'jobs': qc_upload_jobs.list_jobs(limit=limit, kind=kind),
+                    'active_load': qc_upload_jobs.active_load_job()}), 200
+
+
+@app.route('/api/admin/qc_upload/job/<job_id>', methods=['GET'])
+@token_required
+def qc_upload_job_get(current_user, job_id):
+    if not _is_admin(current_user):
+        return jsonify({'message': 'Unauthorized'}), 401
+    from tools import qc_upload_jobs
+
+    want_log = request.args.get('log') not in (None, '', '0', 'false')
+    job = qc_upload_jobs.get_job(job_id, with_log=want_log)
+    if not job:
+        return jsonify({'message': 'Job not found'}), 404
+    return jsonify(job), 200
+
+
+@app.route('/api/admin/qc_upload/job/<job_id>', methods=['DELETE'])
+@token_required
+def qc_upload_job_delete(current_user, job_id):
+    """Remove one finished job from the history."""
+    if not _is_admin(current_user):
+        return jsonify({'message': 'Unauthorized'}), 401
+    from tools import qc_upload_jobs
+
+    ok, msg = qc_upload_jobs.delete_job(job_id)
+    return jsonify({'message': msg}), (200 if ok else 400)
+
+
+@app.route('/api/admin/qc_upload/jobs', methods=['DELETE'])
+@token_required
+def qc_upload_jobs_clear(current_user):
+    """Clear the whole history except anything still running."""
+    if not _is_admin(current_user):
+        return jsonify({'message': 'Unauthorized'}), 401
+    from tools import qc_upload_jobs
+
+    n = qc_upload_jobs.clear_finished()
+    return jsonify({'message': f'Cleared {n} job(s).', 'deleted': n}), 200
+
+
+@app.route('/api/admin/qc_upload/job/<job_id>/cancel', methods=['POST'])
+@token_required
+def qc_upload_job_cancel(current_user, job_id):
+    """Stop a running job."""
+    if not _is_admin(current_user):
+        return jsonify({'message': 'Unauthorized'}), 401
+    import os as _os
+    import signal
+    from tools import qc_upload_jobs
+
+    job = qc_upload_jobs.get_job(job_id)
+    if not job:
+        return jsonify({'message': 'Job not found'}), 404
+    pid = job.get('pid')
+    if job.get('status') not in ('queued', 'running') or not pid:
+        return jsonify({'message': 'Job is not running', 'job': job}), 400
+    try:
+        _os.killpg(_os.getpgid(pid), signal.SIGTERM)
+    except Exception as e:
+        app.logger.warning('qc job cancel failed: %s', e)
+    job = qc_upload_jobs.update_job(job_id, status='failed',
+                                    error='Cancelled by admin.',
+                                    progress='cancelled')
+    if (job or {}).get('kind') == 'load':
+        qc_upload_jobs.release_load_lock()
+    return jsonify(job), 200
 
 
 @app.route('/api/admin/export_tasks_csv', methods=['GET'])
 @token_required
 def export_tasks_csv(current_user):
-    """CSV of tests: Sr. No. (per language), Language, Task ID, Detail, No. of Task.
-
-    Query params: ?version=6|new|base (optional), ?test_type=conversation-editable (optional)
-    """
-    if current_user != "admin":
+    """CSV of tests: Sr."""
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     import admin_reports
     from flask import Response
 
     version = request.args.get('version') or None
     test_type = request.args.get('test_type') or None
-    tests = Test.query.order_by(Test.id).all()
+    tests = _scoped_tests(_request_team_id(current_user), Test.query.order_by(Test.id)).all()
     csv_text = admin_reports.tasks_export_csv(tests, test_type=test_type, version=version)
     fname = "tasks_export"
     if test_type:
@@ -1697,13 +1751,8 @@ def export_tasks_csv(current_user):
 @app.route('/api/admin/export_audio_clips_csv', methods=['GET'])
 @token_required
 def export_audio_clips_csv(current_user):
-    """Clip-level audio-segmentation export with a playable Saffron deep link per clip.
-
-    ?all=1 includes accepted clips too (default: rejected only).
-    ?language=Hindi restricts the export to one language.
-    ?include_pending=0 drops the not-yet-reviewed clips (they are included by default).
-    """
-    if current_user != "admin":
+    """Clip-level audio-segmentation export with a playable Saffron deep link per clip."""
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     import admin_reports
     import re
@@ -1732,11 +1781,8 @@ def export_audio_clips_csv(current_user):
 @app.route('/api/admin/export_artist_report_csv', methods=['GET'])
 @token_required
 def export_artist_report_csv(current_user):
-    """Vendor-shareable CSV: per-artist rejection rates, pending counts + reasons.
-
-    ?language=Hindi restricts the report to a single language.
-    """
-    if current_user != "admin":
+    """Vendor-shareable CSV: per-artist rejection rates, pending counts + reasons."""
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     import admin_reports
     import re
@@ -1761,13 +1807,8 @@ def export_artist_report_csv(current_user):
 @app.route('/api/admin/export_audio_hours_csv', methods=['GET'])
 @token_required
 def export_audio_hours_csv(current_user):
-    """CSV: audio-segmentation hours per annotator per IST day, plus a totals row.
-
-    ?days=30 sets how many days back the per-day rows go (default 30, max 365).
-    Only reviewed ('completed') clips are credited; skipped clips are reported in
-    their own column and never add hours. Read-only.
-    """
-    if current_user != "admin":
+    """CSV: audio-segmentation hours per annotator per IST day, plus a totals row."""
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     import io
     import csv
@@ -1879,12 +1920,8 @@ def export_audio_hours_csv(current_user):
 @app.route('/api/admin/export_annotators_csv', methods=['GET'])
 @token_required
 def export_annotators_csv(current_user):
-    """CSV export summarizing annotator work: current pending task ID, working on task ID,
-    no. of tasks done, assigned batches, submissions, hours spent, and status.
-
-    Optional params: ?from=YYYY-MM-DD&to=YYYY-MM-DD
-    """
-    if current_user != "admin":
+    """CSV export summarizing annotator work: current pending task ID, working on task ID, no."""
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     import admin_reports
     from flask import Response
@@ -1903,8 +1940,9 @@ def export_annotators_csv(current_user):
 
     rater_id = request.args.get('rater_id', type=int)
 
-    raters = Rater.query.all()
-    tests = Test.query.all()
+    _team_id = _request_team_id(current_user)
+    raters = _scoped_raters(_team_id).all()
+    tests = _scoped_tests(_team_id).all()
     all_ratings = Rating.query.all()
 
     ratings_by_rater = {}
@@ -1928,11 +1966,58 @@ def export_annotators_csv(current_user):
     )
 
 
+@app.route('/api/admin/export_annotator_batches_csv', methods=['GET'])
+@token_required
+def export_annotator_batches_csv(current_user):
+    """Task-wise CSV: one row per (annotator, batch) with tasks done in that batch."""
+    if not _is_admin(current_user):
+        return jsonify({'message': 'Unauthorized'}), 401
+    import admin_reports
+    from flask import Response
+    from datetime import datetime as _dt, timedelta as _td
+
+    def _parse(v):
+        try:
+            return _dt.strptime(v.strip(), '%Y-%m-%d')
+        except Exception:
+            return None
+
+    d_from = _parse(request.args.get('from') or '')
+    d_to = _parse(request.args.get('to') or '')
+    if d_to:
+        d_to = d_to + _td(days=1)  # inclusive end day
+
+    rater_id = request.args.get('rater_id', type=int)
+
+    _team_id = _request_team_id(current_user)
+    raters = _scoped_raters(_team_id).all()
+    tests = _scoped_tests(_team_id).all()
+    ratings_by_rater = {}
+    for r in Rating.query.all():
+        ratings_by_rater.setdefault(r.rater_id, []).append(r)
+
+    csv_text = admin_reports.annotator_batches_csv(
+        raters, tests, ratings_by_rater, d_from=d_from, d_to=d_to, rater_id=rater_id
+    )
+    fname = "annotator_tasks_by_batch"
+    if rater_id:
+        fname += f"_rater_{rater_id}"
+    if request.args.get('from'):
+        fname += f"_from_{request.args.get('from')}"
+    if request.args.get('to'):
+        fname += f"_to_{request.args.get('to')}"
+
+    return Response(
+        csv_text, mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={fname}.csv'}
+    )
+
+
 @app.route('/api/admin/export_rater_ratings_csv/<int:rater_id>', methods=['GET'])
 @token_required
 def export_rater_ratings_csv(current_user, rater_id):
     """Detailed line-by-line CSV of all ratings submitted by a specific rater within optional date bounds."""
-    if current_user != "admin":
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     import admin_reports
     from flask import Response
@@ -1958,7 +2043,7 @@ def export_rater_ratings_csv(current_user, rater_id):
         q = q.filter(Rating.time_of_submission < d_to + _td(days=1))
     ratings = q.order_by(Rating.time_of_submission.desc()).all()
 
-    tests = Test.query.all()
+    tests = _scoped_tests(_request_team_id(current_user)).all()
     csv_text = admin_reports.rater_detailed_ratings_csv(rater, tests, ratings)
 
     r_name = rater.name.replace(' ', '_')
@@ -1978,7 +2063,7 @@ def export_rater_ratings_csv(current_user, rater_id):
 @token_required
 def export_all_ratings_csv(current_user):
     """Detailed line-by-line CSV of all ratings submitted across all raters within optional date bounds."""
-    if current_user != "admin":
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     import admin_reports
     from flask import Response
@@ -2000,8 +2085,9 @@ def export_all_ratings_csv(current_user):
         q = q.filter(Rating.time_of_submission < d_to + _td(days=1))
     ratings = q.order_by(Rating.time_of_submission.desc()).all()
 
-    raters = Rater.query.all()
-    tests = Test.query.all()
+    _team_id = _request_team_id(current_user)
+    raters = _scoped_raters(_team_id).all()
+    tests = _scoped_tests(_team_id).all()
     csv_text = admin_reports.all_detailed_ratings_csv(raters, tests, ratings)
 
     fname = "all_annotations_report"
@@ -2029,39 +2115,56 @@ _DASHBOARD_CACHE = os.path.join(tempfile.gettempdir(), 'saffron_dashboard_cache.
 _DASHBOARD_CACHE_TTL = int(os.environ.get('DASHBOARD_CACHE_TTL', '60'))
 
 
-def _dashboard_cache_read():
+def _dashboard_cache_path(team_id=None):
+    """One cache file per team -- a TTS admin's payload must never be served to an ASR admin (and vice versa)."""
+    if team_id is None:
+        return _DASHBOARD_CACHE
+    return f"{_DASHBOARD_CACHE}.team{team_id}"
+
+
+def _dashboard_cache_read(team_id=None):
     """Return (payload, age_seconds) if a fresh cache exists, else (None, None)."""
+    path = _dashboard_cache_path(team_id)
     try:
-        age = time.time() - os.path.getmtime(_DASHBOARD_CACHE)
+        age = time.time() - os.path.getmtime(path)
         if age > _DASHBOARD_CACHE_TTL:
             return None, None
-        with open(_DASHBOARD_CACHE, encoding='utf-8') as fh:
+        with open(path, encoding='utf-8') as fh:
             return json.load(fh), age
     except Exception:
         return None, None
 
 
-def _dashboard_cache_write(payload):
+def _dashboard_cache_write(payload, team_id=None):
+    path = _dashboard_cache_path(team_id)
     try:
-        tmp = _DASHBOARD_CACHE + f'.{os.getpid()}.tmp'
+        tmp = path + f'.{os.getpid()}.tmp'
         with open(tmp, 'w', encoding='utf-8') as fh:
             json.dump(payload, fh)
-        os.replace(tmp, _DASHBOARD_CACHE)   # atomic; concurrent workers can't tear it
+        os.replace(tmp, path)   # atomic; concurrent workers can't tear it
     except Exception as e:
         print(f"[WARN] dashboard cache write failed: {e}")
+
+
+def _dashboard_cache_invalidate():
+    """Drop the cached dashboard payload so the next GET recomputes from the DB."""
+    import glob as _glob
+    for path in [_DASHBOARD_CACHE] + _glob.glob(_DASHBOARD_CACHE + '.team*'):
+        if path.endswith('.tmp'):
+            continue
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(f"[WARN] dashboard cache invalidate failed: {e}")
 
 
 @app.route('/api/admin/task/<int:test_id>/annotations', methods=['GET'])
 @token_required
 def get_task_annotations(current_user, test_id):
-    """Admin-only: the submitted annotations for one task, grouped by annotator.
-
-    Powers the admin "review" view that opens when a task is clicked in the Tasks
-    Overview: instead of the blank annotation page, the admin sees what each
-    annotator actually submitted. When several annotators worked the same task they
-    each get their own tab. Read-only -- never writes to any table.
-    """
-    if current_user != "admin":
+    """Admin-only: the submitted annotations for one task, grouped by annotator."""
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
 
     test = Test.query.filter_by(id=test_id).first_or_404()
@@ -2086,8 +2189,7 @@ def get_task_annotations(current_user, test_id):
     raters = {rt.id: rt for rt in Rater.query.filter(Rater.id.in_(rater_ids)).all()} if rater_ids else {}
 
     def _verdict(results):
-        """Normalize an accept/reject decision across task types (benchmark uses
-        'decision', conversation/audio use 'evaluation')."""
+        """Normalize an accept/reject decision across task types (benchmark uses 'decision', conversation/audio use 'evaluation')."""
         if not isinstance(results, dict):
             return None
         v = results.get('decision') or results.get('evaluation')
@@ -2138,30 +2240,28 @@ def get_task_annotations(current_user, test_id):
 @app.route('/api/admin/task/<int:test_id>/handoff', methods=['POST'])
 @token_required
 def set_task_handoff(current_user, test_id):
-    """Admin-only: toggle a task's handoff mode.
-
-    enabled=false (default) -> OPEN: multiple annotators may each annotate every item.
-    enabled=true            -> HANDOFF: an assignee stops seeing items another annotator
-                               already completed, so leftover work can be handed off.
-    Only flips the boolean flag; never touches Rating/annotation data.
-    """
-    if current_user != "admin":
+    """Admin-only: toggle a task's handoff mode."""
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     test = Test.query.filter_by(id=test_id).first_or_404()
     data = request.get_json() or {}
     test.handoff_mode = bool(data.get('enabled'))
     db.session.commit()
+    _dashboard_cache_invalidate()
     return jsonify({'test_id': test.id, 'handoff_mode': bool(test.handoff_mode)}), 200
 
 
 @app.route('/api/admin/dashboard', methods=['GET'])
 @token_required
 def get_admin_dashboard(current_user):
-    if current_user != "admin":
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
 
+    # Which team's dashboard this is: a team admin is pinned to their own team, an org admin may target one with ?team=<key> (defaults to TTS).
+    team_id = _request_team_id(current_user)
+
     if request.args.get('refresh') not in ('1', 'true', 'yes'):
-        _cached, _age = _dashboard_cache_read()
+        _cached, _age = _dashboard_cache_read(team_id)
         if _cached is not None:
             _cached['_cache'] = {'hit': True, 'age_seconds': round(_age, 1),
                                  'ttl': _DASHBOARD_CACHE_TTL}
@@ -2171,28 +2271,25 @@ def get_admin_dashboard(current_user):
         from sqlalchemy.orm import defer
         import re
 
-        # 1. Fetch all raters and all ratings once to avoid N+1 queries
-        raters = Rater.query.all()
+        # 1. Fetch this team's raters and ratings once to avoid N+1 queries
+        raters = _scoped_raters(team_id).all()
         total_registered_users = len(raters)
-        
-        # results_json is a large JSON blob and is only needed for the audio-segmentation
-        # rollups below; deferring it here takes this query from ~2.9s to ~0.6s.
-        all_ratings = Rating.query.options(defer(Rating.results_json)).all()
 
-        # Only the "evaluation" field of results_json is needed for the per-batch
-        # accept/reject tallies. Pull it straight out in SQL so the deferred blob is
-        # never lazy-loaded (loading all 42k blobs costs ~2.9s; this costs ~0.6s).
-        eval_by_rating = {}
-        try:
-            from sqlalchemy import func as _sqlfunc
-            for _rid, _ev in db.session.query(
-                Rating.id, _sqlfunc.json_extract(Rating.results_json, '$.evaluation')
-            ).all():
-                if _ev:
-                    eval_by_rating[_rid] = str(_ev).strip().lower()
-        except Exception as _e:
-            print(f"[WARN] json_extract(evaluation) failed, falling back to blobs: {_e}")
-            eval_by_rating = None
+        # Only this team's batches -- and therefore only this team's ratings.
+        team_test_ids = _team_test_ids(team_id)
+
+        # Only these seven columns are ever read from a rating here.
+        _ratings_q = db.session.query(
+            Rating.id, Rating.rater_id, Rating.test_id, Rating.page_no_progress,
+            Rating.completion_status, Rating.time_of_submission,
+            Rating.time_taken_to_submit, Rating.verdict,
+        )
+        if team_test_ids is not None:
+            _ratings_q = _ratings_q.filter(Rating.test_id.in_(team_test_ids))
+        all_ratings = _ratings_q.all()
+
+        # The per-batch accept/reject tallies need one field out of results_json.
+        eval_by_rating = {r.id: (r.verdict or '') for r in all_ratings}
         
         # Group ratings in memory
         ratings_by_rater = {}
@@ -2214,7 +2311,8 @@ def get_admin_dashboard(current_user):
 
         for rater in raters:
             rater_ratings = ratings_by_rater.get(rater.id, [])
-            completed_tasks_count = len({r.page_no_progress for r in rater_ratings if r.page_no_progress and r.completion_status in ['completed', 'skipped']})
+            # Key on (test_id, item): item ids restart at 1 in every batch, so a bare item id silently merges tasks from different batches into one.
+            completed_tasks_count = len({(r.test_id, r.page_no_progress) for r in rater_ratings if r.page_no_progress and r.completion_status in ['completed', 'skipped']})
             
             last_active = None
             if rater_ratings:
@@ -2242,12 +2340,19 @@ def get_admin_dashboard(current_user):
             
         pending_registrations_count = total_registered_users - active_users_count
         
-        # 2. Test batches metrics (Defer the heavy json_entry column to avoid loading/deserializing 120MB)
-        tests = Test.query.options(defer(Test.json_entry)).all()
+        tests = _scoped_tests(team_id, Test.query.options(defer(Test.json_entry))).all()
+
+        # json_entry is deferred, so ANY attribute access on it costs an extra SELECT of a multi-MB blob.
+        size_by_test = {t.id: (t.item_count or 0) for t in tests}
+        lang_by_test = {t.id: t.language_hint.capitalize()
+                        for t in tests if t.language_hint}
         total_tests_count = len(tests)
         
-        languages_list = ["hindi", "bengali", "gujarati", "kannada", "malayalam", "marathi", "odia", "tamil", "telugu", "urdu", "english"]
-        
+        # Configured languages plus every language already seen in this team's data, longest name first so e.g. 'hindi' never shadows a longer match.
+        languages_list = sorted(
+            set(KNOWN_LANGUAGES) | {v.strip().lower() for v in lang_by_test.values() if v},
+            key=len, reverse=True)
+
         tests_data = []
         languages_map = {}
         
@@ -2257,23 +2362,12 @@ def get_admin_dashboard(current_user):
         
         for test in tests:
             desc = test.description or "No description"
-            
+
             # Infer language from description first (very fast)
-            lang = ""
-            desc_lower = desc.lower()
-            for l in languages_list:
-                if l in desc_lower:
-                    lang = l.capitalize()
-                    break
-                    
+            lang = _infer_language(desc, languages_list)
             if not lang:
-                # Fallback to json_entry only if not in description (unlikely)
-                if test.json_entry and isinstance(test.json_entry, list) and len(test.json_entry) > 0:
-                    first_item = test.json_entry[0]
-                    lang = first_item.get('target_language') or first_item.get('language') or first_item.get('metadata', {}).get('language') or ""
-                    lang = lang.capitalize() if lang else "Unknown"
-                else:
-                    lang = "Unknown"
+                # Fallback to the first item's language, read in the bulk pre-pass above rather than by lazy-loading this batch's whole json_entry.
+                lang = lang_by_test.get(test.id) or "Unknown"
             
             # Parse total tasks count from description if available (Tasks X to Y)
             total_tasks = 0
@@ -2281,7 +2375,7 @@ def get_admin_dashboard(current_user):
             if match:
                 total_tasks = int(match.group(2)) - int(match.group(1)) + 1
             else:
-                total_tasks = len(test.json_entry) if test.json_entry else 0
+                total_tasks = size_by_test.get(test.id, 0)
                 
             test_ratings = ratings_by_test.get(test.id, [])
             unique_completed = len({r.page_no_progress for r in test_ratings if r.page_no_progress and r.completion_status in ['completed', 'skipped']})
@@ -2292,7 +2386,7 @@ def get_admin_dashboard(current_user):
             version_match = re.search(r"version\s*([0-9a-zA-Z_-]+)", desc, re.IGNORECASE)
             if version_match:
                 version = f"Version {version_match.group(1)}"
-            elif "new version" in desc_lower:
+            elif "new version" in desc.lower():
                 version = "New Version"
             else:
                 version = "V1 / Default"
@@ -2327,19 +2421,15 @@ def get_admin_dashboard(current_user):
         languages_data = list(languages_map.values())
         languages_data.sort(key=lambda x: x['language'])
 
-        total_consents_count = Consent.query.count()
-        total_sessions_count = Session.query.count()
 
         # Audio-segmentation ratings need results_json (evaluation / rejection_reasons).
-        # Fetch just those rows fully instead of every rating in the DB.
         seg_test_ids = [t.id for t in tests if t.test_type == 'audio-segmentation']
         seg_ratings_by_test = {}
         if seg_test_ids:
             for _r in Rating.query.filter(Rating.test_id.in_(seg_test_ids)).all():
                 seg_ratings_by_test.setdefault(_r.test_id, []).append(_r)
 
-        # 3. Audio segmentation: total audio duration per batch + audio hours
-        # completed per annotator (durations read from the WAV headers, cached).
+        # 3.
         import os as _os
         audio_root = _os.path.join(
             _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
@@ -2347,36 +2437,36 @@ def get_admin_dashboard(current_user):
         )
         raters_by_id = {r.id: r for r in raters}
         audio_seg_data = []
-        # Per-annotator audio hours (cumulative + per IST day), accumulated as the
-        # loop below already has each batch's clip durations in hand.
+        # Per-annotator audio hours (cumulative + per IST day), accumulated as the loop below already has each batch's clip durations in hand.
         hours_by_rater = {}
         hours_daily_all = {}
-        # Per voice-artist / per persona audio hours: of the audio THIS ARTIST
-        # recorded, how much has been QC'd. Different question from hours_by_rater
-        # (who did the reviewing), and the one the vendor conversation needs.
+        # Per voice-artist / per persona audio hours: of the audio THIS ARTIST recorded, how much has been QC'd.
         hours_by_artist = {}
         hours_by_persona = {}
         # Clips whose stored rejection reason is no longer offered in the UI (e.g.
-        # the retired 'others'). Surfaced so the admin can send the annotator
-        # straight back to them instead of the dead reason sitting in the reports.
         retired_clips = []
         try:
             import admin_reports as _ar
         except Exception as _e:
             print(f"[WARN] admin_reports unavailable for artist hours: {_e}")
             _ar = None
+        _seg_entries = {}
+        _seg_ids = [t.id for t in tests if t.test_type == 'audio-segmentation']
+        if _seg_ids:
+            for _t in Test.query.filter(Test.id.in_(_seg_ids)).all():
+                _seg_entries[_t.id] = _t.json_entry if isinstance(_t.json_entry, list) else []
+
         for test in tests:
             if test.test_type != 'audio-segmentation':
                 continue
-            entries = test.json_entry if isinstance(test.json_entry, list) else []
+            entries = _seg_entries.get(test.id, [])
             dur_by_task = {}
             lang_counts = {}
             persona_counts = {}
             for item in entries:
                 task_id = str(item.get('id') or '')
                 filename = item.get('audio_filename')
-                # Track the language / persona of this batch (single-valued per set,
-                # but count occurrences and pick the most common to be safe).
+                # Track the language / persona of this batch (single-valued per set, but count occurrences and pick the most common to be safe).
                 il = item.get('language')
                 if il:
                     lang_counts[il] = lang_counts.get(il, 0) + 1
@@ -2393,14 +2483,12 @@ def get_admin_dashboard(current_user):
             seg_language = max(lang_counts, key=lang_counts.get) if lang_counts else "Unknown"
             seg_persona = max(persona_counts, key=persona_counts.get) if persona_counts else "Unknown"
 
-            # Distinct completed task ids per rater for this test + accept/reject
-            # tallies read from each submission's results_json ("evaluation" field).
+            # Distinct completed task ids per rater for this test + accept/reject tallies read from each submission's results_json ("evaluation" field).
             done_by_rater = {}
             eval_by_rater = {}   # rater_id -> [accepted, rejected]
             seg_accepted = 0
             seg_rejected = 0
-            # Clip ids REVIEWED at least once, deduped: two annotators reviewing the
-            # same clip must not make the artist look twice as far along.
+            # Clip ids REVIEWED at least once, deduped: two annotators reviewing the same clip must not make the artist look twice as far along.
             seg_reviewed_ids = set()
             seg_reviewed_today_ids = set()
             for r in seg_ratings_by_test.get(test.id, []):
@@ -2524,9 +2612,7 @@ def get_admin_dashboard(current_user):
 
         audio_seg_data.sort(key=lambda x: x['test_id'])
 
-        # 3b. Audio hours per annotator: cumulative to date + per IST day, for the
-        #     Quality tab. Days are dense (zero-filled) so the trend is honest about
-        #     days nobody worked.
+        # 3b.
         _today = _ist_today_str()
         _hours_annotators = []
         _grand = _hours_bucket()
@@ -2573,8 +2659,7 @@ def get_admin_dashboard(current_user):
             _all_week['seconds'] += _d['seconds']
 
         def _coverage_rows(store, name_key, other_key):
-            """Serialise an artist/persona bucket: how much of the audio that this
-            artist (or persona) recorded has been QC'd, and how much is left."""
+            """Serialise an artist/persona bucket: how much of the audio that this artist (or persona) recorded has been QC'd, and how much is left."""
             rows = []
             for _name, b in store.items():
                 pending_clips = max(0, b['total_clips'] - b['clips'])
@@ -2640,10 +2725,7 @@ def get_admin_dashboard(current_user):
             ),
         }
 
-        # 4. Per-task-type overview: for every test type, per-batch progress with
-        #    a per-annotator breakdown. Built entirely from tests_data + the
-        #    ratings already grouped above, so it never touches the deferred
-        #    json_entry column.
+        # 4.
         assigned_by_test = {}
         for rater in raters:
             for tid_str in (rater.assigned_tasks or "").split(','):
@@ -2690,8 +2772,8 @@ def get_admin_dashboard(current_user):
                 if eval_by_rating is not None:
                     ev = eval_by_rating.get(r.id, '')
                 else:
-                    _rj = r.results_json if isinstance(r.results_json, dict) else {}
-                    ev = str(_rj.get('evaluation') or '').strip().lower()
+                    _rj = getattr(r, 'results_json', None)
+                    ev = str((_rj or {}).get('evaluation') or '').strip().lower() if isinstance(_rj, dict) else ''
                 if ev == 'accept':
                     batch_accepted += 1
                     pr['accepted'] += 1
@@ -2781,8 +2863,6 @@ def get_admin_dashboard(current_user):
                 'total_tasks': total_global_tasks,
                 'unique_tasks_completed': total_global_unique_completed,
                 'total_submissions': total_global_submissions,
-                'total_consents': total_consents_count,
-                'total_sessions': total_sessions_count
             },
             'languages': languages_data,
             'tests': tests_data,
@@ -2791,9 +2871,11 @@ def get_admin_dashboard(current_user):
             'audio_hours': audio_hours_data,
             'retired_reason_clips': retired_reason_data,
             'audio_seg_artists': _artist_stats_safe(tests, seg_ratings_by_test),
-            'task_types': task_types_data
+            'task_types': task_types_data,
+            'team': _serialize_team(Team.query.get(team_id)) if team_id else None,
+            'organization': ORG_NAME,
         }
-        _dashboard_cache_write(_payload)
+        _dashboard_cache_write(_payload, team_id)
         _payload['_cache'] = {'hit': False, 'ttl': _DASHBOARD_CACHE_TTL}
         return jsonify(_payload)
         
@@ -2820,38 +2902,36 @@ def get_assigned_tasks(current_user):
         if not assigned_ids:
             return jsonify({'tasks': []}), 200
             
-        assigned_tests = Test.query.filter(Test.id.in_(assigned_ids)).all()
+        from sqlalchemy.orm import defer as _defer
+        assigned_tests = Test.query.options(_defer(Test.json_entry)).filter(
+            Test.id.in_(assigned_ids)).all()
         
         # Sort tests in the order they were assigned
         assigned_tests_dict = {t.id: t for t in assigned_tests}
         sorted_tests = [assigned_tests_dict[tid] for tid in assigned_ids if tid in assigned_tests_dict]
-        
-        languages_list = ["hindi", "bengali", "gujarati", "kannada", "malayalam", "marathi", "odia", "tamil", "telugu", "urdu", "english"]
+
+        # Every finished item this annotator has across ALL their assigned batches, in ONE query.
+        done_by_test = {}
+        for _tid, _page in db.session.query(Rating.test_id, Rating.page_no_progress).filter(
+            Rating.rater_id == rater.id,
+            Rating.test_id.in_(assigned_ids),
+            Rating.completion_status.in_(['completed', 'skipped']),
+            Rating.page_no_progress.isnot(None),
+        ).distinct().all():
+            done_by_test.setdefault(_tid, set()).add(str(_page))
         
         tasks_data = []
         for test in sorted_tests:
             desc = test.description or "No description"
-            lang = ""
-            desc_lower = desc.lower()
-            for l in languages_list:
-                if l in desc_lower:
-                    lang = l.capitalize()
-                    break
+            lang = _infer_language(desc)
             if not lang:
-                if test.json_entry and isinstance(test.json_entry, list) and len(test.json_entry) > 0:
-                    first_item = test.json_entry[0]
-                    lang = first_item.get('target_language') or first_item.get('language') or first_item.get('metadata', {}).get('language') or ""
-                    lang = lang.capitalize() if lang else "Unknown"
-                else:
-                    lang = "Unknown"
-            
-            # Progress calculation
-            ratings = Rating.query.filter_by(rater_id=rater.id, test_id=test.id).all()
-            completed_pages_raw = {rating.page_no_progress for rating in ratings if rating.page_no_progress and rating.completion_status in ['completed', 'skipped']}
-            
-            all_page_ids = [sample['id'] for sample in test.json_entry] if test.json_entry else []
-            completed_count = len([p for p in all_page_ids if str(p) in completed_pages_raw])
-            total_count = len(all_page_ids)
+                lang = (test.language_hint or "").capitalize() or "Unknown"
+
+            # Progress: how many of this batch's items this annotator has finished.
+            total_count = test.item_count or 0
+            completed_count = len(done_by_test.get(test.id, ()))
+            if total_count and completed_count > total_count:
+                completed_count = total_count
             
             tasks_data.append({
                 'id': test.id,
@@ -2872,15 +2952,7 @@ def get_assigned_tasks(current_user):
 @app.route('/api/rater/audio_stats', methods=['GET'])
 @token_required
 def get_rater_audio_stats(current_user):
-    """The signed-in annotator's own audio-segmentation workload, in hours.
-
-    AUDIO-SEGMENTATION ONLY -- every other task type is ignored, and an annotator
-    with no audio-segmentation batch assigned gets `enabled: false` so the UI can
-    hide the panel entirely.
-
-    Reports the total audio reviewed to date plus a per-day (IST) breakdown, where
-    a clip's contribution is the duration of its WAV file. Read-only.
-    """
+    """The signed-in annotator's own audio-segmentation workload, in hours."""
     try:
         token = _require_bearer_token()
         required = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
@@ -2891,9 +2963,7 @@ def get_rater_audio_stats(current_user):
         assigned_ids = [int(x.strip()) for x in (rater.assigned_tasks or "").split(',')
                         if x.strip().isdigit()]
 
-        # A batch counts if it is assigned now OR the annotator has already worked on
-        # it, so hours never disappear from their own history when a finished batch
-        # is unassigned.
+        # A batch counts if it is assigned now OR the annotator has already worked on it, so hours never disappear from their own history when a finished batch is.
         worked_ids = [tid for (tid,) in db.session.query(Rating.test_id)
                       .filter(Rating.rater_id == rater.id).distinct().all()]
         candidate_ids = set(assigned_ids) | set(worked_ids)
@@ -2999,10 +3069,12 @@ def get_rater_audio_stats(current_user):
 @app.route('/api/admin/rater/<int:rater_id>/assign_tasks', methods=['POST', 'PUT'])
 @token_required
 def assign_tasks(current_user, rater_id):
-    if current_user != "admin":
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     try:
         rater = Rater.query.get_or_404(rater_id)
+        if not _rater_in_scope(current_user, rater):
+            return jsonify({'message': 'This annotator is not in your team.'}), 403
         data = request.get_json() or {}
         assigned_tasks = data.get('assigned_tasks', '')
         
@@ -3015,6 +3087,7 @@ def assign_tasks(current_user, rater_id):
 
         rater.assigned_tasks = ','.join(clean_ids)
         db.session.commit()
+        _dashboard_cache_invalidate()
         return jsonify({'message': 'Tasks assigned successfully', 'assigned_tasks': rater.assigned_tasks}), 200
     except Exception as e:
         db.session.rollback()
@@ -3022,12 +3095,7 @@ def assign_tasks(current_user, rater_id):
         return jsonify({'error': 'Failed to assign tasks.'}), 500
 
 
-# ============================================================================
 # Admin -> Annotator messaging, nudges, and reversible account deactivation.
-# All additive: messaging never mutates other tables; deactivation only flips a
-# flag and stashes/restores assigned_tasks. No Rating (annotation) data is ever
-# touched or deleted.
-# ============================================================================
 
 def _serialize_message(m):
     return {
@@ -3045,10 +3113,12 @@ def _serialize_message(m):
 @app.route('/api/admin/rater/<int:rater_id>/message', methods=['POST'])
 @token_required
 def send_message(current_user, rater_id):
-    if current_user != "admin":
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     try:
         rater = Rater.query.get_or_404(rater_id)
+        if not _rater_in_scope(current_user, rater):
+            return jsonify({'message': 'This annotator is not in your team.'}), 403
         data = request.get_json() or {}
         body = (data.get('body') or '').strip()
         if not body:
@@ -3069,7 +3139,7 @@ def send_message(current_user, rater_id):
 @app.route('/api/admin/message/broadcast', methods=['POST'])
 @token_required
 def broadcast_message(current_user):
-    if current_user != "admin":
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     try:
         data = request.get_json() or {}
@@ -3079,10 +3149,8 @@ def broadcast_message(current_user):
         if len(body) > 2000:
             body = body[:2000]
         # Broadcast to every real annotator (there is no 'admin' Rater row).
-        # Every row of this broadcast shares one broadcast_id so the admin can
-        # later view/edit it as a single message rather than N copies.
         broadcast_id = uuid.uuid4().hex
-        recipients = Rater.query.all()
+        recipients = _scoped_raters(_request_team_id(current_user)).all()
         count = 0
         for r in recipients:
             db.session.add(Message(rater_id=r.id, body=body, sender='admin', category='broadcast',
@@ -3100,14 +3168,19 @@ def broadcast_message(current_user):
 @app.route('/api/admin/messages', methods=['GET'])
 @token_required
 def get_admin_messages(current_user):
-    """Admin outbox: everything the admin has shared. Individual messages/nudges
-    are listed one per row; a broadcast is collapsed into a single entry (grouped
-    by broadcast_id) that carries how many recipients have read it. Read-only."""
-    if current_user != "admin":
+    """Admin outbox: everything the admin has shared."""
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     try:
         rater_names = {r.id: r.name for r in Rater.query.all()}
-        msgs = Message.query.order_by(Message.created_at.desc()).all()
+        # ?team=<key> narrows the outbox to that team's annotators.
+        q = Message.query
+        team = _team_by_key(request.args.get('team'))
+        if team is not None:
+            member_ids = [rid for (rid,) in db.session.query(TeamMember.rater_id)
+                          .filter(TeamMember.team_id == team.id).all()]
+            q = q.filter(Message.rater_id.in_(member_ids)) if member_ids else q.filter(False)
+        msgs = q.order_by(Message.created_at.desc()).all()
         items = []
         broadcasts = {}  # broadcast_id -> aggregate entry (also appended to items)
         for m in msgs:
@@ -3155,11 +3228,8 @@ def get_admin_messages(current_user):
 @app.route('/api/admin/message/<int:message_id>', methods=['PUT'])
 @token_required
 def edit_message(current_user, message_id):
-    """Edit the body of an individual message the admin already sent. If the row
-    happens to belong to a broadcast, the whole broadcast is updated so every
-    recipient stays in sync. Only the body/edited_at change — read state and all
-    other tables are left untouched."""
-    if current_user != "admin":
+    """Edit the body of an individual message the admin already sent."""
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     try:
         msg = Message.query.get_or_404(message_id)
@@ -3192,9 +3262,8 @@ def edit_message(current_user, message_id):
 @app.route('/api/admin/broadcast/<broadcast_id>', methods=['PUT'])
 @token_required
 def edit_broadcast(current_user, broadcast_id):
-    """Edit a broadcast (every annotator's copy) in one shot, keyed by the shared
-    broadcast_id. Only body/edited_at change."""
-    if current_user != "admin":
+    """Edit a broadcast (every annotator's copy) in one shot, keyed by the shared broadcast_id."""
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     try:
         rows = Message.query.filter_by(broadcast_id=broadcast_id).all()
@@ -3222,10 +3291,12 @@ def edit_broadcast(current_user, broadcast_id):
 @app.route('/api/admin/rater/<int:rater_id>/nudge', methods=['POST'])
 @token_required
 def nudge_rater(current_user, rater_id):
-    if current_user != "admin":
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     try:
         rater = Rater.query.get_or_404(rater_id)
+        if not _rater_in_scope(current_user, rater):
+            return jsonify({'message': 'This annotator is not in your team.'}), 403
         data = request.get_json() or {}
         note = (data.get('note') or '').strip()
         body = ("Reminder: you have annotation tasks assigned and waiting. Please "
@@ -3245,24 +3316,28 @@ def nudge_rater(current_user, rater_id):
 @app.route('/api/admin/rater/<int:rater_id>/deactivate', methods=['POST'])
 @token_required
 def deactivate_rater(current_user, rater_id):
-    if current_user != "admin":
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
+    rater = Rater.query.get(rater_id)
+    if rater is None:
+        return jsonify({'message': 'Annotator not found.'}), 404
     try:
-        rater = Rater.query.get_or_404(rater_id)
+        if not _rater_in_scope(current_user, rater):
+            return jsonify({'message': 'This annotator is not in your team.'}), 403
         data = request.get_json() or {}
-        confirm = (data.get('confirm') or '').strip()
-        # Require the admin to type exactly: delete <name>
-        expected = f"delete {rater.name}".strip().lower()
-        if confirm.lower() != expected:
-            return jsonify({'message': f'Confirmation text did not match. Type "delete {rater.name}" to confirm.'}), 400
+        confirm = (data.get('confirm') or '').strip().lower()
+        # Require the admin to type exactly: deactivate <name>. (The retired "delete <name>" phrase is still accepted so an old cached client keeps working.)
+        if confirm not in (f"deactivate {rater.name}".strip().lower(),
+                           f"delete {rater.name}".strip().lower()):
+            return jsonify({'message': f'Confirmation text did not match. Type "deactivate {rater.name}" to confirm.'}), 400
 
         # Reversible: stash the current assignment, then unlock those tasks.
-        # Ratings (submitted annotations) are intentionally left untouched.
         if rater.assigned_tasks:
             rater.prev_assigned_tasks = rater.assigned_tasks
         rater.assigned_tasks = ''
         rater.is_active = False
         db.session.commit()
+        _dashboard_cache_invalidate()
         return jsonify({
             'message': f'{rater.name} has been deactivated. Their {len((rater.prev_assigned_tasks or "").split(",")) if rater.prev_assigned_tasks else 0} task(s) were unlocked. Annotations were kept.',
             'account_active': False
@@ -3276,16 +3351,21 @@ def deactivate_rater(current_user, rater_id):
 @app.route('/api/admin/rater/<int:rater_id>/reactivate', methods=['POST'])
 @token_required
 def reactivate_rater(current_user, rater_id):
-    if current_user != "admin":
+    if not _is_admin(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
+    rater = Rater.query.get(rater_id)
+    if rater is None:
+        return jsonify({'message': 'Annotator not found.'}), 404
     try:
-        rater = Rater.query.get_or_404(rater_id)
+        if not _rater_in_scope(current_user, rater):
+            return jsonify({'message': 'This annotator is not in your team.'}), 403
         rater.is_active = True
         # Restore the previous assignment only if nothing has been assigned since.
         if not rater.assigned_tasks and rater.prev_assigned_tasks:
             rater.assigned_tasks = rater.prev_assigned_tasks
         rater.prev_assigned_tasks = ''
         db.session.commit()
+        _dashboard_cache_invalidate()
         return jsonify({
             'message': f'{rater.name} has been reactivated.',
             'account_active': True,
@@ -3301,7 +3381,7 @@ def reactivate_rater(current_user, rater_id):
 @token_required
 def get_rater_messages(current_user):
     # Admin has no inbox; annotators fetch their own messages.
-    if current_user == "admin":
+    if _is_admin(current_user):
         return jsonify({'messages': [], 'unread_count': 0}), 200
     try:
         rater = Rater.query.filter_by(name=current_user).first()
@@ -3322,7 +3402,7 @@ def get_rater_messages(current_user):
 @app.route('/api/rater/messages/read', methods=['POST'])
 @token_required
 def mark_messages_read(current_user):
-    if current_user == "admin":
+    if _is_admin(current_user):
         return jsonify({'message': 'No inbox for admin.'}), 200
     try:
         rater = Rater.query.filter_by(name=current_user).first()
@@ -3343,3 +3423,9 @@ def mark_messages_read(current_user):
         db.session.rollback()
         app.logger.error(f"Error in mark_messages_read: {e}")
         return jsonify({'error': 'Failed to mark messages read.'}), 500
+
+
+# Team / pool endpoints.
+from application import team_api  # noqa: E402,F401
+from application import pool_api  # noqa: E402,F401
+from application import pool_tasks  # noqa: E402,F401

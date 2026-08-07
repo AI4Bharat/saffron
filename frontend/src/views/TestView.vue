@@ -138,6 +138,52 @@
           </div>
         </div>
 
+        <!-- ========================================================== -->
+        <div v-if="isSegTask && audioHours" class="card border-0 shadow-sm mb-4 rounded-4 seg-hours-card">
+          <div class="card-body p-3">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+              <span class="fw-semibold text-secondary small d-flex align-items-center gap-2">
+                <i class="bi bi-soundwave text-primary"></i>
+                Your audio hours
+                <span class="text-muted fw-normal fs-8">days counted in {{ audioHours.timezone }}</span>
+              </span>
+              <button
+                class="btn btn-sm btn-light border rounded-pill px-2 py-0 lh-1 text-muted"
+                :disabled="isLoadingHours"
+                title="Refresh hours"
+                @click="loadAudioHours"
+              >
+                <i :class="['bi bi-arrow-clockwise', isLoadingHours ? 'seg-hours-spin' : '']"></i>
+              </button>
+            </div>
+            <div class="row g-2">
+              <div class="col-4">
+                <div class="seg-hours-tile seg-hours-tile-primary h-100">
+                  <span class="seg-hours-label">Today</span>
+                  <span class="seg-hours-value">{{ audioHours.today.label }}</span>
+                  <span class="seg-hours-sub">{{ audioHours.today.clips }} clips</span>
+                </div>
+              </div>
+              <div class="col-4">
+                <div class="seg-hours-tile h-100">
+                  <span class="seg-hours-label">This batch</span>
+                  <span class="seg-hours-value">{{ batchHours ? batchHours.label : '0s' }}</span>
+                  <span class="seg-hours-sub">
+                    {{ batchHours ? batchHours.clips : 0 }}<template v-if="batchHours"> / {{ batchHours.total_clips }}</template> clips
+                  </span>
+                </div>
+              </div>
+              <div class="col-4">
+                <div class="seg-hours-tile h-100">
+                  <span class="seg-hours-label">Total to date</span>
+                  <span class="seg-hours-value">{{ audioHours.total.label }}</span>
+                  <span class="seg-hours-sub">{{ audioHours.total.clips }} clips reviewed</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- All Completed Info Banner -->
         <div v-if="progress === 100" class="alert alert-success shadow-sm mb-4 rounded-4 d-flex align-items-center justify-content-between p-3" role="alert">
           <div class="d-flex align-items-center">
@@ -205,6 +251,10 @@ const test_id = ref(null)
 const error = ref(null)
 const searchQuery = ref('')
 
+// Audio-segmentation hours for the SIGNED-IN annotator. Shown on the task page as
+const audioHours = ref(null)
+const isLoadingHours = ref(false)
+
 // Computed
 const progress = computed(() => {
   if (!testData.value.length) return 0
@@ -224,23 +274,27 @@ const isLast = computed(() => {
   return currentIndex.value === testData.value.length - 1
 })
 
+const isSegTask = computed(() => data.value?.test_type === 'audio-segmentation')
+
+// The hours row for the batch that is open, so "this batch" follows the sidebar.
+const batchHours = computed(() => {
+  const id = Number(test_id.value)
+  return (audioHours.value?.batches || []).find(b => b.test_id === id) || null
+})
+
 // Keep the task explorer scrolled to whichever task is open -- otherwise a deep link
-// to task 40 of 43 leaves the sidebar sitting at task 1 and looks like it did nothing.
 async function scrollActiveTaskIntoView() {
   await nextTick()
   const wrapper = document.querySelector('.task-list-wrapper')
   const el = wrapper && wrapper.querySelector(`[data-task-index="${currentIndex.value}"]`)
   if (!wrapper || !el) return
   // Scroll the sidebar list *only*. el.scrollIntoView() also scrolls every
-  // scrollable ancestor -- including the page itself -- which is what left the
-  // annotator parked halfway down the page after submitting a task.
   const delta = el.getBoundingClientRect().top - wrapper.getBoundingClientRect().top
   const target = wrapper.scrollTop + delta - (wrapper.clientHeight - el.offsetHeight) / 2
   wrapper.scrollTop = Math.max(0, target)
 }
 
 // Every task change must land the annotator at the top of the page, with no
-// scrolling on their part. Instant (not smooth) so nothing can interrupt it.
 async function scrollPageToTop() {
   await nextTick()
   window.scrollTo({ top: 0, behavior: 'auto' })
@@ -277,12 +331,34 @@ const currentTestComponent = computed(() => {
     'audio-segmentation': AudioSegmentation,
     'benchmark-verification': BenchmarkVerification,
     'benchmark-parallel': BenchmarkVerification,
+    'benchmark-evaluation-v2': BenchmarkVerification,
   }
 
   return testComponents[data.value.test_type]
 })
 
 // Methods
+const loadAudioHours = async () => {
+  if (!isSegTask.value) return
+  isLoadingHours.value = true
+  try {
+    const token = localStorage.getItem('authToken')
+    if (!token) return
+    const res = await fetch(`${API_BASE_URL}/rater/audio_stats`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    if (!res.ok) throw new Error('Failed to load audio hours')
+    const stats = await res.json()
+    audioHours.value = stats?.enabled ? stats : null
+  } catch (err) {
+    // Never block annotation on this strip -- just leave it hidden.
+    console.error('Error fetching audio hours:', err)
+    audioHours.value = null
+  } finally {
+    isLoadingHours.value = false
+  }
+}
+
 const jumpToTask = (index) => {
   if (index >= 0 && index < testData.value.length) {
     currentIndex.value = index
@@ -298,16 +374,15 @@ const handlePrev = () => {
 }
 
 // Fields a submission writes straight back onto the local task, mirroring what
-// GET /api/test/<id> merges in on a fresh load. Without this the list kept the
-// values from page load, so re-opening a task the annotator had just RE-submitted
-// (e.g. after replacing a rejection reason) showed the OLD answer and made the
-// resubmission look like it had not been saved.
 const RESULT_ECHO_FIELDS = [
   'pre_scene', 'post_scene', 'text', 'transcript', 'evaluation', 'comments',
   'rejection_reasons', 'custom_rejection_reason', 'raw_text', 'spoken_form', 'decision'
 ]
 
 const updateTaskStatus = ({ index, status, results }) => {
+  // The rating is already committed by the time this fires, so re-reading here is
+  loadAudioHours()
+
   if (testData.value[index]) {
     testData.value[index].completion_status = status
     if (results) {
@@ -396,16 +471,14 @@ onMounted(async () => {
     currentIndex.value = Number(responseData.page_no) || 0
     testData.value = responseData.json_entry || []
     test_id.value = responseData.test_id
+    loadAudioHours()
 
     // deep-link: /<test_id>?task=<task_id> (or ?index=<n>) jumps straight to that task,
-    // so a link in an export/report opens the exact clip and you can play it.
     let wantTask = route.query.task
     const wantIndex = route.query.index
     if (Array.isArray(wantTask)) wantTask = wantTask[0]
     if (wantTask) {
       // Be liberal in what we accept: a link copied out of a CSV/email often drags the
-      // rest of the row along ("?task=En_Conv_30_T_2,completed,2026-..."), and some
-      // clients append stray punctuation. Take the clean leading token.
       let want = decodeURIComponent(String(wantTask)).trim()
       want = want.split(',')[0].split(/[\s;|]/)[0].replace(/[).,;:'"]+$/, '').trim()
       let idx = testData.value.findIndex(t => String(t.id) === want)
@@ -447,6 +520,48 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/** ---------- Audio-segmentation hours strip ---------- */
+.seg-hours-card { border: 1px solid rgba(15, 23, 42, 0.06) !important; }
+
+.seg-hours-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.75rem;
+  background: #f8fafc;
+  border: 1px solid #eef2f7;
+}
+
+.seg-hours-tile-primary {
+  background: linear-gradient(135deg, #0d6efd, #3b82f6);
+  border-color: transparent;
+}
+
+.seg-hours-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.seg-hours-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.2;
+}
+
+.seg-hours-sub { font-size: 0.7rem; color: #94a3b8; }
+
+.seg-hours-tile-primary .seg-hours-label { color: rgba(255, 255, 255, 0.78); }
+.seg-hours-tile-primary .seg-hours-value { color: #fff; }
+.seg-hours-tile-primary .seg-hours-sub { color: rgba(255, 255, 255, 0.82); }
+
+.seg-hours-spin { display: inline-block; animation: seg-hours-rotate 0.8s linear infinite; }
+@keyframes seg-hours-rotate { to { transform: rotate(360deg); } }
+
 .page-bg {
   min-height: calc(100vh - 56px);
   background-color: #f8fafc;
@@ -475,7 +590,7 @@ onMounted(async () => {
   padding-right: 4px;
 }
 
-/* Custom scrollbars */
+/** Custom scrollbars */
 .task-list-wrapper::-webkit-scrollbar {
   width: 6px;
 }
@@ -487,7 +602,7 @@ onMounted(async () => {
   border-radius: 10px;
 }
 
-/* Task Cards style */
+/** Task Cards style */
 .task-item-card {
   border-color: #f1f5f9;
   background-color: #f8fafc;
@@ -523,7 +638,7 @@ onMounted(async () => {
   font-size: 1.15rem;
 }
 
-/* Task item text — bigger & always shows number + ID */
+/** Task item text — bigger & always shows number + ID */
 .task-title {
   font-size: 0.98rem;
   line-height: 1.3;
@@ -548,7 +663,7 @@ onMounted(async () => {
   margin-top: 2px;
 }
 
-/* Task Status Highlighting */
+/** Task Status Highlighting */
 .completed-task {
   background-color: #f0fdf4 !important; /* Soft green */
   border-color: #bbf7d0 !important;

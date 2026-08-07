@@ -707,218 +707,325 @@
             {{ showStaleOnly ? 'Show all' : 'Show only these' }}
           </button>
         </div>
+
         <div class="card shadow-sm border">
-          <div class="card-header bg-white py-3 border-bottom-0">
-            <div class="row g-3 align-items-center">
-              <div class="col-12 col-md-6">
-                <h3 class="fw-bold text-dark m-0">Annotators &amp; Task Assignment</h3>
-                <small class="text-muted">Assign task batches to an annotator — assigned tasks get <strong>locked</strong> to them only.</small>
+          <!-- ---------- Toolbar: title, search, and two grouped menus ---------- -->
+          <div class="card-header bg-white py-3">
+            <div class="d-flex flex-wrap align-items-center gap-3">
+              <div class="me-auto">
+                <h3 class="fw-bold text-dark m-0 fs-5">Annotators &amp; Task Assignment</h3>
+                <small class="text-muted">Assigned batches are <strong>locked</strong> to that annotator.</small>
               </div>
-              <div class="col-12 col-md-6">
-                <div class="d-flex flex-wrap gap-2 justify-content-md-end align-items-center">
-                  <button class="btn btn-outline-primary btn-sm d-inline-flex align-items-center gap-1" @click="openRatingsModal(null)" title="Export raw task rating submissions">
-                    <i class="bi bi-file-earmark-code"></i> Ratings Export
-                  </button>
-                  <button class="btn btn-success btn-sm d-inline-flex align-items-center gap-1" @click="openAnnotatorDataModal(null)" title="Export annotators data with timeline selector (Default: Entire Life)">
-                    <i class="bi bi-calendar-range"></i> Annotators Data
-                  </button>
-                  <button class="btn btn-outline-primary btn-sm d-inline-flex align-items-center gap-1" @click="openBroadcastModal" title="Send a message to every annotator">
-                    <i class="bi bi-broadcast"></i> Broadcast
-                  </button>
-                  <button class="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1" @click="openOutbox" title="View and edit messages you've sent">
-                    <i class="bi bi-clock-history"></i> Sent
-                  </button>
-                  <div class="form-check form-switch mb-0 me-1">
-                    <input class="form-check-input" type="checkbox" role="switch" id="showAllRaters" v-model="showAllRaters" />
-                    <label class="form-check-label text-xs text-secondary user-select-none" for="showAllRaters">Show all</label>
+
+              <div class="search-wrap position-relative">
+                <i class="bi bi-search search-icon"></i>
+                <input v-model="raterSearchQuery" type="text" class="form-control form-control-sm ps-5"
+                       placeholder="Search name or email…" />
+                <button v-if="raterSearchQuery" class="btn btn-sm search-clear" @click="raterSearchQuery = ''" title="Clear">
+                  <i class="bi bi-x-lg"></i>
+                </button>
+              </div>
+
+              <button class="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1"
+                      @click="toggleMenu('exports', $event, 260)" title="Download reports">
+                <i class="bi bi-download"></i> Exports <i class="bi bi-chevron-down text-xs"></i>
+              </button>
+              <button class="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1"
+                      @click="toggleMenu('messages', $event, 240)" title="Message annotators">
+                <i class="bi bi-chat-dots"></i> Messages <i class="bi bi-chevron-down text-xs"></i>
+              </button>
+
+              <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" role="switch" id="showAllRaters" v-model="showAllRaters" />
+                <label class="form-check-label text-xs text-secondary user-select-none" for="showAllRaters">Show inactive</label>
+              </div>
+            </div>
+          </div>
+
+          <!-- ---------- One filter bar: window on the left, what it adds up to on the right ---------- -->
+          <div class="filter-bar border-top border-bottom">
+            <div class="d-flex flex-wrap align-items-center gap-3">
+              <div class="d-flex align-items-center gap-2">
+                <i class="bi bi-calendar3 text-secondary"></i>
+                <div class="btn-group btn-group-sm" role="group">
+                  <button v-for="pr in activityPresets" :key="pr.label"
+                          class="btn" :class="windowPreset === pr.label ? 'btn-primary' : 'btn-outline-secondary'"
+                          @click="applyPreset(pr)">{{ pr.label }}</button>
+                </div>
+              </div>
+
+              <div class="d-flex align-items-center gap-1">
+                <input type="date" v-model="activityFrom" class="form-control form-control-sm date-input" title="From">
+                <span class="text-muted text-xs">→</span>
+                <input type="date" v-model="activityTo" class="form-control form-control-sm date-input" title="To">
+                <button class="btn btn-sm btn-primary ms-1" @click="fetchRaterActivity" :disabled="activityLoading">
+                  <span v-if="activityLoading" class="spinner-border spinner-border-sm"></span>
+                  <span v-else>Apply</span>
+                </button>
+              </div>
+
+              <!-- Full picture: what gets paid, what does not, and what is still open. -->
+              <div v-if="raterActivity" class="ms-auto d-flex align-items-center gap-3 stat-strip">
+                <div class="stat" title="Unique items with status 'completed' — this is the number payment is based on">
+                  <div class="stat-val text-success">{{ formatNum(raterActivity.totals.completed_tasks) }}</div>
+                  <div class="stat-lbl">payable</div>
+                </div>
+                <div class="stat" title="Items the annotator opened and skipped — not paid">
+                  <div class="stat-val" :class="raterActivity.totals.skipped_tasks ? 'text-warning' : 'text-muted'">
+                    {{ formatNum(raterActivity.totals.skipped_tasks) }}
                   </div>
-                  <input
-                    v-model="raterSearchQuery"
-                    type="text"
-                    class="form-control"
-                    style="max-width: 280px;"
-                    placeholder="Search by name or email..."
-                  />
+                  <div class="stat-lbl">skipped</div>
+                </div>
+                <div class="stat" title="Saved drafts — started but never submitted, so not yet payable">
+                  <div class="stat-val" :class="raterActivity.totals.draft_tasks ? 'text-primary' : 'text-muted'">
+                    {{ formatNum(raterActivity.totals.draft_tasks) }}
+                  </div>
+                  <div class="stat-lbl">drafts</div>
+                </div>
+                <div class="stat" title="Every rating row in this window = payable + skipped + drafts">
+                  <div class="stat-val text-muted">{{ formatNum(raterActivity.totals.submissions) }}</div>
+                  <div class="stat-lbl">submissions</div>
+                </div>
+                <div class="stat">
+                  <div class="stat-val">{{ formatNum(raterActivity.totals.hours) }}</div>
+                  <div class="stat-lbl">hours</div>
+                </div>
+                <div class="stat">
+                  <div class="stat-val">{{ raterActivity.totals.active_raters }}</div>
+                  <div class="stat-lbl">active</div>
                 </div>
               </div>
             </div>
-          </div>
-          
-          <!-- Period filter: work done between two dates (default = all time) -->
-          <div class="px-3 py-2 border-bottom bg-light-subtle">
-            <div class="d-flex flex-wrap align-items-end gap-2">
-              <div>
-                <label class="form-label text-xs fw-bold text-secondary mb-1">From</label>
-                <input type="date" v-model="activityFrom" class="form-control form-control-sm" style="max-width:170px">
-              </div>
-              <div>
-                <label class="form-label text-xs fw-bold text-secondary mb-1">To</label>
-                <input type="date" v-model="activityTo" class="form-control form-control-sm" style="max-width:170px">
-              </div>
-              <button class="btn btn-primary btn-sm" @click="fetchRaterActivity" :disabled="activityLoading">
-                <i class="bi bi-calendar-check me-1"></i>{{ activityLoading ? 'Loading...' : 'Apply' }}
+
+            <!-- Same total, split by task type -->
+            <div v-if="activityTaskTypes.length" class="d-flex flex-wrap align-items-center gap-2 mt-2 pt-2 border-top">
+              <span class="text-xs fw-bold text-secondary text-uppercase">
+                By type<span v-if="!hasPeriod" class="text-muted fw-normal text-lowercase"> · all time</span>
+              </span>
+              <span v-for="t in activityTaskTypes" :key="t.key" class="type-chip"
+                    :title="t.label + ': ' + t.completed_tasks + ' payable · ' + t.skipped_tasks
+                            + ' skipped · ' + t.draft_tasks + ' drafts · ' + t.submissions + ' submissions'">
+                {{ t.label }}<b>{{ formatNum(t.completed_tasks) }}</b><span
+                  v-if="t.skipped_tasks || t.draft_tasks" class="chip-extra">
+                  +{{ formatNum(t.skipped_tasks + t.draft_tasks) }}</span>
+              </span>
+              <button class="btn btn-sm btn-link text-decoration-none p-0 ms-auto text-xs"
+                      @click="exportAllBatchesCsv" title="CSV with one row per annotator per batch">
+                <i class="bi bi-download me-1"></i>Task-wise CSV
               </button>
-              <div class="btn-group btn-group-sm" role="group">
-                <button class="btn btn-outline-secondary" @click="setActivityPreset(0)">Today</button>
-                <button class="btn btn-outline-secondary" @click="setActivityPreset(7)">7 days</button>
-                <button class="btn btn-outline-secondary" @click="setActivityPreset(30)">30 days</button>
-                <button class="btn btn-outline-secondary" @click="clearActivity">All time</button>
-              </div>
-              <div v-if="raterActivity" class="ms-auto d-flex flex-wrap gap-2 align-items-center">
-                <span class="badge bg-primary-subtle text-primary border py-2 px-2">{{ raterActivity.totals.completed_tasks }} tasks</span>
-                <span class="badge bg-info-subtle text-info-emphasis border py-2 px-2">{{ raterActivity.totals.hours }} h</span>
-                <span class="badge bg-light text-secondary border py-2 px-2">{{ raterActivity.totals.active_raters }} active</span>
-              </div>
             </div>
           </div>
 
+          <!-- ---------- The table: 5 columns instead of 7 ---------- -->
           <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
-              <thead class="table-light">
+            <table class="table table-hover align-middle mb-0 rater-table">
+              <thead>
                 <tr>
                   <th class="ps-3 sortable-th" @click="sortRaters('name')">Annotator <i :class="['bi', sortIcon(raterSort, 'name')]"></i></th>
-                  <th style="width: 85px;">Demog.</th>
-                  <th class="sortable-th" style="width: 190px;" @click="sortRaters('assigned')">Assigned <i :class="['bi', sortIcon(raterSort, 'assigned')]"></i></th>
-                  <th class="sortable-th" style="width: 125px;" @click="sortRaters('lastactive')">Last Active <i :class="['bi', sortIcon(raterSort, 'lastactive')]"></i></th>
-                  <th style="width: 120px;">Status</th>
-                  <th class="sortable-th text-end text-nowrap" style="width: 120px;" @click="sortRaters('completed')">
-                    <span v-if="raterActivity">In period / All</span><span v-else>Tasks done</span>
+                  <th class="sortable-th" style="width: 210px;" @click="sortRaters('assigned')">Assigned <i :class="['bi', sortIcon(raterSort, 'assigned')]"></i></th>
+                  <th class="sortable-th" style="width: 175px;" @click="sortRaters('lastactive')">Status <i :class="['bi', sortIcon(raterSort, 'lastactive')]"></i></th>
+                  <th class="sortable-th text-end" style="width: 240px;" @click="sortRaters('completed')">
+                    <span v-if="raterActivity && hasPeriod">In period / All</span><span v-else>Tasks done</span>
                     <i :class="['bi', sortIcon(raterSort, 'completed')]"></i>
                   </th>
-                  <th class="text-end pe-3" style="width: 210px;">Actions</th>
+                  <th class="text-end pe-3" style="width: 130px;">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="rater in filteredRaters" :key="rater.id" :class="{ 'stale-row': isStale(rater) }">
+                <template v-for="rater in filteredRaters" :key="rater.id">
+                <tr :class="{ 'stale-row': isStale(rater), 'row-open': expandedRaterBatches.includes(rater.id) }">
+                  <!-- 1. Identity (absorbs the old Demog. column) -->
                   <td class="ps-3">
                     <div class="d-flex align-items-center gap-2" style="min-width: 0;">
-                      <div class="avatar-circle flex-shrink-0">{{ rater.name.charAt(0).toUpperCase() }}</div>
+                      <div class="avatar-circle flex-shrink-0" :class="{ 'avatar-off': rater.account_active === false }">
+                        {{ rater.name.charAt(0).toUpperCase() }}
+                      </div>
                       <div style="min-width: 0;">
-                        <div class="fw-semibold text-dark text-truncate" style="max-width: 200px;" :title="rater.name">{{ rater.name }}</div>
-                        <div class="text-muted text-xs text-truncate" style="max-width: 200px;" :title="rater.email">{{ rater.email }}</div>
+                        <div class="fw-semibold text-dark text-truncate" style="max-width: 260px;" :title="rater.name">{{ rater.name }}</div>
+                        <div class="text-muted text-xs text-truncate" style="max-width: 260px;" :title="rater.email">
+                          {{ rater.email }}
+                          <span v-if="rater.gender || rater.age" class="text-body-tertiary">· {{ rater.gender }}{{ rater.age ? ', ' + rater.age : '' }}</span>
+                        </div>
                       </div>
                     </div>
                   </td>
-                  <td>
-                    <div class="text-xs">
-                      <span class="text-dark">{{ rater.gender }}</span>, <span class="text-muted">{{ rater.age }}y</span>
-                    </div>
-                  </td>
+
+                  <!-- 2. Assigned batches -->
                   <td>
                     <div v-if="assignedIdList(rater).length" class="d-flex flex-wrap gap-1 assigned-chip-wrap">
-                      <span v-for="tid in assignedIdList(rater).slice(0, 6)" :key="tid"
+                      <span v-for="tid in assignedIdList(rater).slice(0, 4)" :key="tid"
                             class="badge rounded-pill bg-primary-subtle text-primary border border-primary-subtle">#{{ tid }}</span>
-                      <span v-if="assignedIdList(rater).length > 6"
-                            class="badge rounded-pill bg-secondary-subtle text-secondary border">+{{ assignedIdList(rater).length - 6 }}</span>
+                      <span v-if="assignedIdList(rater).length > 4"
+                            class="badge rounded-pill bg-secondary-subtle text-secondary border"
+                            :title="assignedIdList(rater).join(', ')">+{{ assignedIdList(rater).length - 4 }}</span>
                     </div>
                     <span v-else class="text-muted text-xs fst-italic">Unassigned</span>
                   </td>
+
+                  <!-- 3. Status (absorbs the old Last Active column) -->
                   <td>
-                    <span v-if="rater.last_active" class="text-secondary text-xs">{{ formatDate(rater.last_active) }}</span>
-                    <span v-else class="text-muted text-xs">—</span>
-                    <span v-if="isStale(rater)" class="badge stale-badge rounded-pill ms-1" title="Assigned tasks but inactive">
-                      <i class="bi bi-exclamation-triangle-fill me-1"></i>Stale
-                    </span>
+                    <div class="d-flex flex-column gap-1 align-items-start">
+                      <span v-if="rater.account_active === false"
+                            class="status-pill is-off" title="Deactivated — cannot log in">
+                        <i class="bi bi-slash-circle-fill"></i> Deactivated
+                      </span>
+                      <span v-else class="status-pill" :class="statusClass(rater)">
+                        <i :class="['bi', statusIcon(rater)]"></i> {{ rater.status }}
+                      </span>
+                      <span class="text-xs" :class="isStale(rater) ? 'text-warning-emphasis fw-semibold' : 'text-muted'"
+                            :title="formatDate(rater.last_active)">
+                        <i v-if="isStale(rater)" class="bi bi-exclamation-triangle-fill me-1"></i>
+                        {{ rater.last_active ? timeAgo(rater.last_active) : 'never active' }}
+                      </span>
+                    </div>
                   </td>
-                  <td>
-                    <span
-                      v-if="rater.account_active === false"
-                      class="badge px-3 py-2 text-xs rounded-pill d-inline-flex align-items-center gap-1 bg-danger-subtle text-danger"
-                      title="This annotator is deactivated and cannot log in"
-                    >
-                      <i class="bi bi-slash-circle-fill"></i> Deactivated
-                    </span>
-                    <span
-                      v-else
-                      :class="['badge px-3 py-2 text-xs rounded-pill d-inline-flex align-items-center gap-1',
-                        rater.completed_tasks_count >= 1 ? 'bg-success-subtle text-success' : 'bg-warning-subtle text-warning animate-pulse-border']"
-                    >
-                      <i :class="['bi', rater.completed_tasks_count >= 1 ? 'bi-check-circle-fill' : 'bi-exclamation-triangle-fill']"></i>
-                      {{ rater.status }}
-                    </span>
-                  </td>
+
+                  <!-- 4. Tasks done + the type split + the task-wise drill-down -->
                   <td class="text-end tasks-cell">
                     <template v-if="raterActivity">
-                      <span class="badge bg-primary-subtle text-primary border px-2"
-                            :title="'Tasks completed in the selected period'">{{ periodFor(rater.id) ? periodFor(rater.id).completed_tasks : 0 }}</span>
-                      <span class="text-muted mx-1">/</span>
-                      <span class="text-secondary" :title="'All-time tasks completed'">{{ rater.completed_tasks_count }}</span>
+                      <div class="d-flex align-items-baseline justify-content-end gap-1">
+                        <span class="tasks-num" :title="hasPeriod ? 'Payable tasks completed in the selected period' : 'All-time payable tasks completed'">
+                          {{ formatNum(periodFor(rater.id) ? periodFor(rater.id).completed_tasks : 0) }}
+                        </span>
+                        <span v-if="hasPeriod" class="text-muted text-xs" title="All-time tasks completed">
+                          / {{ formatNum(rater.completed_tasks_count) }}
+                        </span>
+                      </div>
+                      <!-- Non-payable work, shown only when there is any, so the row -->
+                      <div v-if="periodFor(rater.id) && (periodFor(rater.id).skipped_tasks || periodFor(rater.id).draft_tasks)"
+                           class="d-flex gap-1 justify-content-end mt-1">
+                        <span v-if="periodFor(rater.id).skipped_tasks" class="stat-pill warn"
+                              :title="periodFor(rater.id).skipped_tasks + ' skipped — not paid'">
+                          {{ formatNum(periodFor(rater.id).skipped_tasks) }} skipped
+                        </span>
+                        <span v-if="periodFor(rater.id).draft_tasks" class="stat-pill info"
+                              :title="periodFor(rater.id).draft_tasks + ' saved draft(s) — started, never submitted'">
+                          {{ formatNum(periodFor(rater.id).draft_tasks) }} draft
+                        </span>
+                      </div>
+                      <div v-if="periodTypesFor(rater.id).length" class="d-flex flex-wrap gap-1 justify-content-end mt-1">
+                        <span v-for="t in periodTypesFor(rater.id)" :key="t.key" class="type-chip sm"
+                              :title="t.label + ': ' + t.count + ' tasks'">
+                          {{ t.short }}<b>{{ t.count }}</b>
+                        </span>
+                      </div>
+                      <button v-if="periodBatchesFor(rater.id).length" class="drill-btn mt-1"
+                              @click="toggleRaterBatches(rater.id)"
+                              :title="'Per-batch breakdown across ' + periodBatchesFor(rater.id).length + ' batches'">
+                        <i class="bi" :class="expandedRaterBatches.includes(rater.id) ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+                        {{ expandedRaterBatches.includes(rater.id) ? 'Hide batches' : periodBatchesFor(rater.id).length + ' batches' }}
+                      </button>
                     </template>
-                    <span v-else class="badge bg-light text-dark border px-2">{{ rater.completed_tasks_count }}</span>
+                    <span v-else class="tasks-num">{{ formatNum(rater.completed_tasks_count) }}</span>
                   </td>
+
+                  <!-- 5. Every action on one line: assign, message, exports, nudge, account state -->
                   <td class="text-end pe-3">
-                    <div class="d-inline-flex gap-2 justify-content-end align-items-center rater-actions">
-                      <!-- 1. Assign Tasks (Primary) -->
-                      <button
-                        class="rater-action-btn"
-                        :class="assignedIdList(rater).length ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-outline-primary'"
-                        @click="openAssignModal(rater)"
-                        :title="assignedIdList(rater).length ? 'Edit assigned tasks for ' + rater.name : 'Assign tasks to ' + rater.name"
-                      >
+                    <div class="d-inline-flex gap-1 justify-content-end align-items-center flex-nowrap">
+                      <button class="rater-action-btn btn btn-sm"
+                              :class="assignedIdList(rater).length ? 'btn-primary' : 'btn-outline-primary'"
+                              @click="openAssignModal(rater)"
+                              :title="assignedIdList(rater).length ? 'Edit assigned batches for ' + rater.name : 'Assign batches to ' + rater.name">
                         <i :class="['bi', assignedIdList(rater).length ? 'bi-pencil-square' : 'bi-plus-lg']"></i>
                       </button>
-
-                      <!-- 2. Ratings Export -->
-                      <button
-                        class="rater-action-btn btn btn-sm btn-outline-primary"
-                        @click="openRatingsModal(rater)"
-                        :title="'Export raw task rating submissions for ' + rater.name"
-                      >
-                        <i class="bi bi-file-earmark-code"></i>
-                      </button>
-
-                      <!-- 3. Annotator Data Export (Timeline picker, default Entire Life) -->
-                      <button
-                        class="rater-action-btn btn btn-sm btn-success text-white border-0"
-                        @click="openAnnotatorDataModal(rater)"
-                        :title="'Export annotator metrics, tasks done & working task ID for ' + rater.name + ' (Timeline: Entire Life default)'"
-                      >
-                        <i class="bi bi-calendar-range"></i>
-                      </button>
-
-                      <!-- 4. Message Annotator -->
-                      <button
-                        class="rater-action-btn btn btn-sm btn-outline-secondary position-relative"
-                        @click="openMessageModal(rater)"
-                        :title="'Send a direct message to ' + rater.name"
-                      >
+                      <button class="rater-action-btn btn btn-sm btn-outline-secondary position-relative"
+                              @click="openMessageModal(rater)" :title="'Message ' + rater.name">
                         <i class="bi bi-chat-dots"></i>
                         <span v-if="rater.messages_sent" class="rater-msg-badge">{{ rater.messages_sent }}</span>
                       </button>
-
-                      <!-- 5. Nudge (only for stale annotators) -->
-                      <button
-                        v-if="isStale(rater)"
-                        class="rater-action-btn btn btn-sm btn-outline-warning"
-                        @click="nudgeRater(rater)"
-                        :title="'Send task reminder nudge to ' + rater.name"
-                      >
+                      <button class="rater-action-btn btn btn-sm btn-outline-success"
+                              @click="openAnnotatorDataModal(rater)"
+                              :title="'Export data for ' + rater.name + ' (metrics & tasks done, by timeline)'">
+                        <i class="bi bi-calendar-range"></i>
+                      </button>
+                      <button class="rater-action-btn btn btn-sm btn-outline-success"
+                              @click="exportRaterBatchesCsv(rater)"
+                              :title="'Export task-wise CSV for ' + rater.name">
+                        <i class="bi bi-diagram-3"></i>
+                      </button>
+                      <button class="rater-action-btn btn btn-sm btn-outline-secondary"
+                              @click="openRatingsModal(rater)"
+                              :title="'Export raw ratings for ' + rater.name">
+                        <i class="bi bi-file-earmark-code"></i>
+                      </button>
+                      <button v-if="isStale(rater)" class="rater-action-btn btn btn-sm btn-outline-warning"
+                              @click="nudgeRater(rater)"
+                              :title="'Send a reminder to ' + rater.name">
                         <i class="bi bi-bell"></i>
                       </button>
-
-                      <!-- 6. Deactivate / Reactivate -->
-                      <button
-                        v-if="rater.account_active === false"
-                        class="rater-action-btn btn btn-sm btn-success"
-                        @click="reactivateRater(rater)"
-                        :title="'Reactivate ' + rater.name + ' (restores previous task locks)'"
-                      >
+                      <button v-if="rater.account_active === false" class="rater-action-btn btn btn-sm btn-outline-success"
+                              @click="reactivateRater(rater)"
+                              :title="'Reactivate ' + rater.name + ' (restores their previous task locks)'">
                         <i class="bi bi-arrow-counterclockwise"></i>
                       </button>
-                      <button
-                        v-else
-                        class="rater-action-btn btn btn-sm btn-outline-danger"
-                        @click="openRemoveModal(rater)"
-                        :title="'Deactivate ' + rater.name + ' (unlocks assigned tasks)'"
-                      >
+                      <button v-else class="rater-action-btn btn btn-sm btn-outline-danger"
+                              @click="openRemoveModal(rater)"
+                              :title="'Deactivate ' + rater.name + ' (unlocks their assigned batches)'">
                         <i class="bi bi-person-dash"></i>
                       </button>
                     </div>
                   </td>
                 </tr>
+
+                <!-- Task-wise: every batch this annotator touched inside the window -->
+                <tr v-if="raterActivity && expandedRaterBatches.includes(rater.id)" class="drill-row">
+                  <td colspan="5" class="p-0">
+                    <div class="drill-panel">
+                      <div class="d-flex align-items-center mb-2 gap-2">
+                        <span class="text-xs fw-bold text-secondary text-uppercase">
+                          {{ rater.name }} · tasks per batch{{ hasPeriod ? ' in this period' : '' }}
+                        </span>
+                        <button class="btn btn-sm btn-link text-decoration-none p-0 ms-auto text-xs"
+                                @click="exportRaterBatchesCsv(rater)" title="Download this breakdown as CSV">
+                          <i class="bi bi-download me-1"></i>CSV
+                        </button>
+                      </div>
+                      <table class="table table-sm mb-0 bg-white border rounded drill-table">
+                        <thead>
+                          <tr>
+                            <th style="width: 80px;">Batch</th>
+                            <th style="width: 170px;">Task Type</th>
+                            <th style="width: 100px;">Language</th>
+                            <th>Description</th>
+                            <th class="text-end" style="width: 150px;">Payable</th>
+                            <th class="text-end" style="width: 70px;" title="Skipped — not paid">Skip</th>
+                            <th class="text-end" style="width: 70px;" title="Saved drafts — not yet payable">Draft</th>
+                            <th class="text-end" style="width: 70px;" title="All rating rows = payable + skipped + drafts">Subs</th>
+                            <th class="text-end" style="width: 70px;">Hours</th>
+                            <th class="text-end" style="width: 105px;">Last activity</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="b in periodBatchesFor(rater.id)" :key="b.test_id">
+                            <td><a href="#" class="fw-semibold text-decoration-none" title="Open this batch"
+                                   @click.prevent="openTask(b.test_id)">#{{ b.test_id }}</a></td>
+                            <td><span class="type-chip sm">{{ b.type_label }}</span></td>
+                            <td><span class="badge rounded-pill bg-secondary-subtle text-secondary border">{{ b.language || '—' }}</span></td>
+                            <td class="text-truncate" style="max-width: 340px;" :title="b.description">{{ b.description || '—' }}</td>
+                            <td class="text-end">
+                              <div class="d-flex align-items-center gap-2 justify-content-end">
+                                <span class="fw-semibold text-nowrap">{{ b.tasks }}<span v-if="b.total_items" class="text-muted"> / {{ b.total_items }}</span></span>
+                                <div v-if="b.total_items" class="progress" style="height: 5px; width: 52px;">
+                                  <div class="progress-bar" :class="b.tasks >= b.total_items ? 'bg-success' : 'bg-warning'"
+                                       :style="{ width: getPercent(b.tasks, b.total_items) + '%' }"></div>
+                                </div>
+                              </div>
+                            </td>
+                            <td class="text-end" :class="b.skipped ? 'text-warning fw-semibold' : 'text-muted'">{{ b.skipped }}</td>
+                            <td class="text-end" :class="b.drafts ? 'text-primary fw-semibold' : 'text-muted'">{{ b.drafts }}</td>
+                            <td class="text-end text-muted">{{ b.submissions }}</td>
+                            <td class="text-end">{{ b.hours }}</td>
+                            <td class="text-end text-muted" :title="formatDate(b.last_active)">{{ timeAgo(b.last_active) }}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </td>
+                </tr>
+                </template>
                 <tr v-if="filteredRaters.length === 0">
-                  <td colspan="7" class="text-center text-muted py-5 bg-white">
-                    No matching raters found.
+                  <td colspan="5" class="text-center text-muted py-5 bg-white">
+                    No matching annotators found.
                   </td>
                 </tr>
               </tbody>
@@ -1100,11 +1207,7 @@
           </div>
         </div>
 
-        <!-- =====================================================================
-             Clips still carrying a rejection reason the UI no longer offers.
-             The reason cannot be un-picked from a report, only re-annotated, so
-             each row links straight to that clip.
-             ===================================================================== -->
+        <!-- ===================================================================== -->
         <div v-if="retiredClips.total" class="bg-white p-4 rounded shadow-sm border border-warning-subtle mb-4">
           <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
             <div>
@@ -1169,10 +1272,7 @@
           </div>
         </div>
 
-        <!-- =====================================================================
-             Annotation hours — audio segmentation only. How much AUDIO each
-             annotator has reviewed: cumulative to date and per IST day.
-             ===================================================================== -->
+        <!-- ===================================================================== -->
         <div class="bg-white p-4 rounded shadow-sm border mb-4">
           <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
             <div>
@@ -1262,8 +1362,7 @@
               </div>
             </div>
 
-            <!-- Hours by voice artist / persona: how much of the audio each ARTIST
-                 recorded has been QC'd (vs. who did the reviewing, below). -->
+            <!-- Hours by voice artist / persona: how much of the audio each ARTIST -->
             <div class="row g-4 mb-4">
               <div class="col-12 col-xl-7">
                 <h6 class="fw-bold text-secondary text-xs text-uppercase mb-2">
@@ -1465,6 +1564,124 @@
       </div>
 
       <!-- ADMIN TAB -->
+      <!-- ===================== UPLOAD QC TASK ===================== -->
+      <div v-if="activeTab === 'qcupload'">
+
+        <!-- Step 1: paste the link -->
+        <div class="bg-white p-4 rounded shadow-sm border mb-4">
+          <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+            <div>
+              <h3 class="fw-bold text-dark m-0 fs-5">
+                <i class="bi bi-cloud-arrow-up-fill text-primary me-2"></i>Upload QC Task
+              </h3>
+              <div class="text-muted text-xs">
+                Paste the Drive folder of recordings (the <b>EXPORTED ID</b> folder, or its parent).
+                Saffron inspects it, you confirm the persona &amp; set, and the download runs in the
+                background &mdash; you can leave this page, the load keeps going.
+              </div>
+            </div>
+            <button class="btn btn-outline-secondary btn-sm" @click="fetchQcJobs" :disabled="qcJobsLoading">
+              <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+            </button>
+          </div>
+
+          <div class="row g-2 align-items-end">
+            <div class="col-lg-9">
+              <label class="form-label text-xs fw-bold text-secondary mb-1">Drive link to the recordings folder</label>
+              <input v-model="qcLink" type="text" class="form-control form-control-sm"
+                     placeholder="https://drive.google.com/drive/folders/..."
+                     @keyup.enter="startQcInspect">
+            </div>
+            <div class="col-lg-3">
+              <button class="btn btn-primary btn-sm w-100" @click="startQcInspect"
+                      :disabled="!qcLink || qcInspecting">
+                <span v-if="qcInspecting" class="spinner-border spinner-border-sm me-1"></span>
+                <i v-else class="bi bi-search me-1"></i>
+                {{ qcInspecting ? 'Inspecting…' : 'Inspect link' }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Live progress of the inspection -->
+          <div v-if="qcInspectJob" class="mt-3 p-3 rounded border"
+               :class="qcInspectJob.status === 'failed' ? 'bg-danger-subtle border-danger-subtle' : 'bg-light'">
+            <div class="d-flex align-items-center gap-2">
+              <span v-if="qcInspectJob.status === 'running'" class="spinner-border spinner-border-sm text-primary"></span>
+              <i v-else-if="qcInspectJob.status === 'done'" class="bi bi-check-circle-fill text-success"></i>
+              <i v-else class="bi bi-x-circle-fill text-danger"></i>
+              <span class="text-xs fw-semibold">{{ qcInspectJob.progress }}</span>
+              <button class="btn btn-link btn-sm p-0 ms-auto text-xs text-decoration-none"
+                      @click="openQcLog(qcInspectJob.id)">View log</button>
+            </div>
+            <div v-if="qcInspectJob.error" class="text-danger text-xs mt-2">{{ qcInspectJob.error }}</div>
+          </div>
+        </div>
+
+        <!-- Recent jobs -->
+        <div class="bg-white p-4 rounded shadow-sm border">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h3 class="fw-bold text-dark m-0 fs-5"><i class="bi bi-list-task text-primary me-2"></i>Upload jobs</h3>
+            <div class="d-flex align-items-center gap-2">
+              <span v-if="qcActiveLoad" class="badge bg-primary-subtle text-primary border border-primary-subtle">
+                <span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem"></span>
+                a load is running
+              </span>
+              <button class="btn btn-outline-danger btn-sm text-xs" @click="clearQcHistory"
+                      :disabled="!qcFinishedCount"
+                      :title="qcFinishedCount ? 'Remove ' + qcFinishedCount + ' finished job(s)' : 'Nothing finished to clear'">
+                <i class="bi bi-trash me-1"></i>Clear history
+              </button>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle mb-0">
+              <thead>
+                <tr>
+                  <th style="width: 90px;">Kind</th>
+                  <th style="width: 110px;">Status</th>
+                  <th>What it is doing / result</th>
+                  <th style="width: 150px;">Started</th>
+                  <th class="text-end" style="width: 150px;">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="!qcJobs.length">
+                  <td colspan="5" class="text-center text-muted text-xs py-3">No upload jobs yet.</td>
+                </tr>
+                <tr v-for="j in qcJobs" :key="j.id">
+                  <td><span class="type-chip sm">{{ j.kind }}</span></td>
+                  <td>
+                    <span class="badge rounded-pill" :class="qcStatusClass(j.status)">
+                      <span v-if="j.status === 'running'" class="spinner-border spinner-border-sm me-1"
+                            style="width:.55rem;height:.55rem"></span>{{ j.status }}
+                    </span>
+                  </td>
+                  <td class="text-xs">
+                    <div class="text-truncate" style="max-width: 520px;">{{ j.progress }}</div>
+                    <div v-if="j.error" class="text-danger text-truncate" style="max-width: 520px;">{{ j.error }}</div>
+                    <div v-if="j.kind === 'load' && j.params" class="text-muted" style="font-size:.65rem">
+                      {{ j.params.language }} · {{ j.params.persona }} · Set{{ j.params.excel_set }}
+                      <span v-if="j.result && j.result.set_dir"> → {{ j.result.set_dir }}</span>
+                      <span v-if="j.result && j.result.test_id"> · Test #{{ j.result.test_id }} ({{ j.result.num_tasks }} tasks)</span>
+                    </div>
+                  </td>
+                  <td class="text-muted text-xs">{{ j.started_at ? timeAgo(j.started_at) : '—' }}</td>
+                  <td class="text-end">
+                    <button class="btn btn-outline-secondary btn-sm py-0 px-2 text-xs" @click="openQcLog(j.id)">Log</button>
+                    <button v-if="j.status === 'running'" class="btn btn-outline-danger btn-sm py-0 px-2 text-xs ms-1"
+                            @click="cancelQcJob(j.id)">Stop</button>
+                    <button v-else class="btn btn-outline-secondary btn-sm py-0 px-2 text-xs ms-1"
+                            @click="deleteQcJob(j.id)" title="Remove this job from the history">
+                      <i class="bi bi-trash"></i>
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <div v-if="activeTab === 'admin'">
         <!-- Daily signup PIN: share this with people who should be able to sign up -->
         <div class="bg-white p-3 rounded shadow-sm border mb-4 d-flex flex-wrap align-items-center gap-3">
@@ -1486,15 +1703,14 @@
           <div class="d-flex flex-wrap justify-content-between align-items-end gap-3">
             <div>
               <h3 class="fw-bold text-dark m-0 fs-5"><i class="bi bi-table text-primary me-2"></i>Export Task List</h3>
-              <div class="text-muted text-xs">Sr. No., Language, Task ID, Detail and No. of Tasks &mdash; as a CSV you can open in Excel.</div>
+              <div class="text-muted text-xs">Sr. No., Language, Task Type, Task ID, Detail and No. of Tasks &mdash; as a CSV you can open in Excel. Exports every task type unless you narrow it below.</div>
             </div>
             <div class="d-flex flex-wrap gap-2 align-items-end">
               <div>
                 <label class="form-label text-xs fw-bold text-secondary mb-1">Task type</label>
                 <select v-model="exportTestType" class="form-select form-select-sm">
-                  <option value="conversation-editable">Conversation Editable</option>
-                  <option value="audio-segmentation">Audio Segmentation</option>
                   <option value="">All types</option>
+                  <option v-for="tt in uniqueTestTypes" :key="tt" :value="tt">{{ formatTestType(tt) }}</option>
                 </select>
               </div>
               <div>
@@ -1522,6 +1738,42 @@
       </div>
       <p class="text-muted mt-3">Fetching initial statistics, please wait...</p>
     </div>
+
+    <!-- ===================== DROPDOWN MENUS (teleported so table overflow can't clip them) ===================== -->
+    <Teleport to="body">
+      <div v-if="openMenu !== null" class="menu-backdrop" @click="openMenu = null"></div>
+
+      <!-- Toolbar: exports -->
+      <div v-if="openMenu === 'exports'" class="pop-menu" :style="{ top: menuPos.top + 'px', left: menuPos.left + 'px', width: '260px' }">
+        <div class="pop-menu-head">Exports</div>
+        <button class="pop-item" @click="runMenu(() => openAnnotatorDataModal(null))">
+          <i class="bi bi-calendar-range text-success"></i>
+          <span><b>Annotators data</b><small>Per-annotator summary, by task type</small></span>
+        </button>
+        <button class="pop-item" @click="runMenu(exportAllBatchesCsv)">
+          <i class="bi bi-diagram-3 text-success"></i>
+          <span><b>Task-wise breakdown</b><small>One row per annotator per batch</small></span>
+        </button>
+        <button class="pop-item" @click="runMenu(() => openRatingsModal(null))">
+          <i class="bi bi-file-earmark-code text-primary"></i>
+          <span><b>Raw ratings</b><small>Every individual submission</small></span>
+        </button>
+      </div>
+
+      <!-- Toolbar: messages -->
+      <div v-if="openMenu === 'messages'" class="pop-menu" :style="{ top: menuPos.top + 'px', left: menuPos.left + 'px', width: '240px' }">
+        <div class="pop-menu-head">Messages</div>
+        <button class="pop-item" @click="runMenu(openBroadcastModal)">
+          <i class="bi bi-broadcast text-primary"></i>
+          <span><b>Broadcast</b><small>Message every annotator</small></span>
+        </button>
+        <button class="pop-item" @click="runMenu(openOutbox)">
+          <i class="bi bi-clock-history text-secondary"></i>
+          <span><b>Sent messages</b><small>Review and edit what you sent</small></span>
+        </button>
+      </div>
+
+    </Teleport>
 
     <!-- ===================== ASSIGN TASKS MODAL ===================== -->
     <transition name="modal-fade">
@@ -1699,7 +1951,7 @@
 
             <!-- Export Information Note -->
             <div class="text-xs text-muted mb-4 px-1">
-              <i class="bi bi-info-circle text-primary me-1"></i> Includes tasks done, current pending task ID, working task ID, assigned batches & time spent.
+              <i class="bi bi-info-circle text-primary me-1"></i> Payment basis is <b>Tasks Done (Payable)</b> &mdash; unique completed items. Skipped and drafts are listed separately and are not payable. Also includes pending task ID, working task ID, assigned batches &amp; time spent.
             </div>
 
             <!-- Export Button -->
@@ -1774,6 +2026,195 @@
           <!-- Footer -->
           <div class="assign-modal-footer d-flex justify-content-end py-3 px-4 border-top bg-light-subtle rounded-bottom-4">
             <button class="btn btn-outline-secondary btn-sm px-4 text-xs" @click="closeRatingsModal">Close</button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- ===================== QC UPLOAD CONFIRM MODAL ===================== -->
+    <transition name="modal-fade">
+      <div v-if="showQcConfirm" class="assign-modal-backdrop" @click.self="showQcConfirm = false">
+        <div class="assign-modal-card shadow-lg border-0 rounded-4" style="max-width: 720px; width: 100%;">
+          <div class="assign-modal-header d-flex justify-content-between align-items-center bg-primary-subtle py-3 px-4 rounded-top-4 border-bottom border-primary-subtle">
+            <div class="d-flex align-items-center gap-2.5">
+              <div class="avatar-circle bg-primary text-white flex-shrink-0" style="width: 38px; height: 38px;">
+                <i class="bi bi-clipboard-check"></i>
+              </div>
+              <div>
+                <h6 class="fw-bold mb-0 text-dark">Confirm this QC set</h6>
+                <div class="text-xs text-muted">Check what Saffron found, correct anything wrong, then start the load.</div>
+              </div>
+            </div>
+            <button class="btn-close" @click="showQcConfirm = false"></button>
+          </div>
+
+          <div class="assign-modal-body p-4" v-if="qcResult">
+            <!-- What was read straight off the link -->
+            <div class="qc-facts mb-3">
+              <div class="qc-fact">
+                <div class="qc-fact-val">{{ qcResult.audio.wav_count }}</div>
+                <div class="qc-fact-lbl">WAV files</div>
+              </div>
+              <div class="qc-fact">
+                <div class="qc-fact-val">{{ qcResult.audio.conv_count }}</div>
+                <div class="qc-fact-lbl">conversations</div>
+              </div>
+              <div class="qc-fact">
+                <div class="qc-fact-val">{{ qcResult.audio.conv_min }}–{{ qcResult.audio.conv_max }}</div>
+                <div class="qc-fact-lbl">Conv range</div>
+              </div>
+              <div class="qc-fact">
+                <div class="qc-fact-val">{{ (qcResult.audio.turns || []).join(', ') }}</div>
+                <div class="qc-fact-lbl">turns</div>
+              </div>
+              <div class="qc-fact" :class="qcResult.audio.unnamed ? 'warn' : ''">
+                <div class="qc-fact-val">{{ qcResult.audio.unnamed }}</div>
+                <div class="qc-fact-lbl">unrecognised</div>
+              </div>
+            </div>
+
+            <div class="alert alert-light border text-xs py-2 px-3 mb-3">
+              <i class="bi bi-info-circle text-primary me-1"></i>{{ qcResult.note }}
+            </div>
+
+            <div class="row g-3">
+              <div class="col-md-4">
+                <label class="form-label text-xs fw-bold text-secondary mb-1">Language</label>
+                <select v-model="qcLanguage" class="form-select form-select-sm">
+                  <option v-for="l in qcLanguageOptions" :key="l" :value="l">{{ l }}</option>
+                </select>
+                <div class="text-muted mt-1" style="font-size:.65rem">{{ qcResult.audio.language_evidence }}</div>
+              </div>
+              <div class="col-md-8">
+                <label class="form-label text-xs fw-bold text-secondary mb-1">
+                  Persona &amp; set <span class="text-danger">*</span>
+                </label>
+                <select v-model="qcChoiceKey" class="form-select form-select-sm">
+                  <option value="">— pick the recording Excel this audio belongs to —</option>
+                  <option v-for="c in qcResult.candidates" :key="c.filename" :value="c.filename">
+                    {{ c.already_loaded ? '● already loaded — ' : '○ not loaded yet — ' }}{{ c.persona_label }} · Set{{ c.set }}{{ c.recorder ? ' · ' + c.recorder : '' }}
+                  </option>
+                </select>
+                <div v-if="qcChoice" class="text-muted mt-1" style="font-size:.65rem">
+                  Excel: <code>{{ qcChoice.filename }}</code>
+                  <span v-if="qcChoice.recorder"> · voice artist <b>{{ qcChoice.recorder }}</b></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- The decisive signal: this exact audio is already in Saffron. -->
+            <div v-if="qcAudioMatch && qcAudioMatch.verdict === 'same audio'"
+                 class="alert alert-danger text-xs py-2 px-3 mt-3 mb-0">
+              <i class="bi bi-exclamation-octagon-fill me-1"></i>
+              <b>This audio is already loaded.</b> All {{ qcAudioMatch.bytes_identical }} clip(s) match
+              batch <a href="#" @click.prevent="openTask(qcAudioMatch.test_id)">#{{ qcAudioMatch.test_id }}</a>
+              byte for byte ({{ qcAudioMatch.description }}). Loading it again duplicates the QC work.
+            </div>
+            <div v-else-if="qcAudioMatch" class="alert alert-warning text-xs py-2 px-3 mt-3 mb-0">
+              <i class="bi bi-exclamation-triangle-fill me-1"></i>
+              {{ qcAudioMatch.bytes_identical }} of this folder's clips already appear in batch
+              <a href="#" @click.prevent="openTask(qcAudioMatch.test_id)">#{{ qcAudioMatch.test_id }}</a>
+              &mdash; this may be a re-upload of part of that set.
+            </div>
+
+            <div v-if="qcChoice && qcChoice.already_loaded" class="alert alert-warning text-xs py-2 px-3 mt-3 mb-0">
+              <i class="bi bi-exclamation-triangle-fill me-1"></i>
+              <b>{{ qcChoice.persona_label }} Set{{ qcChoice.set }}</b> is already loaded as a task batch.
+              Loading it again creates a second batch of the same audio. Continue only if this is a
+              different part of the set (e.g. Conv 20–30).
+            </div>
+
+            <!-- Cross-check: the recording Excels on Drive vs the QC batches in -->
+            <div class="mt-3 pt-3 border-top">
+              <button class="btn btn-link btn-sm p-0 text-decoration-none text-xs fw-semibold"
+                      @click="qcShowCompare = !qcShowCompare">
+                <i class="bi" :class="qcShowCompare ? 'bi-chevron-down' : 'bi-chevron-right'"></i>
+                Cross-check this audio against Saffron
+                <span class="text-muted fw-normal">
+                  <template v-if="qcAudioMatch">
+                    &mdash; {{ qcAudioMatch.bytes_identical }} clip(s) already in batch #{{ qcAudioMatch.test_id }}
+                  </template>
+                  <template v-else>&mdash; no matching audio found</template>
+                </span>
+              </button>
+
+              <div v-if="qcShowCompare" class="mt-2">
+                <div class="qc-col-head">
+                  <i class="bi bi-soundwave me-1"></i>This folder's {{ qcResult.audio.wav_count }} clip(s)
+                  vs the audio already in Saffron
+                </div>
+                <div class="qc-col">
+                  <div v-if="!(qcResult.audio_compare || []).length" class="qc-empty">
+                    No Saffron batch shares a single clip name with this folder &mdash; this audio is new.
+                  </div>
+                  <div v-for="r in qcResult.audio_compare" :key="'a' + r.test_id" class="qc-row"
+                       :title="r.description">
+                    <span class="qc-dot" :class="qcVerdictDot(r.verdict)"></span>
+                    <a href="#" class="text-decoration-none" @click.prevent="openTask(r.test_id)">#{{ r.test_id }}</a>
+                    <span class="flex-grow-1 text-truncate">{{ r.description || r.set_dir }}</span>
+                    <span class="text-muted" style="font-size:.6rem">
+                      {{ r.bytes_identical }}/{{ r.names_common }} identical
+                    </span>
+                    <span class="qc-tag" :class="r.verdict === 'same audio' ? 'warn' : ''">{{ r.verdict }}</span>
+                  </div>
+                </div>
+                <div class="text-muted mt-2" style="font-size:.65rem">
+                  Compared by exact file size, not by clip name &mdash; every set reuses the same
+                  <code>Conv_N_T_M</code> names, so names alone would match almost any batch.
+                  <span class="d-block mt-1">
+                    <span class="qc-dot warn"></span> same audio (already loaded) ·
+                    <span class="qc-dot new"></span> partly the same ·
+                    <span class="qc-dot"></span> different recording, shared names
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="d-flex flex-wrap align-items-center gap-3 mt-3 pt-3 border-top">
+              <div class="form-check mb-0">
+                <input class="form-check-input" type="checkbox" id="qcNoLoad" v-model="qcNoLoad">
+                <label class="form-check-label text-xs" for="qcNoLoad">
+                  Download and check only &mdash; don't create the task batch yet
+                </label>
+              </div>
+              <span class="text-muted ms-auto" style="font-size:.65rem">
+                Audio will be stored as <code>{{ qcResult.next_set_dir }}</code>
+              </span>
+            </div>
+          </div>
+
+          <div class="assign-modal-footer d-flex justify-content-between align-items-center py-3 px-4 border-top bg-light-subtle rounded-bottom-4">
+            <span class="text-muted text-xs">
+              <i class="bi bi-lightning-charge me-1"></i>Runs in the background — you can close this and keep working.
+            </span>
+            <div class="d-flex gap-2">
+              <button class="btn btn-outline-secondary btn-sm px-3 text-xs" @click="showQcConfirm = false">Cancel</button>
+              <button class="btn btn-primary btn-sm px-3 text-xs" @click="confirmQcLoad" :disabled="!qcChoice || qcStarting">
+                <span v-if="qcStarting" class="spinner-border spinner-border-sm me-1"></span>
+                <i v-else class="bi bi-play-fill me-1"></i>Start download &amp; load
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- ===================== QC JOB LOG MODAL ===================== -->
+    <transition name="modal-fade">
+      <div v-if="showQcLog" class="assign-modal-backdrop" @click.self="closeQcLog">
+        <div class="assign-modal-card shadow-lg border-0 rounded-4" style="max-width: 900px; width: 100%;">
+          <div class="assign-modal-header d-flex justify-content-between align-items-center py-3 px-4 border-bottom">
+            <div>
+              <h6 class="fw-bold mb-0 text-dark">Job log</h6>
+              <div class="text-xs text-muted"><code>{{ qcLogJobId }}</code> · {{ qcLogJob && qcLogJob.progress }}</div>
+            </div>
+            <button class="btn-close" @click="closeQcLog"></button>
+          </div>
+          <div class="assign-modal-body p-0">
+            <pre class="qc-log mb-0">{{ qcLogText || 'waiting for output…' }}</pre>
+          </div>
+          <div class="assign-modal-footer d-flex justify-content-end py-2 px-4 border-top bg-light-subtle rounded-bottom-4">
+            <button class="btn btn-outline-secondary btn-sm px-3 text-xs" @click="closeQcLog">Close</button>
           </div>
         </div>
       </div>
@@ -1989,7 +2430,7 @@
             <div class="d-flex align-items-center gap-3">
               <div class="avatar-circle-lg bg-danger-subtle text-danger"><i class="bi bi-person-dash-fill"></i></div>
               <div>
-                <h5 class="fw-bold mb-0 text-dark">Remove annotator</h5>
+                <h5 class="fw-bold mb-0 text-dark">Deactivate annotator</h5>
                 <small class="text-muted">{{ removeTarget && removeTarget.name }} · {{ removeTarget && removeTarget.email }}</small>
               </div>
             </div>
@@ -2005,14 +2446,14 @@
               </small>
             </div>
             <label class="form-label fw-semibold text-dark small">
-              Type <code class="text-danger">delete {{ removeTarget && removeTarget.name }}</code> to confirm
+              Type <code class="text-danger">deactivate {{ removeTarget && removeTarget.name }}</code> to confirm
             </label>
             <input
               v-model="removeConfirmText"
               type="text"
               class="form-control"
               :class="{ 'is-invalid': removeConfirmText && !removeConfirmMatches }"
-              :placeholder="`delete ${removeTarget ? removeTarget.name : ''}`"
+              :placeholder="`deactivate ${removeTarget ? removeTarget.name : ''}`"
               @keyup.enter="removeConfirmMatches && confirmRemove()"
               autocomplete="off"
             />
@@ -2030,6 +2471,32 @@
       </div>
     </transition>
   </div>
+
+    <!-- Export progress overlay (every CSV export goes through downloadCsv) -->
+    <div v-if="exportBusy" class="export-overlay">
+      <div class="export-box">
+        <div class="export-icon">
+          <span v-if="exportPhase === 'error'" class="text-danger"><i class="bi bi-exclamation-octagon-fill"></i></span>
+          <span v-else-if="exportPhase === 'done'" class="text-success"><i class="bi bi-check-circle-fill"></i></span>
+          <span v-else class="spinner-border text-primary"></span>
+        </div>
+        <div class="export-title">
+          <template v-if="exportPhase === 'preparing'">Preparing your export…</template>
+          <template v-else-if="exportPhase === 'downloading'">Downloading…</template>
+          <template v-else-if="exportPhase === 'done'">Saved to your downloads</template>
+          <template v-else>Export failed</template>
+        </div>
+        <div class="export-file">{{ exportLabel }}</div>
+        <div v-if="exportPhase === 'downloading'" class="export-bytes">{{ humanBytes(exportBytes) }} received</div>
+        <div v-if="exportPhase === 'preparing'" class="export-note">
+          The server is building the file. Large exports can take a while — this window
+          will close on its own.
+        </div>
+        <div v-if="exportPhase === 'error'" class="export-note text-danger">{{ exportError }}</div>
+        <button v-if="exportPhase === 'error'" class="btn btn-sm btn-outline-secondary mt-2"
+                @click="exportBusy = false">Close</button>
+      </div>
+    </div>
 </template>
 
 <script setup>
@@ -2047,6 +2514,7 @@ const tabs = [
   { key: 'tasks',      label: 'Tasks',      icon: 'bi-list-check',         hint: 'Progress by task type + the full batch list' },
   { key: 'annotators', label: 'Annotators', icon: 'bi-people-fill',        hint: 'Assign tasks, message & manage annotators' },
   { key: 'quality',    label: 'Quality',    icon: 'bi-patch-check-fill',   hint: 'Voice-artist QC & rejection analytics' },
+  { key: 'qcupload',   label: 'Upload QC',  icon: 'bi-cloud-arrow-up-fill', hint: 'Load an audio-segmentation set straight from a Drive link' },
   { key: 'admin',      label: 'Admin',      icon: 'bi-gear-fill',          hint: 'Signup PIN and task-list export' },
 ]
 const dashboardData = ref({})
@@ -2059,6 +2527,118 @@ const activityLoading = ref(false)
 function periodFor(raterId) {
   if (!raterActivity.value) return null
   return raterActivity.value.raters.find(r => r.rater_id === raterId) || null
+}
+
+// Task types worked on in the period, busiest first — drives the summary chips.
+const activityTaskTypes = computed(() => raterActivity.value?.task_types || [])
+
+// 'Benchmark Evaluation V2' -> 'Bench. Eval. V2' so the per-row chips stay narrow.
+function shortTypeLabel(label) {
+  return (label || '')
+    .split(' ')
+    .map(w => (w.length > 6 ? w.slice(0, 5) + '.' : w))
+    .join(' ')
+}
+
+// One chip per task type this annotator actually touched in the period.
+function periodTypesFor(raterId) {
+  const p = periodFor(raterId)
+  if (!p || !p.by_type) return []
+  return activityTaskTypes.value
+    .filter(t => (p.by_type[t.key] || 0) > 0)
+    .map(t => ({ key: t.key, label: t.label, short: shortTypeLabel(t.label), count: p.by_type[t.key] }))
+}
+
+// ---- Date-window presets. `activePreset` highlights whichever one is in effect,
+const activityPresets = [
+  { label: 'Today', days: 0 },
+  { label: '7d', days: 7 },
+  { label: '30d', days: 30 },
+  { label: 'All time', days: null },
+]
+
+const windowPreset = computed(() => {
+  if (!activityFrom.value && !activityTo.value) return 'All time'
+  const fmt = d => d.toISOString().slice(0, 10)
+  const today = fmt(new Date())
+  if (activityTo.value !== today) return null
+  for (const pr of activityPresets) {
+    if (pr.days === null) continue
+    const start = new Date()
+    start.setDate(new Date().getDate() - pr.days)
+    if (activityFrom.value === fmt(start)) return pr.label
+  }
+  return null
+})
+
+function applyPreset(pr) {
+  if (pr.days === null) clearActivity()
+  else setActivityPreset(pr.days)
+}
+
+// 12345 -> "12,345"; keeps the stat strip readable at a glance.
+function formatNum(n) {
+  const v = Number(n || 0)
+  return Number.isInteger(v) ? v.toLocaleString('en-IN') : v.toLocaleString('en-IN', { maximumFractionDigits: 2 })
+}
+
+// Status pill styling, derived from the same fields the old inline classes used.
+function statusClass(rater) {
+  if (isStale(rater)) return 'is-stale'
+  return (rater.completed_tasks_count || 0) >= 1 ? 'is-active' : 'is-idle'
+}
+function statusIcon(rater) {
+  if (isStale(rater)) return 'bi-exclamation-triangle-fill'
+  return (rater.completed_tasks_count || 0) >= 1 ? 'bi-check-circle-fill' : 'bi-hourglass-split'
+}
+
+// ---- Header dropdowns (exports / messages). Annotator-row actions are inline buttons, not a menu.
+const openMenu = ref(null)           // 'exports' | 'messages'
+const menuPos = ref({ top: 0, left: 0 })
+
+function toggleMenu(key, ev, width = 240) {
+  if (openMenu.value === key) { openMenu.value = null; return }
+  const r = ev.currentTarget.getBoundingClientRect()
+  menuPos.value = {
+    top: Math.min(r.bottom + 6, window.innerHeight - 260),
+    left: Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8)),
+  }
+  openMenu.value = key
+}
+
+function runMenu(fn) { fn(); openMenu.value = null }
+
+// Task-wise: the individual batches making up an annotator's period total.
+const expandedRaterBatches = ref([])
+
+function periodBatchesFor(raterId) {
+  return periodFor(raterId)?.by_test || []
+}
+
+function toggleRaterBatches(raterId) {
+  const i = expandedRaterBatches.value.indexOf(raterId)
+  if (i === -1) expandedRaterBatches.value.push(raterId)
+  else expandedRaterBatches.value.splice(i, 1)
+}
+
+// Long-format CSV (one row per batch) for this annotator, same window as the table.
+function exportRaterBatchesCsv(rater) {
+  const params = new URLSearchParams({ rater_id: String(rater.id) })
+  if (activityFrom.value) params.set('from', activityFrom.value)
+  if (activityTo.value) params.set('to', activityTo.value)
+  const safe = (rater.name || 'annotator').replace(/[^a-z0-9]+/gi, '_')
+  downloadCsv('/admin/export_annotator_batches_csv?' + params.toString(),
+              `tasks_by_batch_${safe}.csv`)
+}
+
+// Same breakdown for every annotator at once.
+function exportAllBatchesCsv() {
+  const params = new URLSearchParams()
+  if (activityFrom.value) params.set('from', activityFrom.value)
+  if (activityTo.value) params.set('to', activityTo.value)
+  const qs = params.toString()
+  downloadCsv('/admin/export_annotator_batches_csv' + (qs ? '?' + qs : ''),
+              'annotator_tasks_by_batch.csv')
 }
 
 function setActivityPreset(daysBack) {
@@ -2074,8 +2654,11 @@ function setActivityPreset(daysBack) {
 function clearActivity() {
   activityFrom.value = ''
   activityTo.value = ''
-  raterActivity.value = null
+  fetchRaterActivity()   // no dates = all time; keeps the by-type / task-wise breakdown visible
 }
+
+// True only when the admin actually narrowed to a window — drives "In period / All"
+const hasPeriod = computed(() => !!(activityFrom.value || activityTo.value))
 
 async function fetchRaterActivity() {
   activityLoading.value = true
@@ -2099,12 +2682,11 @@ async function fetchRaterActivity() {
 const artistReasonFilter = ref('')
 // Quality tab language filter — drives the tables, the stats and the CSV exports.
 const qualityLanguage = ref('')
-const exportTestType = ref('conversation-editable')
+const exportTestType = ref('')   // '' = every task type (was: conversation-editable only)
 const exportVersion = ref('')
 const exportVersionOptions = ['2', '3', '4', '5', '6', 'new', 'base']
 
 // Raw payload from /admin/dashboard: artists carry a by_language breakdown so the
-// language filter below is applied client-side, with no extra round trip.
 const rawArtistStats = computed(() => {
   const d = dashboardData.value.audio_seg_artists || {}
   return {
@@ -2171,8 +2753,6 @@ const artistStats = computed(() => {
 })
 
 // ---------------------------------------------------------------------------
-// Annotation hours (audio segmentation only) — Quality tab
-// ---------------------------------------------------------------------------
 const EMPTY_HOURS_BUCKET = { clips: 0, skipped: 0, seconds: 0, hours: 0, label: '0s' }
 const EMPTY_AUDIO_HOURS = {
   timezone: 'IST (UTC+5:30)', today_date: '', annotators: [], daily_series: [],
@@ -2217,7 +2797,6 @@ const audioHours = computed(() => {
 })
 
 // The backend sends 30 dense days newest-first; slice to the picked range and flip
-// so the chart reads left (oldest) to right (today).
 const teamSeries = computed(() =>
   [...(audioHours.value.daily_series || [])].slice(0, hoursRange.value).reverse()
 )
@@ -2258,7 +2837,6 @@ function toggleHoursRow(raterId) {
 }
 
 // 'YYYY-MM-DD' is already an IST calendar date — parse it as a local date so no
-// browser timezone can shift the label back a day.
 function parseDay(iso) {
   const [y, m, d] = (iso || '').split('-').map(Number)
   return new Date(y, (m || 1) - 1, d || 1)
@@ -2292,14 +2870,54 @@ watch(qualityLanguage, () => {
   }
 })
 
-async function downloadCsv(path, filename) {
+// ---------------------------------------------------------------------------
+const exportBusy = ref(false)
+const exportLabel = ref('')
+const exportBytes = ref(0)
+const exportPhase = ref('preparing')   // preparing | downloading | done | error
+const exportError = ref('')
+
+function humanBytes(n) {
+  if (!n) return '0 KB'
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB'
+  return (n / 1024 / 1024).toFixed(1) + ' MB'
+}
+
+async function downloadCsv(path, filename, label) {
+  exportBusy.value = true
+  exportLabel.value = label || filename || 'Export'
+  exportBytes.value = 0
+  exportPhase.value = 'preparing'
+  exportError.value = ''
   try {
     const token = localStorage.getItem('authToken')
     const resp = await fetch(`${API_BASE_URL}${path}`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-    if (!resp.ok) { alert('Export failed (' + resp.status + ')'); return }
-    const blob = await resp.blob()
+    if (!resp.ok) {
+      exportPhase.value = 'error'
+      exportError.value = 'The server refused the export (' + resp.status + ').'
+      return
+    }
+    exportPhase.value = 'downloading'
+
+    // Stream so the admin sees the file growing instead of a dead spinner.
+    let blob
+    if (resp.body && resp.body.getReader) {
+      const reader = resp.body.getReader()
+      const chunks = []
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        chunks.push(value)
+        exportBytes.value += value.length
+      }
+      blob = new Blob(chunks, { type: resp.headers.get('Content-Type') || 'text/csv' })
+    } else {
+      blob = await resp.blob()
+      exportBytes.value = blob.size
+    }
+
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -2308,9 +2926,12 @@ async function downloadCsv(path, filename) {
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
+    exportPhase.value = 'done'
+    setTimeout(() => { exportBusy.value = false }, 900)
   } catch (e) {
     console.error('export failed', e)
-    alert('Export failed - see console.')
+    exportPhase.value = 'error'
+    exportError.value = 'The export could not be completed. Please try again.'
   }
 }
 
@@ -2319,12 +2940,13 @@ function downloadTasksExport() {
   if (exportVersion.value) params.set('version', exportVersion.value)
   if (exportTestType.value) params.set('test_type', exportTestType.value)
   const qs = params.toString()
-  const name = 'tasks_export' + (exportVersion.value ? '_v' + exportVersion.value : '') + '.csv'
+  const name = 'tasks_export'
+    + (exportTestType.value ? '_' + exportTestType.value : '_all_types')
+    + (exportVersion.value ? '_v' + exportVersion.value : '') + '.csv'
   downloadCsv('/admin/export_tasks_csv' + (qs ? '?' + qs : ''), name)
 }
 
 // Suffix the downloaded filename with the language so the vendor can tell the
-// per-language exports apart.
 function qualitySuffix() {
   return qualityLanguage.value ? '_' + qualityLanguage.value.replace(/[^A-Za-z0-9_-]/g, '') : ''
 }
@@ -2432,6 +3054,235 @@ async function fetchSignupPin() {
     console.error('Could not load signup PIN', e)
   }
 }
+
+// ---------------------------------------------------------------------------
+const qcLink = ref('')
+// Fixed defaults — the server falls back to every .wav when the link already
+const QC_ID_SUBFOLDER = 'EXPORTED ID'
+const qcInspecting = ref(false)
+const qcInspectJob = ref(null)
+const qcResult = ref(null)
+const showQcConfirm = ref(false)
+const qcShowCompare = ref(false)
+const qcChoiceKey = ref('')
+const qcLanguage = ref('english')
+const qcSetName = ref('')
+const qcNoLoad = ref(false)
+const qcStarting = ref(false)
+const qcJobs = ref([])
+const qcJobsLoading = ref(false)
+const qcActiveLoad = ref(null)
+const showQcLog = ref(false)
+const qcLogJobId = ref('')
+const qcLogJob = ref(null)
+const qcLogText = ref('')
+let qcPollTimer = null
+
+const qcLanguageOptions = ['english', 'hindi', 'telugu', 'tamil', 'kannada', 'odia',
+                          'marathi', 'malayalam', 'gujarati', 'bengali', 'punjabi', 'urdu']
+
+const qcChoice = computed(() =>
+  (qcResult.value?.candidates || []).find(c => c.filename === qcChoiceKey.value) || null)
+
+// Best byte-for-byte match against audio already in Saffron, if any.
+const qcAudioMatch = computed(() => {
+  const top = (qcResult.value?.audio_compare || [])[0]
+  return top && top.bytes_identical > 0 ? top : null
+})
+
+function qcVerdictDot(v) {
+  if (v === 'same audio') return 'warn'
+  if (v === 'partly the same') return 'new'
+  return ''
+}
+
+function qcAuth() {
+  return { 'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
+           'Content-Type': 'application/json' }
+}
+
+function qcStatusClass(s) {
+  if (s === 'done') return 'bg-success-subtle text-success border border-success-subtle'
+  if (s === 'failed') return 'bg-danger-subtle text-danger border border-danger-subtle'
+  if (s === 'running') return 'bg-primary-subtle text-primary border border-primary-subtle'
+  return 'bg-secondary-subtle text-secondary border'
+}
+
+async function startQcInspect() {
+  if (!qcLink.value) return
+  qcInspecting.value = true
+  qcResult.value = null
+  try {
+    const resp = await fetch(`${API_BASE_URL}/admin/qc_upload/inspect`, {
+      method: 'POST', headers: qcAuth(),
+      body: JSON.stringify({
+        audio_link: qcLink.value.trim(),
+        id_subfolder: QC_ID_SUBFOLDER,
+      })
+    })
+    const job = await resp.json()
+    if (!resp.ok) { alert(job.message || 'Could not start the inspection.'); qcInspecting.value = false; return }
+    qcInspectJob.value = job
+    qcStartPolling()
+  } catch (e) {
+    console.error('inspect failed', e)
+    qcInspecting.value = false
+  }
+}
+
+// One timer drives everything on this tab: the in-flight inspection, the job
+function qcStartPolling() {
+  if (qcPollTimer) return
+  qcPollTimer = setInterval(qcTick, 2500)
+  qcTick()
+}
+
+function qcStopPollingIfIdle() {
+  const busy = qcJobs.value.some(j => j.status === 'running' || j.status === 'queued')
+  if (!busy && !qcInspecting.value && !showQcLog.value && qcPollTimer) {
+    clearInterval(qcPollTimer); qcPollTimer = null
+  }
+}
+
+async function qcTick() {
+  if (qcInspectJob.value && qcInspecting.value) {
+    const j = await qcFetchJob(qcInspectJob.value.id)
+    if (j) {
+      qcInspectJob.value = j
+      if (j.status === 'done') {
+        qcInspecting.value = false
+        qcResult.value = j.result
+        // Pre-fill the dialog with everything that could be worked out for real.
+        qcLanguage.value = j.result?.audio?.language || 'english'
+        qcSetName.value = j.result?.next_set_dir || ''
+        qcChoiceKey.value = j.result?.suggestion?.filename || ''
+        // Open the cross-check straight away when the audio overlaps something.
+        qcShowCompare.value = !!(j.result?.audio_compare || []).some(r => r.bytes_identical > 0)
+        showQcConfirm.value = true
+      } else if (j.status === 'failed') {
+        qcInspecting.value = false
+      }
+    }
+  }
+  await fetchQcJobs()
+  if (showQcLog.value && qcLogJobId.value) await refreshQcLog()
+  qcStopPollingIfIdle()
+}
+
+async function qcFetchJob(id, withLog = false) {
+  try {
+    const resp = await fetch(`${API_BASE_URL}/admin/qc_upload/job/${id}${withLog ? '?log=1' : ''}`,
+                             { headers: qcAuth() })
+    if (!resp.ok) return null
+    return await resp.json()
+  } catch (e) { return null }
+}
+
+async function fetchQcJobs() {
+  qcJobsLoading.value = true
+  try {
+    const resp = await fetch(`${API_BASE_URL}/admin/qc_upload/jobs`, { headers: qcAuth() })
+    if (resp.ok) {
+      const d = await resp.json()
+      qcJobs.value = d.jobs || []
+      qcActiveLoad.value = d.active_load || null
+    }
+  } catch (e) {
+    console.error('qc jobs failed', e)
+  } finally {
+    qcJobsLoading.value = false
+  }
+}
+
+async function confirmQcLoad() {
+  if (!qcChoice.value) return
+  qcStarting.value = true
+  try {
+    const resp = await fetch(`${API_BASE_URL}/admin/qc_upload/start`, {
+      method: 'POST', headers: qcAuth(),
+      body: JSON.stringify({
+        audio_link: qcLink.value.trim(),
+        persona: qcChoice.value.persona,
+        excel_set: qcChoice.value.set,
+        language: qcLanguage.value,
+        set_name: qcSetName.value,
+        id_subfolder: QC_ID_SUBFOLDER,
+        no_load: qcNoLoad.value,
+      })
+    })
+    const d = await resp.json()
+    if (!resp.ok) { alert(d.message || 'Could not start the load.'); return }
+    showQcConfirm.value = false
+    qcStartPolling()
+    openQcLog(d.id)
+  } catch (e) {
+    console.error('start load failed', e)
+  } finally {
+    qcStarting.value = false
+  }
+}
+
+async function openQcLog(id) {
+  qcLogJobId.value = id
+  qcLogText.value = ''
+  showQcLog.value = true
+  await refreshQcLog()
+  qcStartPolling()
+}
+
+async function refreshQcLog() {
+  const j = await qcFetchJob(qcLogJobId.value, true)
+  if (j) { qcLogJob.value = j; qcLogText.value = j.log || '' }
+}
+
+function closeQcLog() {
+  showQcLog.value = false
+  qcLogJobId.value = ''
+  qcStopPollingIfIdle()
+}
+
+const qcFinishedCount = computed(() =>
+  qcJobs.value.filter(j => j.status !== 'running' && j.status !== 'queued').length)
+
+async function deleteQcJob(id) {
+  try {
+    const resp = await fetch(`${API_BASE_URL}/admin/qc_upload/job/${id}`,
+                             { method: 'DELETE', headers: qcAuth() })
+    if (!resp.ok) {
+      const d = await resp.json().catch(() => ({}))
+      alert(d.message || 'Could not delete that job.')
+      return
+    }
+    if (qcLogJobId.value === id) closeQcLog()
+    await fetchQcJobs()
+  } catch (e) { console.error('delete job failed', e) }
+}
+
+async function clearQcHistory() {
+  if (!confirm(`Remove ${qcFinishedCount.value} finished job(s) from the history? A running job is kept.`)) return
+  try {
+    const resp = await fetch(`${API_BASE_URL}/admin/qc_upload/jobs`,
+                             { method: 'DELETE', headers: qcAuth() })
+    const d = await resp.json().catch(() => ({}))
+    if (!resp.ok) { alert(d.message || 'Could not clear the history.'); return }
+    if (showQcLog.value) closeQcLog()
+    await fetchQcJobs()
+  } catch (e) { console.error('clear history failed', e) }
+}
+
+async function cancelQcJob(id) {
+  if (!confirm('Stop this job? A partly downloaded set directory will be left behind.')) return
+  try {
+    await fetch(`${API_BASE_URL}/admin/qc_upload/job/${id}/cancel`, { method: 'POST', headers: qcAuth() })
+    await fetchQcJobs()
+  } catch (e) { console.error('cancel failed', e) }
+}
+
+// Only poll while the tab is actually open.
+watch(activeTab, (t) => {
+  if (t === 'qcupload') { fetchQcJobs(); qcStartPolling() }
+  else qcStopPollingIfIdle()
+})
 
 async function copySignupPin() {
   try {
@@ -2607,7 +3458,7 @@ const isBulkNudging = ref(false)
 
 const removeConfirmMatches = computed(() =>
   !!removeTarget.value &&
-  removeConfirmText.value.trim().toLowerCase() === `delete ${removeTarget.value.name}`.toLowerCase()
+  removeConfirmText.value.trim().toLowerCase() === `deactivate ${removeTarget.value.name}`.toLowerCase()
 )
 
 // Copy a batch's rater-facing task URL to the clipboard.
@@ -2642,12 +3493,20 @@ const exportCSV = async (id, raterId = null, raterName = '') => {
     if (raterId) {
       url += `?rater_id=${raterId}`
     }
-    
+
+    // Same progress overlay every other export uses.
+    exportBusy.value = true
+    exportLabel.value = `Annotations for task ${id}`
+    exportBytes.value = 0
+    exportPhase.value = 'preparing'
+    exportError.value = ''
+
     const response = await fetch(url, {
       headers: {
         'Authorization': `Bearer ${token}`
       }
     })
+    exportPhase.value = 'downloading'
     
     if (response.status === 401) {
       localStorage.removeItem('authToken')
@@ -2681,6 +3540,8 @@ const exportCSV = async (id, raterId = null, raterName = '') => {
     a.remove()
     window.URL.revokeObjectURL(downloadUrl)
     
+    exportPhase.value = 'done'
+    setTimeout(() => { exportBusy.value = false }, 900)
     showToast('Annotations exported successfully!', 'bi-check-circle-fill text-success')
   } catch (err) {
     console.error(err)
@@ -2696,7 +3557,7 @@ let countdownTimer = null
 let autoRefreshTimer = null
 
 // Fetch data
-const fetchDashboardData = async (manual = false) => {
+const fetchDashboardData = async (manual = false, force = false) => {
   if (manual) isLoading.value = true
   try {
     const token = localStorage.getItem('authToken')
@@ -2705,7 +3566,12 @@ const fetchDashboardData = async (manual = false) => {
       return
     }
     
-    const response = await fetch(`${API_BASE_URL}/admin/dashboard`, {
+    // The backend caches the dashboard payload for 60s. A manual refresh, or a
+    const dashUrl = (manual || force)
+      ? `${API_BASE_URL}/admin/dashboard?refresh=1`
+      : `${API_BASE_URL}/admin/dashboard`
+
+    const response = await fetch(dashUrl, {
       headers: {
         'Authorization': `Bearer ${token}`
       }
@@ -2742,7 +3608,6 @@ const getPercent = (completed, total) => {
 }
 
 // Backend timestamps are UTC but serialized without a timezone marker; append
-// 'Z' so they render in the viewer's local time instead of shifted by the offset.
 const toUtcDate = (iso) => {
   if (!iso) return new Date(NaN)
   return new Date(/[Zz]|[+-]\d\d:\d\d$/.test(iso) ? iso : iso + 'Z')
@@ -3130,8 +3995,6 @@ watch(batchPage, (p) => {
 })
 
 // Open a task in the SAME tab (in-app navigation) — used by the clickable batch row.
-// Clicking a task opens the admin review view (submitted annotations grouped by
-// annotator), not the blank annotation page.
 const openTask = (id) => { router.push(`/admin/task/${id}`) }
 
 // Parse a rater's assigned_tasks string ("1,2,3") into a numeric id array
@@ -3148,7 +4011,6 @@ const staleRaters = computed(() => raters.value.filter(isStale))
 
 const filteredRaters = computed(() => {
   // "Show all" off hides the long tail of auto-created / never-started accounts.
-  // It defaults on so admins can assign tasks to brand-new annotators too.
   let list = raters.value
   if (!showAllRaters.value) {
     list = list.filter(r => r.completed_tasks_count >= 1)
@@ -3217,7 +4079,6 @@ const assignableTests = computed(() => {
 })
 
 // Map of test id -> name of another annotator it is already locked to (excludes the rater
-// currently being edited). Lets the admin spot conflicts before double-assigning a task.
 const taskOwnerMap = computed(() => {
   const map = {}
   for (const r of raters.value) {
@@ -3261,7 +4122,6 @@ const showToast = (msg, icon = 'bi-check-circle-fill text-success') => {
 }
 
 // Small helper: authenticated POST that returns parsed JSON or throws with the
-// server-provided message. Mirrors the pattern used by saveAssignments.
 const adminPost = async (path, body) => {
   const token = localStorage.getItem('authToken')
   if (!token) { router.push('/login'); throw new Error('Not authenticated') }
@@ -3295,7 +4155,6 @@ const threadLoading = ref(false)
 const threadBox = ref(null)
 
 // Everything ever sent to this annotator (individual messages, nudges and
-// broadcasts they received), oldest first so it reads like a chat.
 const loadThread = async (raterId) => {
   threadLoading.value = true
   try {
@@ -3486,7 +4345,7 @@ const confirmRemove = async () => {
     const data = await adminPost(`/admin/rater/${removeTarget.value.id}/deactivate`, { confirm: removeConfirmText.value.trim() })
     closeRemoveModal()
     showToast(data.message || `${name} deactivated`, 'bi-person-dash-fill text-danger')
-    fetchDashboardData(false)
+    fetchDashboardData(false, true)
   } catch (err) {
     removeError.value = err.message || 'Failed to deactivate annotator.'
   } finally {
@@ -3497,7 +4356,7 @@ const reactivateRater = async (rater) => {
   try {
     const data = await adminPost(`/admin/rater/${rater.id}/reactivate`, {})
     showToast(data.message || `${rater.name} reactivated`, 'bi-arrow-counterclockwise text-success')
-    fetchDashboardData(false)
+    fetchDashboardData(false, true)
   } catch (err) {
     showToast(err.message || 'Failed to reactivate.', 'bi-exclamation-triangle-fill text-danger')
   }
@@ -3537,7 +4396,7 @@ const saveAssignments = async () => {
     currentRater.value = null
     if (isAutoRefreshActive.value) startTimers()
     showToast(`${count} task(s) locked to ${raterName}`)
-    fetchDashboardData(false)
+    fetchDashboardData(false, true)
   } catch (err) {
     console.error(err)
     assignError.value = err.message || 'Failed to save assignment.'
@@ -3547,8 +4406,9 @@ const saveAssignments = async () => {
 }
 
 // --- Modal UX: Esc-to-close + background scroll lock (applies to every popup) ---
-// Ordered by stacking: whichever is open gets closed first on Escape.
 const modalControllers = [
+  { open: showQcLog,              close: closeQcLog },
+  { open: showQcConfirm,          close: () => { showQcConfirm.value = false } },
   { open: showEditMsgModal,       close: closeEditMsg },
   { open: showOutboxModal,        close: closeOutbox },
   { open: showRemoveModal,        close: closeRemoveModal },
@@ -3580,8 +4440,9 @@ onMounted(() => {
   }
   
   try {
+    // Any admin belongs here -- the org admin and every team admin.
     const payload = JSON.parse(atob(token.split('.')[1]))
-    if (payload.username !== 'admin') {
+    if (payload.kind !== 'admin' && payload.username !== 'admin') {
       router.push('/')
       return
     }
@@ -3589,31 +4450,48 @@ onMounted(() => {
     router.push('/login')
     return
   }
-  
-  fetchDashboardData(true)
+
+  // Load-as-you-go: paint immediately from the 60s server cache, then pull fresh numbers in the background so nothing blocks the first render.
+  fetchDashboardData(false).then(() => fetchDashboardData(false, true))
+  fetchRaterActivity()   // all-time breakdown, so the Annotators tab shows it immediately
   if (isAutoRefreshActive.value) {
     startTimers()
   }
 })
 
+watch(openMenu, (v) => {
+  const close = () => { openMenu.value = null }
+  if (v !== null) window.addEventListener('scroll', close, { capture: true, once: true })
+})
+
 onUnmounted(() => {
   clearTimers()
+  if (qcPollTimer) { clearInterval(qcPollTimer); qcPollTimer = null }
   window.removeEventListener('keydown', onGlobalKeydown)
   document.body.classList.remove('modal-open-lock')
 })
 </script>
 
 <style scoped>
+/** ---- export progress overlay ---- */
+.export-overlay { position: fixed; inset: 0; background: rgba(15,23,42,.5); display: grid; place-items: center; z-index: 2000; }
+.export-box { background: #fff; border-radius: 16px; padding: 2rem 2.5rem; text-align: center; min-width: 320px; max-width: 420px; box-shadow: 0 20px 50px rgba(0,0,0,.3); }
+.export-icon { font-size: 2rem; margin-bottom: .75rem; }
+.export-title { font-weight: 700; color: #0f172a; font-size: 1.05rem; }
+.export-file { font-size: .84rem; color: #64748b; margin-top: .2rem; word-break: break-all; }
+.export-bytes { font-size: .8rem; color: #0d9488; font-weight: 600; margin-top: .5rem; }
+.export-note { font-size: .78rem; color: #94a3b8; margin-top: .6rem; line-height: 1.5; }
+
 .dashboard-container {
   max-width: 1400px;
   margin: 0 auto;
   padding: 0 20px;
 }
 
-/* Tab button customizations */
+/** Tab button customizations */
 .tabs-nav {
   background-color: #f8f9fa;
-  /* Keep the tab bar reachable while scrolling the long tables underneath. */
+  /** Keep the tab bar reachable while scrolling the long tables underneath. */
   position: sticky;
   top: 8px;
   z-index: 1020;
@@ -3631,7 +4509,7 @@ onUnmounted(() => {
   font-size: 1rem;
 }
 
-/* KPI cards styling */
+/** KPI cards styling */
 .kpi-card {
   height: 100%;
   border-radius: 12px;
@@ -3650,7 +4528,7 @@ onUnmounted(() => {
   justify-content: center;
 }
 
-/* Language card styling */
+/** Language card styling */
 .lang-card {
   border-radius: 12px;
   border: 1px solid rgba(0,0,0,0.08);
@@ -3662,7 +4540,7 @@ onUnmounted(() => {
   border-color: rgba(0,0,0,0.15);
 }
 
-/* Audio tracker accept/reject totals pills */
+/** Audio tracker accept/reject totals pills */
 .seg-stat-pill {
   display: flex;
   flex-direction: column;
@@ -3705,7 +4583,7 @@ onUnmounted(() => {
 .seg-stat-pill.total .lbl,
 .seg-stat-pill.total .val { color: #175cd3; }
 
-/* ---------- Annotation hours (Quality tab) ---------- */
+/** ---------- Annotation hours (Quality tab) ---------- */
 .ah-chart {
   display: flex;
   align-items: flex-end;
@@ -3751,14 +4629,12 @@ onUnmounted(() => {
 
 .ah-scroll { max-height: 300px; overflow-y: auto; }
 
-/* Helper Text styles */
+/** Helper Text styles */
 .text-xs {
   font-size: 0.825rem;
 }
 
-/* Utility shims: these Tailwind-style class names are used throughout the
-   template (esp. the popups) but don't exist in Bootstrap, so without these
-   rules the intended spacing/typography silently does nothing. */
+/** Utility shims: these Tailwind-style class names are used throughout the template (esp. the popup. */
 .text-sm { font-size: 0.875rem; }
 .fs-9 { font-size: 0.75rem; }
 .fs-10 { font-size: 0.7rem; }
@@ -3776,7 +4652,7 @@ onUnmounted(() => {
   letter-spacing: 0.05em;
 }
 
-/* Modern Gradient Progress Bars */
+/** Modern Gradient Progress Bars */
 .bg-light-gradient {
   background-color: #e9ecef;
 }
@@ -3785,7 +4661,7 @@ onUnmounted(() => {
   border-radius: 5px;
 }
 
-/* Animation utilities */
+/** Animation utilities */
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
@@ -3810,15 +4686,7 @@ onUnmounted(() => {
   animation: pulse-slow 2s infinite ease-in-out;
 }
 
-@keyframes pulse-border {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
-  50% { box-shadow: 0 0 0 4px rgba(245, 158, 11, 0); }
-}
-.animate-pulse-border {
-  animation: pulse-border 2s infinite ease-in-out;
-}
-
-/* Avatar layout for raters list */
+/** Avatar layout for raters list */
 .avatar-circle {
   width: 32px;
   height: 32px;
@@ -3832,7 +4700,7 @@ onUnmounted(() => {
   font-size: 0.9rem;
 }
 
-/* Status dots */
+/** Status dots */
 .status-dot {
   width: 8px;
   height: 8px;
@@ -3843,12 +4711,12 @@ onUnmounted(() => {
   background-color: #22c55e;
 }
 
-/* Assigned task chips inside the table */
+/** Assigned task chips inside the table */
 .assigned-chip-wrap {
   max-width: 220px;
 }
 
-/* ===================== Assign Tasks Modal ===================== */
+/** ===================== Assign Tasks Modal ===================== */
 .assign-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -3890,7 +4758,7 @@ onUnmounted(() => {
   flex-shrink: 0;           /* action buttons stay visible on tall modals */
 }
 
-/* Lock background scrolling while any popup is open (body is outside scoped CSS). */
+/** Lock background scrolling while any popup is open (body is outside scoped CSS). */
 :global(body.modal-open-lock) {
   overflow: hidden;
 }
@@ -3909,7 +4777,7 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-/* Selected chips row */
+/** Selected chips row */
 .selected-chips {
   display: flex;
   flex-wrap: wrap;
@@ -3939,7 +4807,7 @@ onUnmounted(() => {
   opacity: 1;
 }
 
-/* Scrollable batch picker */
+/** Scrollable batch picker */
 .batch-picker {
   max-height: 300px;
   overflow-y: auto;
@@ -3960,7 +4828,7 @@ onUnmounted(() => {
   background: #fceee3;
 }
 
-/* Modal fade + scale transition */
+/** Modal fade + scale transition */
 .modal-fade-enter-active,
 .modal-fade-leave-active {
   transition: opacity 0.2s ease;
@@ -3978,16 +4846,12 @@ onUnmounted(() => {
   transform: translateY(18px) scale(0.97);
 }
 
-/* Sortable table headers */
-/* Clickable batch rows: the whole row opens the task in the same tab */
+/** Sortable table headers */
+/** Clickable batch rows: the whole row opens the task in the same tab */
 .batch-row { cursor: pointer; transition: background-color .12s ease, box-shadow .12s ease; }
 .batch-row:hover { background-color: #fff7ee !important; box-shadow: inset 3px 0 0 #d8661b; }
 
-/* Rater actions: uniform square icon buttons in a single tidy row */
-.rater-actions {
-  flex-wrap: nowrap;
-  gap: 8px !important;
-}
+/** Rater actions: uniform square icon buttons in a single tidy row */
 .rater-action-btn {
   width: 32px;
   height: 32px;
@@ -4027,7 +4891,7 @@ onUnmounted(() => {
   opacity: 0.6;
 }
 
-/* Needs Attention cards */
+/** Needs Attention cards */
 .attention-card {
   cursor: pointer;
   transition: transform 0.18s ease, box-shadow 0.18s ease;
@@ -4045,7 +4909,7 @@ onUnmounted(() => {
   vertical-align: middle;
 }
 
-/* Centered segmented control for the Tasks sub-tabs */
+/** Centered segmented control for the Tasks sub-tabs */
 .tasks-subnav {
   background: #eef1f4;
   border: 1px solid #e4e8ec;
@@ -4094,20 +4958,280 @@ onUnmounted(() => {
   color: #fff;
 }
 
-/* Stale-annotator alert + rows */
+/** Stale-annotator alert + rows */
 .stale-alert {
   background: #fff7ed;
   border: 1px solid #fed7aa;
   color: #9a3412;
   border-radius: 12px;
 }
-.stale-badge {
-  background: #fef3c7;
-  color: #92400e;
-  border: 1px solid #fde68a;
+/** ============================ ANNOTATORS TAB ============================ */
+
+/** ---- Search box with an inset icon and a clear button ---- */
+.search-wrap { width: 240px; }
+.search-wrap .search-icon {
+  position: absolute;
+  left: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #94a3b8;
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+.search-wrap .search-clear {
+  position: absolute;
+  right: 0.15rem;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  color: #94a3b8;
+  font-size: 0.65rem;
+  padding: 0.2rem 0.4rem;
+  line-height: 1;
+}
+.search-wrap .search-clear:hover { color: #475569; }
+
+/** ---- Single filter band replacing the two stacked ones ---- */
+.filter-bar {
+  padding: 0.6rem 1rem;
+  background: #f8fafc;
+}
+.filter-bar .date-input { width: 140px; }
+
+.stat-strip .stat { text-align: right; line-height: 1.1; }
+.stat-strip .stat-val { font-size: 1rem; font-weight: 700; color: #0f172a; }
+.stat-strip .stat-lbl {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #94a3b8;
+}
+
+/** ---- Per-task-type chips: filter bar (default) and tasks column (.sm) ---- */
+.type-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
   font-size: 0.68rem;
+  color: #64748b;
+  white-space: nowrap;
+}
+.type-chip b { color: #0f172a; font-weight: 700; }
+.type-chip.sm {
+  padding: 0.1rem 0.4rem;
+  font-size: 0.62rem;
+  background: #f8fafc;
+}
+/** Non-payable tail on a type chip: "Benchmark 200 +3". */
+.type-chip .chip-extra { color: #94a3b8; font-weight: 600; margin-left: 0.15rem; }
+
+/** Small badges for work that exists but is not payable. */
+.stat-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
+  font-size: 0.62rem;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.stat-pill.warn { background: #fef3c7; color: #92400e; border-color: #fde68a; }
+.stat-pill.info { background: #dbeafe; color: #1e40af; border-color: #bfdbfe; }
+
+/** ---- Upload QC ---- */
+.qc-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 0.5rem;
+}
+.qc-fact {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  text-align: center;
+}
+.qc-fact.warn { background: #fffbeb; border-color: #fde68a; }
+.qc-fact-val { font-size: 1.05rem; font-weight: 700; color: #0f172a; line-height: 1.2; }
+.qc-fact-lbl {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
   font-weight: 600;
 }
+/** Drive vs Saffron cross-check columns */
+.qc-col-head {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #334155;
+  margin-bottom: 0.35rem;
+}
+.qc-col {
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  max-height: 190px;
+  overflow-y: auto;
+  background: #fff;
+}
+.qc-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.28rem 0.55rem;
+  font-size: 0.68rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+.qc-row:last-child { border-bottom: 0; }
+.qc-empty { padding: 0.6rem; font-size: 0.68rem; color: #94a3b8; text-align: center; }
+.qc-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+  background: #cbd5e1;
+}
+.qc-dot.ok { background: #16a34a; }
+.qc-dot.new { background: #2563eb; }
+.qc-dot.warn { background: #f59e0b; }
+.qc-tag {
+  font-size: 0.6rem;
+  color: #64748b;
+  background: #f1f5f9;
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
+  flex-shrink: 0;
+}
+.qc-tag.new { background: #dbeafe; color: #1e40af; }
+.qc-tag.warn { background: #fef3c7; color: #92400e; }
+
+.qc-log {
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  padding: 1rem;
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/** ---- Table ---- */
+.rater-table thead th {
+  background: #f8fafc;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #64748b;
+  font-weight: 700;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+}
+.rater-table tbody td { padding-top: 0.6rem; padding-bottom: 0.6rem; }
+.rater-table tbody tr.row-open > td { background: #f1f5f9; }
+
+.avatar-circle.avatar-off { background: #e2e8f0; color: #94a3b8; }
+
+/** ---- Status pill: one shape, colour carries the meaning ---- */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.status-pill.is-active { background: #dcfce7; color: #166534; }
+.status-pill.is-idle   { background: #fef9c3; color: #854d0e; }
+.status-pill.is-stale  { background: #fef3c7; color: #92400e; }
+.status-pill.is-off    { background: #fee2e2; color: #991b1b; }
+
+/** ---- Tasks column ---- */
+.tasks-num { font-size: 1rem; font-weight: 700; color: #0f172a; }
+.drill-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: 0.66rem;
+  color: #2563eb;
+  font-weight: 600;
+}
+.drill-btn:hover { text-decoration: underline; }
+
+/** ---- Expanded per-batch panel ---- */
+.drill-row > td { background: #f1f5f9; }
+.drill-panel { padding: 0.85rem 1rem 1rem; }
+.drill-table thead th {
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #64748b;
+  background: #f8fafc;
+}
+.drill-table tbody td { font-size: 0.72rem; vertical-align: middle; }
+
+/** ---- Teleported dropdown menus (escape .table-responsive clipping) ---- */
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1080;
+}
+.pop-menu {
+  position: fixed;
+  z-index: 1081;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.6rem;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+  padding: 0.3rem;
+  overflow: hidden;
+}
+.pop-menu-head {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  font-weight: 700;
+  padding: 0.4rem 0.6rem 0.3rem;
+}
+.pop-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  width: 100%;
+  border: 0;
+  background: none;
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  border-radius: 0.4rem;
+  color: #0f172a;
+}
+.pop-item:hover { background: #f1f5f9; }
+.pop-item i { font-size: 0.9rem; line-height: 1.25; }
+.pop-item span { display: flex; flex-direction: column; min-width: 0; }
+.pop-item b { font-size: 0.78rem; font-weight: 600; }
+.pop-item small { font-size: 0.66rem; color: #94a3b8; }
+.pop-item.is-danger { color: #b91c1c; }
+.pop-item.is-danger i { color: #b91c1c; }
+.pop-item.is-danger:hover { background: #fef2f2; }
+.pop-sep { height: 1px; background: #e2e8f0; margin: 0.3rem 0.3rem; }
+
+.rater-action-btn.is-open { background: #e2e8f0; border-color: #cbd5e1; }
+
+@media (max-width: 991px) {
+  .search-wrap { width: 100%; }
+  .stat-strip { margin-left: 0 !important; }
+}
+
 .stale-row {
   background: #fffbeb !important;
 }
@@ -4115,7 +5239,7 @@ onUnmounted(() => {
   background: #fef3c7 !important;
 }
 
-/* ---- UX polish: keep table headers visible while scrolling long lists ---- */
+/** ---- UX polish: keep table headers visible while scrolling long lists ---- */
 .table-responsive {
   max-height: calc(100vh - 260px);
   overflow-y: auto;
@@ -4127,13 +5251,13 @@ onUnmounted(() => {
   background: #f8f9fa;
   box-shadow: inset 0 -1px 0 #dee2e6;
 }
-/* numbers line up column-wise instead of jittering */
+/** numbers line up column-wise instead of jittering */
 .tasks-cell, .tasks-cell .badge {
   font-variant-numeric: tabular-nums;
 }
 .tasks-cell .badge { min-width: 2.5rem; }
 
-/* ---- Tasks Overview: per-task-type sub-tabs ---- */
+/** ---- Tasks Overview: per-task-type sub-tabs ---- */
 .type-tabs {
   background-color: #f8f9fa;
   border-top-left-radius: inherit;
@@ -4179,7 +5303,7 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
-/* ---- Admin message thread (stacked history in the message modal) ---- */
+/** ---- Admin message thread (stacked history in the message modal) ---- */
 .msg-thread {
   max-height: 300px;
   overflow-y: auto;

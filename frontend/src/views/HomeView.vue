@@ -161,10 +161,7 @@
           </div>
         </div>
 
-        <!-- ==========================================================
-             Audio hours — audio-segmentation annotators only.
-             Hidden entirely for everyone else (audioStats.enabled === false).
-             ========================================================== -->
+        <!-- ========================================================== -->
         <div v-if="audioStats?.enabled" class="card border-0 shadow-sm rounded-4 mb-5 overflow-hidden hours-card">
           <div class="card-header bg-white border-0 pt-4 px-4 pb-0">
             <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
@@ -462,6 +459,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { loadIdentity, workspacePath } from '@/session'
 import { API_BASE_URL } from '@/config'
 
 const router = useRouter()
@@ -548,8 +546,6 @@ const loadTasks = async () => {
 }
 
 // Audio-segmentation hours for the signed-in annotator. The backend answers
-// { enabled: false } for anyone with no audio-segmentation batch, which keeps the
-// whole panel off other annotators' dashboards.
 const loadAudioStats = async () => {
   if (isAdmin.value) return
   isLoadingAudioStats.value = true
@@ -600,7 +596,6 @@ const dayShare = (d) => {
 }
 
 // 'YYYY-MM-DD' is already an IST calendar date from the backend; format it as a
-// plain date so no browser timezone can shift it back a day.
 const parseDay = (iso) => {
   const [y, m, d] = (iso || '').split('-').map(Number)
   return new Date(y, (m || 1) - 1, d || 1)
@@ -749,7 +744,6 @@ const getButtonText = (status) => {
 }
 
 // Lifecycle
-// ---- Annotator inbox ----
 const loadMessages = async () => {
   if (isAdmin.value) return
   try {
@@ -799,8 +793,19 @@ const notifKind = (cat) => cat === 'nudge' ? 'nudge' : cat === 'broadcast' ? 'br
 const notifIcon = (cat) => cat === 'nudge' ? 'bi-bell-fill' : cat === 'broadcast' ? 'bi-broadcast' : 'bi-chat-left-text-fill'
 const notifLabel = (cat) => cat === 'nudge' ? 'Task reminder' : cat === 'broadcast' ? 'Announcement' : 'Message'
 
-onMounted(() => {
+onMounted(async () => {
   loadUserFromToken()
+
+  // This page is the classic (batch) workspace. An annotator who belongs only to pool-workflow teams is sent to their own workspace instead.
+  if (!isAdmin.value) {
+    const identity = await loadIdentity()
+    const teams = identity.teams || []
+    if (teams.length && !teams.some(t => (t.workflow || 'classic') === 'classic')) {
+      router.replace(teams.length === 1 ? workspacePath(teams[0]) : '/workspaces')
+      return
+    }
+  }
+
   loadTasks()
   if (!isAdmin.value) {
     loadMessages()
@@ -821,7 +826,7 @@ onUnmounted(() => {
   background-color: #f8fafc;
 }
 
-/* Greeting Banner */
+/** Greeting Banner */
 .welcome-banner {
   border-radius: 20px;
   background-color: #1e293b;
@@ -887,7 +892,7 @@ onUnmounted(() => {
   letter-spacing: 0.08em;
 }
 
-/* Stat Cards */
+/** Stat Cards */
 .stat-card {
   border-radius: 16px;
   transition: all 0.25s ease;
@@ -906,7 +911,7 @@ onUnmounted(() => {
   height: 38px;
 }
 
-/* Custom HSL-like and vibrant background colors for language badges */
+/** Custom HSL-like and vibrant background colors for language badges */
 .bg-orange { background-color: #e27c3e !important; }
 .bg-navy { background-color: #1e3a8a !important; }
 .bg-indigo { background-color: #4f46e5 !important; }
@@ -918,7 +923,7 @@ onUnmounted(() => {
 .bg-violet { background-color: #7c3aed !important; }
 .bg-purple { background-color: #9333ea !important; }
 
-/* Filter Controls */
+/** Filter Controls */
 .filter-select {
   border-color: #e2e8f0;
   color: #475569;
@@ -934,7 +939,7 @@ onUnmounted(() => {
   color: #94a3b8;
 }
 
-/* Task Cards */
+/** Task Cards */
 .task-card {
   background-color: white;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -1005,7 +1010,7 @@ onUnmounted(() => {
   color: #854d0e !important;
 }
 
-/* Empty State Card */
+/** Empty State Card */
 .empty-state-card {
   border: 2px dashed #e2e8f0 !important;
   background-color: white;
@@ -1033,10 +1038,9 @@ onUnmounted(() => {
   }
 }
 
-/* Annotator inbox */
+/** Annotator inbox */
 .inbox-card { border: 1px solid rgba(0,0,0,0.04) !important; }
-/* The full history stays available as a scrollable stack instead of an
-   ever-growing card that pushes the task list off screen. */
+/** The full history stays available as a scrollable stack instead of an ever-growing card that push. */
 .inbox-list { max-height: 430px; overflow-y: auto; padding-right: 4px; }
 .inbox-item {
   background-color: #f8fafc;
@@ -1069,7 +1073,7 @@ onUnmounted(() => {
 .min-w-0 { min-width: 0; }
 .fs-9 { font-size: 0.7rem; }
 
-/* ---------- Audio segmentation hours panel ---------- */
+/** ---------- Audio segmentation hours panel ---------- */
 .hours-card { border: 1px solid rgba(15, 23, 42, 0.06) !important; }
 
 .hours-icon {

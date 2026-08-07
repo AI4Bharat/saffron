@@ -172,6 +172,7 @@ const COMPONENTS = {
   'audio-segmentation': AudioSegmentation,
   'benchmark-verification': BenchmarkVerification,
   'benchmark-parallel': BenchmarkVerification,
+  'benchmark-evaluation-v2': BenchmarkVerification,
 }
 
 const currentComponent = computed(() => COMPONENTS[data.value?.test_type] || null)
@@ -181,14 +182,11 @@ const hasVerdict = computed(() =>
   currentAnnotator.value && (currentAnnotator.value.counts.accepted || currentAnnotator.value.counts.rejected))
 
 // Build the item list for the active tab. Blank tab = pristine items; an annotator
-// tab = each item overlaid with that annotator's submitted results + status.
 const testData = computed(() => {
   const items = data.value?.items || []
   const ann = currentAnnotator.value
   return items.map((item) => {
     // The annotator's results overwrite raw_text / spoken_form, so carry the
-    // pristine values alongside — that is what the task component compares
-    // against to show "Edited" and to power its Reset / Compare controls.
     const base = {
       ...item,
       original_raw_text: item.raw_text,

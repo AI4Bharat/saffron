@@ -1,0 +1,5 @@
+# This script is BROKEN and caused data corruption on 2026-07-10.
+# Its regexes used \b (word boundary) and literal TAB/FF, so it prepended
+# stray backslashes (\eta -> \\eta, BSeta -> BS\eta).
+# DO NOT RUN. Corruption was recovered via fix_latex_recovery.py from the
+# Jul-8 db_backup.xlsx snapshot. Kept only for reference.

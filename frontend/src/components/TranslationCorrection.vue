@@ -447,7 +447,6 @@ const vAutoGrow = {
 }
 
 // Focus (and place the caret at the end of) a textarea the moment it mounts, so
-// the click-to-edit fields start editing on the first click.
 const vFocus = {
   mounted(el) {
     el.focus();
@@ -493,8 +492,6 @@ const conversationState = ref([])
 const activeTurnIndex = ref(null)
 
 // Click-to-edit: each field shows rendered math/text until clicked, then becomes a
-// raw textarea; on blur it renders again. Keyed ('pre_scene' | 'post_scene' |
-// 'turn:<idx>') so only one field edits at a time.
 const editingKey = ref(null)
 function startEdit(key, turnIdx = null) {
   editingKey.value = key
@@ -990,7 +987,7 @@ function renderMath(s) {
   line-height: 1.8;
 }
 
-/* Modern color variables */
+/** Modern color variables */
 .bg-indigo-avatar {
   background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
 }
@@ -998,7 +995,7 @@ function renderMath(s) {
   background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%) !important;
 }
 
-/* Speaker Badges */
+/** Speaker Badges */
 .badge-teacher {
   background-color: #e0e7ff;
   color: #4338ca;
@@ -1008,7 +1005,7 @@ function renderMath(s) {
   color: #065f46;
 }
 
-/* Base chat layout */
+/** Base chat layout */
 .chat-container {
   border: 1px solid rgba(0, 0, 0, 0.08);
   background-color: #fff;
@@ -1090,8 +1087,7 @@ function renderMath(s) {
   box-shadow: 0 0 0 3px rgba(216, 102, 27, 0.15) !important;
 }
 
-/* Click-to-edit field: shows rendered math/text, becomes a textarea on click,
-   renders again on blur. Styled to echo the editing textarea so it doesn't jump. */
+/** Click-to-edit field: shows rendered math/text, becomes a textarea on click, renders again on blu. */
 .editable-rendered {
   min-height: 100px;
   padding: 14px 16px;

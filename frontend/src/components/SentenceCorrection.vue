@@ -169,7 +169,6 @@ const vAutoGrow = {
 }
 
 // Focus (and place the caret at the end of) a textarea the moment it mounts, so
-// the click-to-edit field starts editing on the first click.
 const vFocus = {
   mounted(el) {
     el.focus()
@@ -195,7 +194,6 @@ const text = ref('')
 const origText = ref('')
 
 // Click-to-edit: the field shows rendered math/text until clicked, then becomes a
-// raw textarea; on blur it renders again. Keyed so only one field edits at a time.
 const editingKey = ref(null)
 function startEdit(key) { editingKey.value = key }
 function stopEdit() { editingKey.value = null }
@@ -333,8 +331,7 @@ async function handleSkip() {
 .correction-textarea { font-size: 1.1rem; line-height: 1.6; border-radius: 12px; padding: 14px 16px; resize: none; overflow-y: hidden; background-color: #fff; transition: border-color .2s ease, box-shadow .2s ease; min-height: 90px; }
 .correction-textarea:focus { border-color: #d8661b; box-shadow: 0 0 0 3px rgba(216,102,27,0.15) !important; }
 .shadow-inner { box-shadow: inset 0 2px 4px rgba(0,0,0,0.06); }
-/* Click-to-edit field: shows rendered math/text, becomes a textarea on click,
-   renders again on blur. Styled to echo the editing textarea so it doesn't jump. */
+/** Click-to-edit field: shows rendered math/text, becomes a textarea on click, renders again on blu. */
 .editable-rendered {
   min-height: 90px; padding: 14px 16px; border: 2px solid #e2e8f0; border-radius: 12px;
   background-color: #fff; cursor: text; font-size: 1.1rem; line-height: 1.6; color: #0f172a;
