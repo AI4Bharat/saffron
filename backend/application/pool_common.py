@@ -3,7 +3,7 @@
 import os
 from datetime import datetime, timedelta
 
-from flask import request
+from flask import request, Response
 from sqlalchemy import func
 
 from application.models import (
@@ -44,6 +44,15 @@ try:
     TASK_TYPE_LABELS.update(_json.loads(os.environ.get('POOL_TASK_TYPE_LABELS', '{}')))
 except (ValueError, TypeError):
     pass
+
+# The fixed batch sizes a "Get prompts" press offers. There is no ceiling on how many batches an annotator may take; extendable through the environment without a code change.
+try:
+    BATCH_SIZES = [int(x) for x in
+                   os.environ.get('POOL_BATCH_SIZES', '20,30,50').split(',') if x.strip()]
+except ValueError:
+    BATCH_SIZES = []
+if not BATCH_SIZES:
+    BATCH_SIZES = [20, 30, 50]
 
 # The states a pool item can be in, in the order the dashboards read them.
 ITEM_STATUSES = ['available', 'claimed', 'completed', 'flagged']
@@ -95,6 +104,31 @@ def _member(rater, team):
 
 def _current_rater(current_user):
     return Rater.query.filter_by(name=current_user).first()
+
+
+def team_setting(team, key, default=None):
+    """One switch out of the team's settings bag (Team.settings JSON)."""
+    s = getattr(team, 'settings', None) if team is not None else None
+    return s.get(key, default) if isinstance(s, dict) else default
+
+
+def difficulty_required_for(team, task, category):
+    """Whether a prompt in this (language, class, category) slice must carry a difficulty label. Most specific wins: the category override on the task, then the task (= language + class) override, then the team default (on)."""
+    s = getattr(task, 'settings', None) if task is not None else None
+    if isinstance(s, dict):
+        byc = s.get('difficulty_annotation_by_category')
+        if isinstance(byc, dict) and category is not None and byc.get(category) is not None:
+            return bool(byc[category])
+        if s.get('difficulty_annotation') is not None:
+            return bool(s['difficulty_annotation'])
+    return bool(team_setting(team, 'difficulty_annotation', True))
+
+
+def csv_response(buf, filename):
+    """A CSV download that Excel opens with the right encoding: the BOM makes Excel read UTF-8, so Hindi/Tamil/Telugu/... text renders instead of mojibake."""
+    return Response(
+        '\ufeff' + buf.getvalue(), mimetype='text/csv; charset=utf-8',
+        headers={'Content-Disposition': f'attachment; filename={filename}'})
 
 
 def _allowed_languages(member, team):
@@ -194,7 +228,7 @@ def task_category_counts(team_id, task_ids=None):
 
 
 def active_assignments(team_id, task_ids=None):
-    """{task_id: (assignment, rater)} for the tasks that currently have a holder."""
+    """{task_id: [(assignment, rater), ...]} for the tasks that currently have a holder. A task held whole has one entry (category None, listed first); a task split by category has one entry per category."""
     q = (db.session.query(PoolTaskAssignment, Rater)
          .join(PoolTask, PoolTask.id == PoolTaskAssignment.task_id)
          .outerjoin(Rater, Rater.id == PoolTaskAssignment.rater_id)
@@ -204,18 +238,48 @@ def active_assignments(team_id, task_ids=None):
         if not task_ids:
             return {}
         q = q.filter(PoolTaskAssignment.task_id.in_(list(task_ids)))
-    return {a.task_id: (a, r) for a, r in q.all()}
+    out = {}
+    for a, r in q.all():
+        out.setdefault(a.task_id, []).append((a, r))
+    for rows in out.values():
+        rows.sort(key=lambda ar: (ar[0].category is not None, ar[0].category or ''))
+    return out
+
+
+def primary_holder(holder_rows):
+    """(assignment, rater) of the WHOLE-task holder, or (None, None). Category holders never count as 'the' assignee of a task."""
+    for a, r in (holder_rows or []):
+        if a.category is None:
+            return a, r
+    return None, None
+
+
+def allowed_categories(assignments):
+    """None when any assignment covers the whole task (no restriction); otherwise the set of categories these assignments grant."""
+    cats = set()
+    for a in assignments:
+        if a.category is None:
+            return None
+        cats.add(a.category)
+    return cats
 
 
 def assigned_tasks_for(rater_id, team_id):
-    """The tasks this annotator currently holds, oldest assignment first."""
-    return (db.session.query(PoolTask, PoolTaskAssignment)
+    """[(task, [assignments])] this annotator currently holds, oldest first. A task appears once even when they hold several of its categories."""
+    rows = (db.session.query(PoolTask, PoolTaskAssignment)
             .join(PoolTaskAssignment, PoolTaskAssignment.task_id == PoolTask.id)
             .filter(PoolTaskAssignment.rater_id == rater_id,
                     PoolTaskAssignment.is_active == True,          # noqa: E712
                     PoolTask.team_id == team_id,
                     PoolTask.is_active == True)                    # noqa: E712
             .order_by(PoolTaskAssignment.assigned_at, PoolTask.id).all())
+    out, index = [], {}
+    for task, a in rows:
+        if task.id not in index:
+            index[task.id] = len(out)
+            out.append((task, []))
+        out[index[task.id]][1].append(a)
+    return out
 
 
 def assigned_task_ids(rater_id, team_id):
@@ -249,6 +313,7 @@ def serialize_assignee(assignment, rater):
         'name': rater.name if rater else f'Annotator #{assignment.rater_id}',
         'email': rater.email if rater else '',
         'is_active': bool(getattr(rater, 'is_active', True)) if rater else False,
+        'category': assignment.category,        # None = the whole task
         'assigned_by': assignment.assigned_by,
         'assigned_at': assignment.assigned_at.isoformat() if assignment.assigned_at else None,
         'assigned_at_ist': _ist_stamp(assignment.assigned_at),

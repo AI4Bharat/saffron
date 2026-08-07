@@ -410,6 +410,7 @@ def _serialize_team(team):
         'description': team.description,
         'workflow': team.workflow,
         'accent': team.accent,
+        'settings': team.settings if isinstance(team.settings, dict) else {},
         'is_active': bool(team.is_active),
     }
 
@@ -1743,7 +1744,7 @@ def export_tasks_csv(current_user):
     if version:
         fname += f"_v{version}"
     return Response(
-        csv_text, mimetype='text/csv',
+        '\ufeff' + csv_text, mimetype='text/csv; charset=utf-8',
         headers={'Content-Disposition': f'attachment; filename={fname}.csv'}
     )
 
@@ -1774,7 +1775,7 @@ def export_audio_clips_csv(current_user):
     name = 'audio_clips_rejected' if only_rejected else 'audio_clips_all'
     if language:
         name += '_' + re.sub(r'[^A-Za-z0-9_-]', '', language)
-    return Response(csv_text, mimetype='text/csv',
+    return Response('\ufeff' + csv_text, mimetype='text/csv; charset=utf-8',
                     headers={'Content-Disposition': f'attachment; filename={name}.csv'})
 
 
@@ -1799,7 +1800,7 @@ def export_artist_report_csv(current_user):
     if language:
         name += '_' + re.sub(r'[^A-Za-z0-9_-]', '', language)
     return Response(
-        admin_reports.artist_report_csv(stats), mimetype='text/csv',
+        '\ufeff' + admin_reports.artist_report_csv(stats), mimetype='text/csv; charset=utf-8',
         headers={'Content-Disposition': f'attachment; filename={name}.csv'}
     )
 
@@ -1912,7 +1913,7 @@ def export_audio_hours_csv(current_user):
                 round(100.0 * b['seconds'] / b['total_seconds'], 1) if b['total_seconds'] else 0.0,
             ])
 
-    return Response(out.getvalue(), mimetype='text/csv',
+    return Response('\ufeff' + out.getvalue(), mimetype='text/csv; charset=utf-8',
                     headers={'Content-Disposition':
                              f'attachment; filename=audio_hours_last_{days}d.csv'})
 
@@ -1961,7 +1962,7 @@ def export_annotators_csv(current_user):
         fname += f"_to_{request.args.get('to')}"
 
     return Response(
-        csv_text, mimetype='text/csv',
+        '\ufeff' + csv_text, mimetype='text/csv; charset=utf-8',
         headers={'Content-Disposition': f'attachment; filename={fname}.csv'}
     )
 
@@ -2008,7 +2009,7 @@ def export_annotator_batches_csv(current_user):
         fname += f"_to_{request.args.get('to')}"
 
     return Response(
-        csv_text, mimetype='text/csv',
+        '\ufeff' + csv_text, mimetype='text/csv; charset=utf-8',
         headers={'Content-Disposition': f'attachment; filename={fname}.csv'}
     )
 
@@ -2054,7 +2055,7 @@ def export_rater_ratings_csv(current_user, rater_id):
         fname += f"_to_{request.args.get('to')}"
 
     return Response(
-        csv_text, mimetype='text/csv',
+        '\ufeff' + csv_text, mimetype='text/csv; charset=utf-8',
         headers={'Content-Disposition': f'attachment; filename={fname}.csv'}
     )
 
@@ -2097,7 +2098,7 @@ def export_all_ratings_csv(current_user):
         fname += f"_to_{request.args.get('to')}"
 
     return Response(
-        csv_text, mimetype='text/csv',
+        '\ufeff' + csv_text, mimetype='text/csv; charset=utf-8',
         headers={'Content-Disposition': f'attachment; filename={fname}.csv'}
     )
 

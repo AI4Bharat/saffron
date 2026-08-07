@@ -194,8 +194,8 @@
               </div>
             </div>
 
-            <!-- difficulty -->
-            <div class="mt-4">
+            <!-- difficulty (shown only when the admin has difficulty labelling switched on) -->
+            <div v-if="needDifficulty" class="mt-4">
               <label class="form-label small text-uppercase font-bold tracking-wide text-primary mb-2">
                 How hard is this to read aloud?
               </label>
@@ -239,19 +239,19 @@
                   <i class="bi bi-skip-forward-circle-fill"></i> Later
                 </button>
                 <button class="btn btn-success px-5 py-2 rounded-pill d-flex align-items-center gap-2 shadow-sm"
-                        :disabled="saving || !draftDifficulty || !draftText.trim()" @click="submit(false)">
+                        :disabled="saving || !canSubmit" @click="submit(false)">
                   <span v-if="saving" class="spinner-border spinner-border-sm"></span>
                   <i v-else class="bi bi-cloud-arrow-up-fill"></i>
                   {{ saving ? 'Saving…' : (items.length === 1 ? 'Submit & Finish' : 'Submit & Next') }}
                 </button>
               </div>
             </div>
-            <div v-if="!draftDifficulty" class="text-danger text-center small mt-3">
+            <div v-if="needDifficulty && !draftDifficulty" class="text-danger text-center small mt-3">
               <i class="bi bi-exclamation-triangle-fill me-1"></i> Pick a difficulty before submitting.
             </div>
             <div class="text-center text-muted mt-3" style="font-size: 0.78rem;">
-              Shortcuts: <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Enter</kbd> submit &amp; next ·
-              <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> difficulty
+              Shortcuts: <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Enter</kbd> submit &amp; next<template v-if="needDifficulty"> ·
+              <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> difficulty</template>
             </div>
             <div v-if="toast" class="text-center text-success fw-semibold small mt-2">{{ toast }}</div>
           </div>
@@ -293,6 +293,8 @@ const searchQuery = ref('')
 const textBox = ref(null)
 const difficulties = ref(['Easy', 'Medium', 'Hard'])
 const flagReasons = ref([])
+// Whether the admin requires a difficulty label: each item carries its own flag (the admin controls it per language / class / category); the team default is the fallback.
+const teamNeedDifficulty = ref(true)
 const batchTotal = ref(0)
 const doneCount = ref(0)
 let shownAt = Date.now()
@@ -304,6 +306,12 @@ const isTextReview = computed(() =>
 const isRtl = computed(() => rtl(current.value?.language))
 const isModified = computed(() =>
   !!current.value && draftText.value.trim() !== (current.value.original_text || '').trim())
+const needDifficulty = computed(() =>
+  current.value && current.value.need_difficulty !== undefined
+    ? current.value.need_difficulty !== false
+    : teamNeedDifficulty.value)
+const canSubmit = computed(() =>
+  !!draftText.value.trim() && (!needDifficulty.value || !!draftDifficulty.value))
 const progressPct = computed(() =>
   batchTotal.value ? Math.round(100 * doneCount.value / batchTotal.value) : 0)
 
@@ -361,6 +369,7 @@ async function load() {
     items.value = d.items || []
     difficulties.value = s.difficulties || difficulties.value
     flagReasons.value = s.flag_reasons || []
+    teamNeedDifficulty.value = s.difficulty_annotation !== false
     batchTotal.value = items.value.length + (s.completed_today || 0)
     doneCount.value = s.completed_today || 0
     const idx = parseInt(route.query.index, 10)
@@ -381,7 +390,7 @@ async function submit(flagged) {
       body.flag_reason = flagReason.value
     } else {
       body.text = draftText.value
-      body.difficulty = draftDifficulty.value
+      if (draftDifficulty.value) body.difficulty = draftDifficulty.value
     }
     await api('/pool/submit', { method: 'POST', body: JSON.stringify(body) })
     items.value.splice(currentIndex.value, 1)
@@ -400,16 +409,18 @@ async function submit(flagged) {
 function onTextKeydown(e) {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault()
-    if (draftDifficulty.value) submit(false)
+    if (canSubmit.value) submit(false)
   }
 }
 function onGlobalKey(e) {
   const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && draftDifficulty.value) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && canSubmit.value) {
     e.preventDefault(); submit(false); return
   }
   if (typing) return
-  if (['1', '2', '3'].includes(e.key)) draftDifficulty.value = difficulties.value[Number(e.key) - 1]
+  if (needDifficulty.value && ['1', '2', '3'].includes(e.key)) {
+    draftDifficulty.value = difficulties.value[Number(e.key) - 1]
+  }
   else if (e.key === 'ArrowDown') go(1)
   else if (e.key === 'ArrowUp') go(-1)
 }

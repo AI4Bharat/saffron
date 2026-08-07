@@ -160,7 +160,7 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { API_BASE_URL } from '@/config';
 import SaffronLogo from '@/components/SaffronLogo.vue';
-import { session, loadIdentity, setActiveTeam, clearSession,
+import { session, loadIdentity, setActiveTeam, clearSession, api,
          workspacePath, dashboardPath, activeTeam } from '@/session';
 
 console.log('API Base URL:', API_BASE_URL);
@@ -314,6 +314,13 @@ const checkTokenExpiration = () => {
 const logout = async () => {
   try {
     const wasAdmin = isAdmin.value
+    // An annotator's unfinished pool prompts go back to the pool on sign-out, so nothing lingers on their dashboard; everything they submitted stays theirs.
+    if (!wasAdmin) {
+      try {
+        await api('/pool/release', { method: 'POST',
+                                     body: JSON.stringify({ all_teams: true }) })
+      } catch { /* signing out must never be blocked by this */ }
+    }
     clearSession()
     isLoggedIn.value = false
     isAdmin.value = false

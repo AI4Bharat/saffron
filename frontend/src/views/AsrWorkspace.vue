@@ -213,7 +213,7 @@
               </div>
               <div class="col-6 col-lg-2 d-grid">
                 <button class="btn btn-success rounded-pill py-2 d-flex align-items-center justify-content-center gap-2"
-                        :disabled="pulling || !matching || !stats.room" @click="pullWork">
+                        :disabled="pulling || !matching" @click="pullWork">
                   <span v-if="pulling" class="spinner-border spinner-border-sm"></span>
                   <i v-else class="bi bi-download"></i>
                   {{ pulling ? 'Getting…' : 'Get prompts' }}
@@ -221,9 +221,9 @@
               </div>
             </div>
             <p class="text-muted small mb-0 mt-3">
-              <span v-if="!stats.room">You are holding a full queue — finish it, or return a pull below.</span>
-              <span v-else-if="!matching">Nothing left for that combination — try another type or difficulty.</span>
-              <span v-else>You can hold up to {{ stats.pull_size }} prompts at a time ({{ stats.room }} free).</span>
+              <span v-if="!matching">Nothing left for that combination — try another type or difficulty.</span>
+              <span v-else>Prompts come in batches of {{ countOptions.join(', ') }}. Take a batch,
+                annotate it, then take the next — there is no limit on how many batches you can do.</span>
             </p>
 
             <!-- What you are working on -->
@@ -269,8 +269,9 @@
                 </table>
               </div>
               <p class="text-muted fs-9 mt-2 mb-0">
-                <i class="bi bi-clock-history me-1"></i>Anything you do not finish within a day goes
-                back to the pool automatically — everything you already submitted stays yours.
+                <i class="bi bi-clock-history me-1"></i>Anything you do not finish goes back to the
+                pool when you sign out (or after a day on its own) — everything you already
+                submitted stays yours.
               </p>
             </div>
           </div>
@@ -352,6 +353,12 @@
                 </h5>
                 <p class="text-secondary small mb-3 flex-grow-1">
                   Type: <span class="fw-semibold text-dark">{{ task.task_type_label || 'Text review' }}</span><br>
+                  <span v-if="task.assigned_categories" class="d-inline-flex flex-wrap gap-1 my-1">
+                    <span class="text-muted me-1">Your part:</span>
+                    <span v-for="c in task.assigned_categories" :key="c"
+                          class="badge bg-info-subtle text-info-emphasis border border-info-subtle rounded-pill">{{ c }}</span>
+                  </span>
+                  <br v-if="task.assigned_categories">
                   <span class="text-muted">{{ task.total.toLocaleString() }} prompts ·
                     {{ task.available_total.toLocaleString() }} still free to take</span>
                 </p>
@@ -410,7 +417,8 @@
                 </h5>
                 <p class="text-muted small mb-0">
                   Every prompt you submitted, with the original next to your version.
-                  Click a row to see the whole record.
+                  Click a row to see the whole record — and to edit your submission if you
+                  want to change it.
                 </p>
               </div>
               <button class="btn btn-sm btn-outline-secondary rounded-pill px-3" @click="downloadMyWork">
@@ -463,7 +471,7 @@
                     </tr>
                   </thead>
                   <tbody>
-                    <tr v-for="it in myWork" :key="it.id" class="cursor-pointer" @click="workModal = it">
+                    <tr v-for="it in myWork" :key="it.id" class="cursor-pointer" @click="openWork(it)">
                       <td><span class="task-id-badge">#{{ it.task_id }}</span></td>
                       <td class="text-muted">{{ it.id }}</td>
                       <td class="text-muted fs-8">{{ it.category }}</td>
@@ -561,7 +569,31 @@
             <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Original prompt</h6>
             <div class="text-block" :dir="rtl(workModal.language) ? 'rtl' : 'ltr'">{{ workModal.original_text }}</div>
 
-            <template v-if="workModal.is_edited">
+            <!-- ── edit mode: change the submission and save it again ── -->
+            <template v-if="editMode">
+              <h6 class="fw-bold text-uppercase text-muted text-xs mb-2 mt-3">
+                <i class="bi bi-pencil-square me-1"></i>Edit your submission
+              </h6>
+              <textarea v-model="editText" rows="4" class="form-control"
+                        :dir="rtl(workModal.language) ? 'rtl' : 'ltr'" spellcheck="false"></textarea>
+              <div v-if="workModal.need_difficulty !== false" class="d-flex flex-wrap gap-2 mt-3">
+                <button v-for="d in ['Easy', 'Medium', 'Hard']" :key="d" type="button"
+                        class="btn btn-sm rounded-pill px-3"
+                        :class="editDifficulty === d
+                                ? ({ Easy: 'btn-success', Medium: 'btn-warning', Hard: 'btn-danger' }[d])
+                                : 'btn-outline-secondary'"
+                        @click="editDifficulty = d">{{ d }}</button>
+              </div>
+              <p v-if="workModal.is_flagged" class="text-warning small mt-2 mb-0">
+                <i class="bi bi-flag-fill me-1"></i>This prompt is currently flagged — saving an edit
+                will submit it as annotated instead.
+              </p>
+              <p v-if="editError" class="text-danger small mt-2 mb-0">
+                <i class="bi bi-exclamation-circle me-1"></i>{{ editError }}
+              </p>
+            </template>
+
+            <template v-else-if="workModal.is_edited">
               <h6 class="fw-bold text-uppercase text-muted text-xs mb-2 mt-3">Your correction</h6>
               <div class="text-block edited-block" :dir="rtl(workModal.language) ? 'rtl' : 'ltr'">{{ workModal.text }}</div>
             </template>
@@ -593,7 +625,20 @@
             </div>
           </div>
           <div class="work-modal-foot">
-            <button class="btn btn-secondary" @click="workModal = null">Close</button>
+            <template v-if="editMode">
+              <button class="btn btn-outline-secondary me-auto" :disabled="editSaving"
+                      @click="editMode = false">Cancel</button>
+              <button class="btn btn-success" :disabled="editSaving || !canSaveEdit" @click="saveEdit">
+                <span v-if="editSaving" class="spinner-border spinner-border-sm me-1"></span>
+                <i v-else class="bi bi-cloud-arrow-up-fill me-1"></i>Save changes
+              </button>
+            </template>
+            <template v-else>
+              <button class="btn btn-outline-primary me-auto" @click="startEdit">
+                <i class="bi bi-pencil-square me-1"></i>Edit
+              </button>
+              <button class="btn btn-secondary" @click="workModal = null">Close</button>
+            </template>
           </div>
         </div>
       </div>
@@ -625,7 +670,7 @@ const openTree = reactive({})
 const pullPanel = ref(null)
 
 const pulling = ref(false)
-const pick = ref({ task_id: null, category: '', difficulty: '', count: 25 })
+const pick = ref({ task_id: null, category: '', difficulty: '', count: 20 })
 
 // Annotator inbox (admin -> annotator messages), same as the TTS workspace
 const messages = ref([])
@@ -726,16 +771,12 @@ const matching = computed(() => {
   return c.by_difficulty.find(d => d.difficulty === pick.value.difficulty)?.available || 0
 })
 
-const countOptions = computed(() => {
-  const cap = Math.min(stats.value.room || 0, matching.value || 0)
-  const steps = [10, 25, 50, 100, 200].filter(n => n <= cap)
-  if (cap && !steps.includes(cap)) steps.push(cap)
-  return steps
-})
+/** Prompts are handed out in fixed batches; take a batch, finish it, take the next — there is no ceiling on how many batches you may take. */
+const countOptions = computed(() => stats.value.batch_sizes || [20, 30, 50])
 
 function fitCount() {
   const opts = countOptions.value
-  if (!opts.includes(pick.value.count)) pick.value.count = opts[opts.length - 1] || 1
+  if (!opts.includes(pick.value.count)) pick.value.count = opts[0] || 20
 }
 function onTaskChange() {
   pick.value.category = ''
@@ -791,7 +832,8 @@ function diffBadge(d) {
 
 // ---- data ----
 async function refresh() {
-  isLoading.value = true
+  // The full-page spinner only on the very first load; later refreshes swap the numbers in place so the screen never flickers.
+  isLoading.value = tasks.value.length === 0
   error.value = ''
   try {
     const [w, t] = await Promise.all([
@@ -800,7 +842,8 @@ async function refresh() {
     ])
     tasks.value = w.tasks || []
     pulls.value = w.pulls || []
-    stats.value = { ...w.stats, team_name: w.team?.name }
+    stats.value = { ...w.stats, team_name: w.team?.name,
+                    batch_sizes: w.batch_sizes || [20, 30, 50] }
     tree.value = t
     if (!currentTask.value) {
       const first = tasks.value.find(x => x.available_total > 0) || tasks.value[0]
@@ -880,6 +923,49 @@ function resetWorkFilters() {
   Object.keys(workFilters).forEach(k => { workFilters[k] = '' })
   workFilters.state = 'submitted'
   loadMyWork(1)
+}
+
+// ---- editing a submission (submitted work always stays with the annotator, and it stays editable) ----
+const editMode = ref(false)
+const editText = ref('')
+const editDifficulty = ref('')
+const editSaving = ref(false)
+const editError = ref('')
+
+function openWork(it) {
+  workModal.value = it
+  editMode.value = false
+  editError.value = ''
+}
+
+function startEdit() {
+  editText.value = workModal.value.text || ''
+  editDifficulty.value = workModal.value.final_difficulty || ''
+  editError.value = ''
+  editMode.value = true
+}
+
+const canSaveEdit = computed(() =>
+  !!editText.value.trim()
+  && (workModal.value?.need_difficulty === false || !!editDifficulty.value))
+
+async function saveEdit() {
+  if (!canSaveEdit.value || editSaving.value) return
+  editSaving.value = true
+  editError.value = ''
+  try {
+    const body = { item_id: workModal.value.id, text: editText.value }
+    if (editDifficulty.value) body.difficulty = editDifficulty.value
+    const r = await api('/pool/submit', { method: 'POST', body: JSON.stringify(body) })
+    // keep fields the submit response does not know about (need_difficulty, task_label)
+    workModal.value = { ...workModal.value, ...r.item }
+    editMode.value = false
+    loadMyWork(workPage.value)
+  } catch (e) {
+    editError.value = e.message
+  } finally {
+    editSaving.value = false
+  }
 }
 
 async function downloadMyWork() {

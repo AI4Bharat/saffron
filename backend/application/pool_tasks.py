@@ -4,7 +4,7 @@ import csv
 import io
 from datetime import datetime, timedelta
 
-from flask import current_app as app, jsonify, request, Response
+from flask import current_app as app, jsonify, request
 from sqlalchemy import func
 
 from application.models import (
@@ -13,10 +13,11 @@ from application.models import (
 from application.views import token_required, _rater_in_scope, _serialize_team, ORG_NAME
 from application.pool_api import _admin_pool_team
 from application.pool_common import (
-    DIFFICULTIES, FLAG_REASONS, ITEM_STATUSES, STALE_CLAIM_HOURS,
+    BATCH_SIZES, DIFFICULTIES, FLAG_REASONS, ITEM_STATUSES, STALE_CLAIM_HOURS,
     _ist_day, _today_ist, _ist_stamp,
     _pool_team, _member, _current_rater, _serialize_item, _blank_counts, _with_progress,
     task_counts, task_category_counts, active_assignments, assigned_tasks_for,
+    primary_holder, allowed_categories, team_setting, difficulty_required_for, csv_response,
     serialize_task, serialize_assignee, serialize_pull, pull_counts,
     release_pull_items, close_finished_pulls, release_stale_claims,
     my_work_by_task_type,
@@ -76,15 +77,16 @@ def pool_admin_tasks(current_user):
         task_types.add(getattr(t, 'task_type', None) or 'text-review')
 
         c = counts.get(t.id) or _with_progress(_blank_counts())
-        assignment, holder = holders.get(t.id, (None, None))
-        assignee = serialize_assignee(assignment, holder)
-        state = _task_state(c, assignee is not None)
+        holder_rows = holders.get(t.id, [])
+        assignees = [serialize_assignee(a, r) for a, r in holder_rows]
+        whole = serialize_assignee(*primary_holder(holder_rows))
+        state = _task_state(c, bool(assignees))
 
         # team-wide totals are computed before filtering, so the header numbers describe the pool rather than the current view
         totals['tasks'] += 1
         for k in ITEM_STATUSES + ['total']:
             totals[k] += c[k]
-        totals['assigned' if assignee else 'unassigned'] += 1
+        totals['assigned' if assignees else 'unassigned'] += 1
         if state == 'complete':
             totals['complete'] += 1
         elif state == 'in-progress':
@@ -100,20 +102,23 @@ def pool_admin_tasks(current_user):
             continue
         if f_annotator:
             if f_annotator == 'none':
-                if assignee:
+                if assignees:
                     continue
-            elif not assignee or str(assignee['rater_id']) != f_annotator:
+            elif not any(str(a['rater_id']) == f_annotator for a in assignees):
                 continue
         if search:
             hay = f"{t.id} {t.language} {t.class_label or ''} " \
-                  f"{assignee['name'] if assignee else ''}".lower()
+                  f"{' '.join(a['name'] for a in assignees)}".lower()
             if search not in hay:
                 continue
 
-        row = serialize_task(t, c, assignee,
+        row = serialize_task(t, c, whole,
                              sorted(categories.get(t.id, {}).values(),
                                     key=lambda x: x['category']) if want_categories else None)
+        row['assignees'] = assignees
         row['state'] = state
+        # Whether prompts of this task need a difficulty label (the admin's on/off toggle).
+        row['difficulty_annotation'] = difficulty_required_for(team, t, None)
         rows.append(row)
 
     _with_progress(totals)
@@ -143,7 +148,8 @@ def pool_admin_task(current_user, task_id):
     counts = task_counts(team.id, [task.id]).get(task.id) or _with_progress(_blank_counts())
     cats = sorted(task_category_counts(team.id, [task.id]).get(task.id, {}).values(),
                   key=lambda c: c['category'])
-    assignment, holder = active_assignments(team.id, [task.id]).get(task.id, (None, None))
+    holder_rows = active_assignments(team.id, [task.id]).get(task.id, [])
+    assignment, holder = primary_holder(holder_rows)
 
     # everyone who has ever held or worked this task
     people = {}
@@ -187,6 +193,8 @@ def pool_admin_task(current_user, task_id):
                for a in PoolTaskAssignment.query.filter_by(task_id=task.id)
                .order_by(PoolTaskAssignment.assigned_at.desc()).limit(50).all()]
 
+    assignees = [serialize_assignee(a, r) for a, r in holder_rows]
+
     recent_items = PoolItem.query.filter(
         PoolItem.task_id == task.id, PoolItem.completed_at.isnot(None)
     ).order_by(PoolItem.completed_at.desc()).limit(25).all()
@@ -196,9 +204,22 @@ def pool_admin_task(current_user, task_id):
     recent = [dict(_serialize_item(it), annotator=recent_names.get(it.completed_by, ''))
               for it in recent_items]
 
+    # The difficulty-labelling switch at every granularity this task covers: the team default, this task's (language+class) override, and per-category overrides -- plus the resolved value per category so the UI needs no logic.
+    s = task.settings if isinstance(task.settings, dict) else {}
+    difficulty_settings = {
+        'team_default': bool(team_setting(team, 'difficulty_annotation', True)),
+        'task': s.get('difficulty_annotation'),
+        'by_category': s.get('difficulty_annotation_by_category') or {},
+        'effective_by_category': {
+            c['category']: difficulty_required_for(team, task, c['category'])
+            for c in cats},
+    }
+
     return jsonify({
         'task': dict(serialize_task(task, counts, serialize_assignee(assignment, holder), cats),
-                     state=_task_state(counts, assignment is not None)),
+                     assignees=assignees,
+                     difficulty_settings=difficulty_settings,
+                     state=_task_state(counts, bool(holder_rows))),
         'annotators': annotators,
         'pulls': pull_rows,
         'assignment_history': history,
@@ -206,12 +227,26 @@ def pool_admin_task(current_user, task_id):
     }), 200
 
 
-# Admin: assignment (one task, one annotator)
+# Admin: assignment (one task or one category of it, one annotator)
+
+def _grant(tid, rater_id, category, admin, now):
+    """Activate (or reactivate) one (task, rater, category) assignment row."""
+    previous = PoolTaskAssignment.query.filter_by(
+        task_id=tid, rater_id=rater_id, category=category).first()
+    if previous is not None:
+        previous.is_active = True
+        previous.revoked_at = None
+        previous.assigned_at = now
+        previous.assigned_by = admin
+    else:
+        db.session.add(PoolTaskAssignment(task_id=tid, rater_id=rater_id, category=category,
+                                          assigned_by=admin, assigned_at=now))
+
 
 @app.route('/api/pool/admin/tasks/assign', methods=['POST'])
 @token_required
 def pool_admin_tasks_assign(current_user):
-    """Hand one or more whole tasks to ONE annotator."""
+    """Hand one or more whole tasks -- or one CATEGORY inside them -- to ONE annotator."""
     team, err = _admin_pool_team(current_user)
     if err:
         return err
@@ -235,6 +270,7 @@ def pool_admin_tasks_assign(current_user):
         return jsonify({'message': 'Task ids must be numbers.'}), 400
     if not ids:
         return jsonify({'message': 'Pick at least one task to assign.'}), 400
+    category = (data.get('category') or '').strip().lower() or None
 
     tasks = {t.id: t for t in PoolTask.query.filter(
         PoolTask.id.in_(ids), PoolTask.team_id == team.id).all()}
@@ -243,16 +279,40 @@ def pool_admin_tasks_assign(current_user):
         return jsonify({'message': f"Task(s) {', '.join(map(str, missing))} are not in "
                                    f"{team.name}."}), 404
 
+    # A category assignment must name a category the task actually contains.
+    if category:
+        for tid in ids:
+            has = db.session.query(PoolItem.id).filter(
+                PoolItem.task_id == tid, PoolItem.category == category).first()
+            if has is None:
+                return jsonify({'message': f"Task #{tid} has no '{category}' prompts."}), 400
+
     reassign = bool(data.get('reassign'))
     holders = active_assignments(team.id, ids)
     blocked = []
     for tid in ids:
-        assignment, holder = holders.get(tid, (None, None))
-        if assignment and assignment.rater_id != rater.id and not reassign:
-            blocked.append(f"#{tid} ({holder.name if holder else 'someone else'})")
+        rows = holders.get(tid, [])
+        whole_a, whole_r = primary_holder(rows)
+        if category is None:
+            # Whole-task assign: anyone else holding any slice of it is in the way.
+            others = [(a, r) for a, r in rows if a.rater_id != rater.id]
+            if others and not reassign:
+                names = sorted({(r.name if r else 'someone else') for _a, r in others})
+                blocked.append(f"#{tid} ({', '.join(names)})")
+        else:
+            if whole_a is not None and whole_a.rater_id != rater.id:
+                # Splitting a whole assignment out from under its holder is never implicit.
+                return jsonify({'message':
+                                f"Task #{tid} is assigned whole to "
+                                f"{whole_r.name if whole_r else 'another annotator'}. "
+                                "Take the task back first, then assign its categories."}), 409
+            cat_row = next(((a, r) for a, r in rows if a.category == category), None)
+            if cat_row and cat_row[0].rater_id != rater.id and not reassign:
+                blocked.append(f"#{tid} · {category} "
+                               f"({cat_row[1].name if cat_row[1] else 'someone else'})")
     if blocked:
         return jsonify({
-            'message': 'One task can only ever belong to one annotator. Already taken: '
+            'message': 'A task (or category) can only belong to one annotator. Already taken: '
                        + ', '.join(blocked) + '.',
             'blocked': blocked,
         }), 409
@@ -261,23 +321,32 @@ def pool_admin_tasks_assign(current_user):
     now = datetime.utcnow()
     try:
         for tid in ids:
-            assignment, holder = holders.get(tid, (None, None))
-            if assignment and assignment.rater_id == rater.id:
-                continue                                  # already theirs
-            if assignment:
-                assignment.is_active = False
-                assignment.revoked_at = now
-                moved.append(f"#{tid} from {holder.name if holder else 'previous holder'}")
-            # An earlier, revoked row for the same pair is reactivated rather than duplicated -- the (task, rater) pair is unique.
-            previous = PoolTaskAssignment.query.filter_by(task_id=tid, rater_id=rater.id).first()
-            if previous is not None:
-                previous.is_active = True
-                previous.revoked_at = None
-                previous.assigned_at = now
-                previous.assigned_by = current_user
+            rows = holders.get(tid, [])
+            whole_a, whole_r = primary_holder(rows)
+            if category is None:
+                if whole_a is not None and whole_a.rater_id == rater.id:
+                    continue                              # already theirs, whole
+                for a, r in rows:                          # clear every other slice
+                    if a.rater_id == rater.id and a.category is None:
+                        continue
+                    a.is_active = False
+                    a.revoked_at = now
+                    if a.rater_id != rater.id:
+                        moved.append(f"#{tid}" + (f' · {a.category}' if a.category else '')
+                                     + f" from {r.name if r else 'previous holder'}")
+                _grant(tid, rater.id, None, current_user, now)
             else:
-                db.session.add(PoolTaskAssignment(task_id=tid, rater_id=rater.id,
-                                                  assigned_by=current_user, assigned_at=now))
+                if whole_a is not None and whole_a.rater_id == rater.id:
+                    continue                              # whole task already covers it
+                cat_row = next(((a, r) for a, r in rows if a.category == category), None)
+                if cat_row and cat_row[0].rater_id == rater.id:
+                    continue                              # this category already theirs
+                if cat_row:
+                    cat_row[0].is_active = False
+                    cat_row[0].revoked_at = now
+                    moved.append(f"#{tid} · {category} from "
+                                 f"{cat_row[1].name if cat_row[1] else 'previous holder'}")
+                _grant(tid, rater.id, category, current_user, now)
             assigned.append(tid)
         db.session.commit()
     except Exception as e:
@@ -285,10 +354,11 @@ def pool_admin_tasks_assign(current_user):
         app.logger.error(f"pool_admin_tasks_assign failed: {e}")
         return jsonify({'message': 'Could not save that assignment. Please try again.'}), 500
 
+    what = f"category '{category}' of " if category else ''
     if not assigned:
-        return jsonify({'message': f'{rater.name} already holds those task(s).',
+        return jsonify({'message': f'{rater.name} already holds {what}those task(s).',
                         'assigned': []}), 200
-    msg = f"{len(assigned)} task(s) assigned to {rater.name}."
+    msg = f"{what.capitalize() if category else ''}{len(assigned)} task(s) assigned to {rater.name}."
     if moved:
         msg += ' Taken over: ' + ', '.join(moved) + '.'
     return jsonify({'message': msg, 'assigned': assigned}), 200
@@ -311,10 +381,12 @@ def pool_admin_tasks_unassign(current_user):
     rater_id = data.get('rater_id')
     if ids is None and not rater_id:
         return jsonify({'message': 'Say which task(s), or which annotator, to unassign.'}), 400
+    category = (data.get('category') or '').strip().lower() or None
 
     holders = active_assignments(team.id, ids)
-    targets = [(tid, a) for tid, (a, _) in holders.items()
-               if rater_id is None or a.rater_id == int(rater_id)]
+    targets = [(tid, a) for tid, rows in holders.items() for a, _r in rows
+               if (rater_id is None or a.rater_id == int(rater_id))
+               and (category is None or a.category == category)]
     if not targets:
         return jsonify({'message': 'Nothing to unassign.', 'unassigned': 0}), 200
 
@@ -322,8 +394,11 @@ def pool_admin_tasks_unassign(current_user):
     if data.get('return_claimed'):
         touched = set()
         for tid, a in targets:
-            for it in PoolItem.query.filter_by(task_id=tid, claimed_by=a.rater_id,
-                                               status='claimed').all():
+            q = PoolItem.query.filter_by(task_id=tid, claimed_by=a.rater_id,
+                                         status='claimed')
+            if a.category is not None:
+                q = q.filter(PoolItem.category == a.category)
+            for it in q.all():
                 it.status, it.claimed_by, it.claimed_at, it.pull_id = 'available', None, None, None
                 touched.add(a.rater_id)
                 freed += 1
@@ -349,6 +424,61 @@ def pool_admin_tasks_unassign(current_user):
     return jsonify({'message': msg, 'unassigned': n, 'released': freed}), 200
 
 
+@app.route('/api/pool/admin/tasks/settings', methods=['POST'])
+@token_required
+def pool_admin_task_settings(current_user):
+    """Set the difficulty-labelling switch for a slice of the pool: one or more tasks (= a language + class each; pass every task of a language for a language-wide change), optionally narrowed to ONE category. difficulty_annotation: true / false / null (null clears the override so the level above decides)."""
+    team, err = _admin_pool_team(current_user)
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+
+    ids = data.get('task_ids') or ([data['task_id']] if data.get('task_id') else [])
+    try:
+        ids = [int(i) for i in ids]
+    except (TypeError, ValueError):
+        return jsonify({'message': 'Task ids must be numbers.'}), 400
+    if not ids:
+        return jsonify({'message': 'Pick at least one task.'}), 400
+    if 'difficulty_annotation' not in data:
+        return jsonify({'message': 'Say what to set difficulty_annotation to.'}), 400
+    value = data['difficulty_annotation']
+    if value is not None:
+        value = bool(value)
+    category = (data.get('category') or '').strip().lower() or None
+
+    tasks = PoolTask.query.filter(PoolTask.id.in_(ids), PoolTask.team_id == team.id).all()
+    if len(tasks) != len(set(ids)):
+        return jsonify({'message': 'Some of those tasks are not in this team.'}), 404
+
+    for task in tasks:
+        s = dict(task.settings) if isinstance(task.settings, dict) else {}
+        if category:
+            byc = dict(s.get('difficulty_annotation_by_category') or {})
+            if value is None:
+                byc.pop(category, None)
+            else:
+                byc[category] = value
+            s['difficulty_annotation_by_category'] = byc
+        else:
+            if value is None:
+                s.pop('difficulty_annotation', None)
+            else:
+                s['difficulty_annotation'] = value
+        task.settings = s
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"pool_admin_task_settings failed: {e}")
+        return jsonify({'message': 'Could not save that setting.'}), 500
+
+    where = f"category '{category}' of " if category else ''
+    state = 'follows the level above' if value is None else ('ON' if value else 'OFF')
+    return jsonify({'message': f'Difficulty labelling for {where}{len(tasks)} task(s) '
+                               f'now {state}.'}), 200
+
+
 @app.route('/api/pool/admin/tasks/assignable', methods=['GET'])
 @token_required
 def pool_admin_tasks_assignable(current_user):
@@ -362,10 +492,17 @@ def pool_admin_tasks_assignable(current_user):
         Rater.id.in_([m.rater_id for m in members])).all()} if members else {}
     holders = active_assignments(team.id)
     counts = task_counts(team.id)
+    # The real (non-null) category names per task -- what a category assignment can target.
+    cat_names = {}
+    for tid, c in db.session.query(PoolItem.task_id, PoolItem.category).filter(
+            PoolItem.team_id == team.id, PoolItem.task_id.isnot(None),
+            PoolItem.category.isnot(None)).distinct().all():
+        cat_names.setdefault(tid, set()).add(c)
 
     held_by = {}
-    for tid, (a, _r) in holders.items():
-        held_by[a.rater_id] = held_by.get(a.rater_id, 0) + 1
+    for rows in holders.values():
+        for a, _r in rows:
+            held_by[a.rater_id] = held_by.get(a.rater_id, 0) + 1
 
     annotators = []
     for m in members:
@@ -381,8 +518,12 @@ def pool_admin_tasks_assignable(current_user):
     tasks = []
     for t in _sorted_tasks(PoolTask.query.filter_by(team_id=team.id, is_active=True).all()):
         c = counts.get(t.id) or _with_progress(_blank_counts())
-        assignment, holder = holders.get(t.id, (None, None))
-        tasks.append(serialize_task(t, c, serialize_assignee(assignment, holder)))
+        rows = holders.get(t.id, [])
+        row = serialize_task(t, c, serialize_assignee(*primary_holder(rows)))
+        row['assignees'] = [serialize_assignee(a, r) for a, r in rows]
+        # The dialog offers these when the admin assigns one category instead of the whole task.
+        row['category_names'] = sorted(cat_names.get(t.id, set()))
+        tasks.append(row)
 
     return jsonify({'annotators': annotators, 'tasks': tasks}), 200
 
@@ -562,9 +703,7 @@ def pool_export_submissions_csv(current_user):
         ])
 
     stamp = datetime.utcnow().strftime('%Y%m%d')
-    return Response(
-        buf.getvalue(), mimetype='text/csv',
-        headers={'Content-Disposition': f'attachment; filename=asr_submissions_{stamp}.csv'})
+    return csv_response(buf, f'asr_submissions_{stamp}.csv')
 
 
 # Annotator: my tasks, my pulls, my tree
@@ -586,14 +725,18 @@ def pool_my_workspace(current_user):
 
     pairs = assigned_tasks_for(rater.id, team.id)
     task_ids = [t.id for t, _ in pairs]
+    # None = the whole task is theirs; otherwise only these categories are.
+    my_cats = {t.id: allowed_categories(assignments) for t, assignments in pairs}
 
-    # --- what is still free in each of my tasks, per category and difficulty ---
+    # --- what is still free in each of my tasks, per category and difficulty (counted only inside the categories this annotator was actually given) ---
     free_cat, free_diff = {}, {}
     if task_ids:
         for tid, cat, cnt in db.session.query(
             PoolItem.task_id, PoolItem.category, func.count(PoolItem.id)
         ).filter(PoolItem.task_id.in_(task_ids), PoolItem.status == 'available'
                  ).group_by(PoolItem.task_id, PoolItem.category).all():
+            if my_cats.get(tid) is not None and cat not in my_cats[tid]:
+                continue
             free_cat.setdefault(tid, {})[cat or 'other'] = cnt
         for tid, cat, diff, cnt in db.session.query(
             PoolItem.task_id, PoolItem.category, PoolItem.source_difficulty,
@@ -601,6 +744,8 @@ def pool_my_workspace(current_user):
         ).filter(PoolItem.task_id.in_(task_ids), PoolItem.status == 'available'
                  ).group_by(PoolItem.task_id, PoolItem.category,
                             PoolItem.source_difficulty).all():
+            if my_cats.get(tid) is not None and cat not in my_cats[tid]:
+                continue
             free_diff.setdefault(tid, {}).setdefault(cat or 'other', {})[diff or 'Unset'] = cnt
 
     # --- my own numbers inside each task ---
@@ -620,12 +765,16 @@ def pool_my_workspace(current_user):
     overall = task_counts(team.id, task_ids)
 
     tasks = []
-    for task, assignment in pairs:
+    for task, assignments in pairs:
+        first = min(assignments, key=lambda a: a.assigned_at or datetime.utcnow())
         cats = free_cat.get(task.id, {})
         tasks.append({
             **serialize_task(task, overall.get(task.id) or _blank_counts()),
-            'assigned_at_ist': _ist_stamp(assignment.assigned_at),
-            'assigned_by': assignment.assigned_by,
+            'assigned_at_ist': _ist_stamp(first.assigned_at),
+            'assigned_by': first.assigned_by,
+            # None = the whole task; a list = only these categories are theirs.
+            'assigned_categories': (sorted(my_cats[task.id])
+                                    if my_cats.get(task.id) is not None else None),
             'available_total': sum(cats.values()),
             'available_by_category': [
                 {'category': c, 'available': n,
@@ -673,10 +822,11 @@ def pool_my_workspace(current_user):
             'completed_today': today,
             'completed_total': done_total,
             'available_total': sum(t['available_total'] for t in tasks),
-            'pull_size': member.pull_size,
-            'room': max(0, member.pull_size - outstanding),
             'by_task_type': by_task_type,
         },
+        # Prompts are handed out in fixed batches; there is no ceiling on how many batches an annotator may take.
+        'batch_sizes': BATCH_SIZES,
+        'difficulty_annotation': bool(team_setting(team, 'difficulty_annotation', True)),
         'stale_claim_hours': STALE_CLAIM_HOURS,
         'difficulties': DIFFICULTIES,
         'flag_reasons': FLAG_REASONS,
@@ -779,6 +929,8 @@ def pool_my_submissions(current_user):
         d['difficulty_changed'] = bool(
             it.final_difficulty and it.source_difficulty
             and it.final_difficulty != it.source_difficulty)
+        # Whether an edit of this submission must carry a difficulty label (the admin's per-slice toggle).
+        d['need_difficulty'] = difficulty_required_for(team, tasks.get(it.task_id), it.category)
         rows.append(d)
 
     return jsonify({'items': rows, 'total': total, 'page': page, 'per_page': per_page,
@@ -817,9 +969,7 @@ def pool_my_export_submissions(current_user):
                     round((it.time_taken_ms or 0) / 1000.0, 1)])
 
     stamp = datetime.utcnow().strftime('%Y%m%d')
-    return Response(buf.getvalue(), mimetype='text/csv',
-                    headers={'Content-Disposition':
-                             f'attachment; filename=my_asr_work_{stamp}.csv'})
+    return csv_response(buf, f'my_asr_work_{stamp}.csv')
 
 
 @app.route('/api/pool/my/pull/<pull_id>', methods=['DELETE'])

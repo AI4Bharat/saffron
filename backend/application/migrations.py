@@ -38,11 +38,12 @@ POOL_INDEXES = [
     ("ix_test_team", "test(team_id)"),
 ]
 
-# One task, one annotator: a second ACTIVE assignment of the same task cannot be written at all, so two annotators can never be pulling from the same task. (The WHERE clause differs per dialect: SQLite stores booleans as 0/1, PostgreSQL as true booleans.)
+# One slice, one annotator: a second ACTIVE assignment of the same (task, category) slice cannot be written at all, so two annotators can never be handed the same prompts. category NULL (= the whole task) collapses to '' so whole-task rows collide with each other too. (The WHERE clause differs per dialect: SQLite stores booleans as 0/1, PostgreSQL as true booleans.)
 def _unique_indexes():
     active = "is_active = 1" if db.engine.dialect.name == 'sqlite' else "is_active"
     return [
-        ("uq_pool_task_active_assignee", f"pool_task_assignment(task_id) WHERE {active}"),
+        ("uq_pool_task_active_slice",
+         f"pool_task_assignment(task_id, COALESCE(category, '')) WHERE {active}"),
     ]
 
 
@@ -161,6 +162,33 @@ def _upgrade_pool_task_unique():
             conn.exec_driver_sql("PRAGMA foreign_keys=ON")
         finally:
             conn.close()
+
+
+def _upgrade_assignment_uniques():
+    """Category-level assignment: pool_task_assignment.category arrives alongside two constraint changes -- (task_id, rater_id) widens to (task_id, rater_id, category), and the one-active-holder-per-task index becomes one-active-holder-per-(task, category) slice. PostgreSQL (the live engine) gets both changes in place; on SQLite the retired table-level UNIQUE cannot be dropped without a rebuild, so only the partial index is swapped there."""
+    if not _table_exists('pool_task_assignment'):
+        return
+    # The old one-holder-per-task partial index blocks category assignments outright.
+    try:
+        db.session.execute(text("DROP INDEX IF EXISTS uq_pool_task_active_assignee"))
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        _log(f"drop of uq_pool_task_active_assignee skipped ({e})")
+    if db.engine.dialect.name == 'postgresql':
+        # The (task_id, rater_id) unique constraint would stop one annotator holding two categories of the same task.
+        try:
+            db.session.execute(text(
+                "ALTER TABLE pool_task_assignment "
+                "DROP CONSTRAINT IF EXISTS uq_pool_task_assignment"))
+            db.session.commit()
+            _log("pool_task_assignment: unique constraint widened for categories")
+        except Exception as e:
+            db.session.rollback()
+            _log(f"uq_pool_task_assignment drop skipped ({e})")
+        _ensure_index("uq_pool_task_assignment_slice",
+                      "pool_task_assignment(task_id, rater_id, COALESCE(category, ''))",
+                      unique=True)
 
 
 def seed_teams():
@@ -380,7 +408,11 @@ def run_migrations():
     _add_column('pool_item', 'task_type', "VARCHAR(64) DEFAULT 'text-review'")
     _add_column('pool_item', 'task_id', 'INTEGER')
     _add_column('pool_task', 'task_type', "VARCHAR(64) NOT NULL DEFAULT 'text-review'")
+    _add_column('pool_task_assignment', 'category', 'VARCHAR(64)')
+    _add_column('team', 'settings', 'JSON')
+    _add_column('pool_task', 'settings', 'JSON')
     _upgrade_pool_task_unique()
+    _upgrade_assignment_uniques()
     backfill_denormalised()
 
     # 3. Indexes for the pool workflow and team scoping.

@@ -181,7 +181,7 @@
 
       <!-- ══════════════════ TASKS ══════════════════ -->
       <div v-else-if="tab === 'tasks'" class="tab-pane-active">
-        <div class="d-flex justify-content-center mb-4">
+        <div class="d-flex justify-content-center align-items-center gap-3 flex-wrap mb-4">
           <div class="tasks-subnav d-inline-flex align-items-center">
             <button type="button" @click="tasksSubTab = 'overview'"
                     :class="['subnav-btn', { active: tasksSubTab === 'overview' }]">
@@ -193,6 +193,13 @@
               <span class="subnav-badge">{{ shownTasks.length }}</span>
             </button>
           </div>
+          <button class="btn btn-sm d-inline-flex align-items-center gap-1"
+                  :class="teamSettings.difficulty_annotation !== false ? 'btn-outline-success' : 'btn-outline-secondary'"
+                  :disabled="savingSetting" :title="'Whether annotators must label difficulty on every prompt'"
+                  @click="toggleDifficultySetting">
+            <i class="bi" :class="teamSettings.difficulty_annotation !== false ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
+            Difficulty labels (team default): {{ teamSettings.difficulty_annotation !== false ? 'On' : 'Off' }}
+          </button>
         </div>
 
         <div v-if="tasksLoading" class="text-center py-5"><span class="spinner-border text-secondary"></span></div>
@@ -268,6 +275,22 @@
                 </button>
 
                 <div v-if="expanded[L.language]" class="bg-light border-top p-3">
+                  <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                    <button class="btn btn-sm btn-outline-primary"
+                            @click="openAssign(L.tasks.map(t => t.task_id))">
+                      <i class="bi bi-person-plus me-1"></i>
+                      Assign all of {{ L.language }} ({{ L.tasks.length }} task(s))
+                    </button>
+                    <div class="ms-auto d-flex align-items-center gap-2">
+                      <span class="text-xs text-muted">Difficulty labels for {{ L.language }}:</span>
+                      <button class="btn btn-sm d-inline-flex align-items-center gap-1"
+                              :class="langDiffOn(L) ? 'btn-outline-success' : 'btn-outline-secondary'"
+                              @click="setDifficulty(L.tasks.map(t => t.task_id), '', !langDiffOn(L))">
+                        <i class="bi" :class="langDiffOn(L) ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
+                        {{ langDiffOn(L) ? 'On' : 'Off' }}
+                      </button>
+                    </div>
+                  </div>
                   <div class="table-responsive bg-white rounded border">
                     <table class="table table-sm table-hover align-middle mb-0">
                       <thead class="table-light">
@@ -276,7 +299,8 @@
                           <th>Assigned to</th><th>State</th>
                           <th class="text-end">Prompts</th><th class="text-end">Completed</th>
                           <th class="text-end">In progress</th><th class="text-end">Available</th>
-                          <th style="width:160px">Progress</th><th style="width:150px"></th>
+                          <th style="width:160px">Progress</th><th style="width:105px">Difficulty</th>
+                          <th style="width:150px"></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -285,6 +309,12 @@
                           <td class="fw-semibold">Class {{ t.class }}</td>
                           <td>
                             <span v-if="t.assignee" class="text-dark text-xs">{{ t.assignee.name }}</span>
+                            <span v-else-if="t.assignees && t.assignees.length" class="d-inline-flex flex-wrap gap-1">
+                              <span v-for="a in t.assignees" :key="a.rater_id + '-' + (a.category || '')"
+                                    class="badge bg-info-subtle text-info-emphasis rounded-pill">
+                                {{ a.name }}<template v-if="a.category"> · {{ a.category }}</template>
+                              </span>
+                            </span>
                             <span v-else class="badge bg-danger-subtle text-danger rounded-pill">Unassigned</span>
                           </td>
                           <td><span class="badge rounded-pill" :class="stateBadge(t.state)">{{ t.state }}</span></td>
@@ -296,11 +326,21 @@
                             <div class="progress" style="height:6px"><div class="progress-bar bg-success" :style="{ width: t.progress + '%' }"></div></div>
                             <small class="text-muted">{{ showPct(t.progress, t.done) }}%</small>
                           </td>
+                          <td @click.stop>
+                            <button class="btn btn-sm py-0 px-1 d-inline-flex align-items-center gap-1"
+                                    :class="t.difficulty_annotation !== false ? 'btn-outline-success' : 'btn-outline-secondary'"
+                                    title="Toggle whether annotators label difficulty on this task"
+                                    @click="setDifficulty([t.task_id], '', t.difficulty_annotation === false)">
+                              <i class="bi" :class="t.difficulty_annotation !== false ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
+                              {{ t.difficulty_annotation !== false ? 'On' : 'Off' }}
+                            </button>
+                          </td>
                           <td class="text-end text-nowrap" @click.stop>
                             <button class="btn btn-sm btn-outline-primary me-1" @click="openAssign([t.task_id])">
                               <i class="bi bi-person-plus"></i>
                             </button>
-                            <button v-if="t.assignee" class="btn btn-sm btn-outline-secondary"
+                            <button v-if="t.assignee || (t.assignees && t.assignees.length)"
+                                    class="btn btn-sm btn-outline-secondary"
                                     title="Take this task back" @click="unassignTask(t)">
                               <i class="bi bi-person-dash"></i>
                             </button>
@@ -327,6 +367,18 @@
                   </p>
                 </div>
                 <div class="d-flex gap-2">
+                  <template v-if="selectedTasks.length">
+                    <button class="btn btn-sm btn-outline-success"
+                            title="Annotators must label difficulty on the ticked tasks"
+                            @click="setDifficulty(selectedTasks, '', true)">
+                      <i class="bi bi-toggle-on me-1"></i>Difficulty On
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary"
+                            title="Hide the difficulty step on the ticked tasks"
+                            @click="setDifficulty(selectedTasks, '', false)">
+                      <i class="bi bi-toggle-off me-1"></i>Difficulty Off
+                    </button>
+                  </template>
                   <button class="btn btn-sm btn-primary" :disabled="!selectedTasks.length"
                           @click="openAssign(selectedTasks)">
                     <i class="bi bi-person-plus me-1"></i>Assign
@@ -379,7 +431,8 @@
                       <th>Assigned to</th><th>State</th>
                       <th class="text-end">Prompts</th><th class="text-end">Done</th>
                       <th class="text-end">In progress</th><th class="text-end">Available</th>
-                      <th style="width:170px">Progress</th><th style="width:110px"></th>
+                      <th style="width:170px">Progress</th><th style="width:105px">Difficulty</th>
+                      <th style="width:110px"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -396,6 +449,13 @@
                           <div class="text-dark text-xs fw-semibold">{{ t.assignee.name }}</div>
                           <div class="text-muted" style="font-size:.7rem">{{ t.assignee.assigned_at_ist }}</div>
                         </div>
+                        <div v-else-if="t.assignees && t.assignees.length" class="d-flex flex-wrap gap-1">
+                          <span v-for="a in t.assignees" :key="a.rater_id + '-' + (a.category || '')"
+                                class="badge bg-info-subtle text-info-emphasis rounded-pill"
+                                :title="`Assigned ${a.assigned_at_ist}`">
+                            {{ a.name }}<template v-if="a.category"> · {{ a.category }}</template>
+                          </span>
+                        </div>
                         <span v-else class="badge bg-danger-subtle text-danger rounded-pill">Unassigned</span>
                       </td>
                       <td><span class="badge rounded-pill" :class="stateBadge(t.state)">{{ t.state }}</span></td>
@@ -407,14 +467,24 @@
                         <div class="progress" style="height:6px"><div class="progress-bar bg-success" :style="{ width: t.progress + '%' }"></div></div>
                         <small class="text-muted">{{ showPct(t.progress, t.done) }}%</small>
                       </td>
+                      <td @click.stop>
+                        <button class="btn btn-sm py-0 px-1 d-inline-flex align-items-center gap-1"
+                                :class="t.difficulty_annotation !== false ? 'btn-outline-success' : 'btn-outline-secondary'"
+                                title="Toggle whether annotators label difficulty on this task"
+                                @click="setDifficulty([t.task_id], '', t.difficulty_annotation === false)">
+                          <i class="bi" :class="t.difficulty_annotation !== false ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
+                          {{ t.difficulty_annotation !== false ? 'On' : 'Off' }}
+                        </button>
+                      </td>
                       <td class="text-end text-nowrap" @click.stop>
                         <button class="btn btn-sm btn-outline-primary me-1" title="Assign this task"
                                 @click="openAssign([t.task_id])"><i class="bi bi-person-plus"></i></button>
-                        <button v-if="t.assignee" class="btn btn-sm btn-outline-secondary" title="Take this task back"
+                        <button v-if="t.assignee || (t.assignees && t.assignees.length)"
+                                class="btn btn-sm btn-outline-secondary" title="Take this task back"
                                 @click="unassignTask(t)"><i class="bi bi-person-dash"></i></button>
                       </td>
                     </tr>
-                    <tr v-if="!shownTasks.length"><td colspan="12" class="text-center text-muted py-4">Nothing matches those filters.</td></tr>
+                    <tr v-if="!shownTasks.length"><td colspan="13" class="text-center text-muted py-4">Nothing matches those filters.</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -1073,6 +1143,32 @@
 
           <div class="col-12 col-lg-6">
             <div class="bg-white p-4 rounded shadow-sm border h-100">
+              <h5 class="fw-bold text-dark mb-2"><i class="bi bi-sliders me-2 text-primary"></i>Annotation controls</h5>
+              <p class="text-muted text-xs">The team-wide default. You can override it for any language
+                (Tasks → Overview), any task, or any single category (open a task) — the most specific
+                setting wins.</p>
+              <div class="d-flex align-items-center justify-content-between gap-2 border rounded p-3">
+                <div>
+                  <div class="fw-semibold text-dark small">Difficulty labelling (team default)</div>
+                  <div class="text-xs text-muted">
+                    {{ teamSettings.difficulty_annotation !== false
+                       ? 'ON — annotators must mark every prompt Easy / Medium / Hard.'
+                       : 'OFF — annotators only review the text; the difficulty step is hidden.' }}
+                  </div>
+                </div>
+                <button class="btn btn-sm flex-shrink-0"
+                        :class="teamSettings.difficulty_annotation !== false ? 'btn-success' : 'btn-outline-secondary'"
+                        :disabled="savingSetting" @click="toggleDifficultySetting">
+                  <span v-if="savingSetting" class="spinner-border spinner-border-sm me-1"></span>
+                  <i v-else class="bi" :class="teamSettings.difficulty_annotation !== false ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
+                  {{ teamSettings.difficulty_annotation !== false ? 'On' : 'Off' }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-12 col-lg-6">
+            <div class="bg-white p-4 rounded shadow-sm border h-100">
               <h5 class="fw-bold text-dark mb-2"><i class="bi bi-hourglass-split me-2 text-primary"></i>Abandoned work</h5>
               <p class="text-muted text-xs">Prompts claimed more than {{ staleHours }}h ago and never finished can go
                 back to the pool. Finished annotations are never affected.</p>
@@ -1170,6 +1266,13 @@
               <span class="badge rounded-pill" :class="stateBadge(taskModal.task.state)">{{ taskModal.task.state }}</span>
               <span v-if="taskModal.task.assignee"> · held by <strong>{{ taskModal.task.assignee.name }}</strong>
                 since {{ taskModal.task.assignee.assigned_at_ist }}</span>
+              <span v-else-if="taskModal.task.assignees && taskModal.task.assignees.length">
+                · split by category:
+                <span v-for="a in taskModal.task.assignees" :key="a.rater_id + '-' + (a.category || '')"
+                      class="badge bg-info-subtle text-info-emphasis rounded-pill ms-1">
+                  {{ a.name }}<template v-if="a.category"> · {{ a.category }}</template>
+                </span>
+              </span>
               <span v-else> · not assigned to anyone</span>
             </div>
           </div>
@@ -1187,11 +1290,26 @@
               <div class="col-6 col-md-2"><div class="mini-stat"><span>Progress</span><strong>{{ showPct(taskModal.task.progress, taskModal.task.done) }}%</strong></div></div>
             </div>
 
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-3 border rounded p-2 bg-light">
+              <span class="text-xs fw-bold text-uppercase text-muted">
+                <i class="bi bi-sliders me-1"></i>Difficulty labelling for this task
+              </span>
+              <button class="btn btn-sm d-inline-flex align-items-center gap-1"
+                      :class="modalTaskDiffOn ? 'btn-outline-success' : 'btn-outline-secondary'"
+                      @click="setDifficulty([taskModal.task.task_id], '', !modalTaskDiffOn)">
+                <i class="bi" :class="modalTaskDiffOn ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
+                {{ modalTaskDiffOn ? 'On' : 'Off' }}
+              </button>
+              <span class="text-xs text-muted">On = annotators must label difficulty. Each category below
+                can be toggled on its own.</span>
+            </div>
+
             <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Granularity inside this task</h6>
             <div class="table-responsive border rounded mb-3">
               <table class="table table-sm mb-0">
                 <thead class="table-light"><tr><th>Category</th><th class="text-end">Prompts</th><th class="text-end">Completed</th>
-                  <th class="text-end">Flagged</th><th class="text-end">In progress</th><th class="text-end">Available</th><th style="width:150px">Progress</th></tr></thead>
+                  <th class="text-end">Flagged</th><th class="text-end">In progress</th><th class="text-end">Available</th><th style="width:150px">Progress</th>
+                  <th style="width:150px">Difficulty labels</th></tr></thead>
                 <tbody>
                   <tr v-for="c in taskModal.task.categories" :key="c.category">
                     <td class="fw-semibold">{{ c.category }}</td>
@@ -1201,6 +1319,16 @@
                     <td class="text-end">{{ c.claimed }}</td>
                     <td class="text-end text-muted">{{ c.available.toLocaleString() }}</td>
                     <td><div class="progress" style="height:6px"><div class="progress-bar bg-success" :style="{ width: c.progress + '%' }"></div></div></td>
+                    <td>
+                      <button class="btn btn-sm py-0 px-1 d-inline-flex align-items-center gap-1"
+                              :class="taskModal.task.difficulty_settings?.effective_by_category?.[c.category] !== false ? 'btn-outline-success' : 'btn-outline-secondary'"
+                              title="Toggle difficulty labelling for this category"
+                              @click="setDifficulty([taskModal.task.task_id], c.category,
+                                                    taskModal.task.difficulty_settings?.effective_by_category?.[c.category] === false)">
+                        <i class="bi" :class="taskModal.task.difficulty_settings?.effective_by_category?.[c.category] !== false ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
+                        {{ taskModal.task.difficulty_settings?.effective_by_category?.[c.category] !== false ? 'On' : 'Off' }}
+                      </button>
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -1228,16 +1356,17 @@
                 <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Assignment history</h6>
                 <div class="table-responsive border rounded">
                   <table class="table table-sm mb-0">
-                    <thead class="table-light"><tr><th>Annotator</th><th>From (IST)</th><th>Until</th><th>By</th></tr></thead>
+                    <thead class="table-light"><tr><th>Annotator</th><th>Scope</th><th>From (IST)</th><th>Until</th><th>By</th></tr></thead>
                     <tbody>
                       <tr v-for="(h, i) in taskModal.assignment_history" :key="i">
                         <td>{{ h.name }}
                           <span v-if="h.is_active" class="badge bg-success-subtle text-success ms-1">current</span></td>
+                        <td class="text-xs text-muted">{{ h.category || 'whole task' }}</td>
                         <td class="text-xs">{{ h.assigned_at_ist }}</td>
                         <td class="text-xs text-muted">{{ h.revoked_at_ist || '—' }}</td>
                         <td class="text-xs text-muted">{{ h.assigned_by || '—' }}</td>
                       </tr>
-                      <tr v-if="!taskModal.assignment_history.length"><td colspan="4" class="text-muted small">Never assigned.</td></tr>
+                      <tr v-if="!taskModal.assignment_history.length"><td colspan="5" class="text-muted small">Never assigned.</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -1284,7 +1413,8 @@
           </template>
         </div>
         <div class="asr-modal-foot">
-          <button v-if="taskModal.task.assignee" class="btn btn-outline-danger me-auto" @click="unassignTask(taskModal.task)">
+          <button v-if="taskModal.task.assignee || (taskModal.task.assignees && taskModal.task.assignees.length)"
+                  class="btn btn-outline-danger me-auto" @click="unassignTask(taskModal.task)">
             <i class="bi bi-person-dash me-1"></i>Take this task back
           </button>
           <button class="btn btn-outline-secondary" @click="browseTask(taskModal.task.task_id)">
@@ -1333,6 +1463,18 @@
               </option>
             </select>
 
+            <label class="form-label fw-semibold text-dark small mb-1">Scope</label>
+            <select v-model="assignModal.category" class="form-select mb-1">
+              <option value="">Whole task — every category in it</option>
+              <option v-for="c in assignCategoryOptions" :key="c" :value="c">Only the “{{ c }}” category</option>
+            </select>
+            <p class="text-muted mb-3" style="font-size:.72rem">
+              A task can be handed over whole, or split so each category (word, sentence, …) goes to a
+              different annotator.
+              <span v-if="assignModal.category && assignModal.task_ids.length > 1">
+                The category applies to every selected task.</span>
+            </p>
+
             <!-- Selected summary -->
             <div class="d-flex justify-content-between align-items-center mb-2">
               <span class="fw-semibold text-dark">
@@ -1371,6 +1513,11 @@
                       class="badge rounded-pill bg-warning-subtle text-warning-emphasis flex-shrink-0 d-inline-flex align-items-center gap-1"
                       :title="`Already locked to ${t.assignee.name}`">
                   <i class="bi bi-lock-fill"></i>{{ t.assignee.name }}
+                </span>
+                <span v-else-if="t.assignees && t.assignees.length"
+                      class="badge rounded-pill bg-warning-subtle text-warning-emphasis flex-shrink-0 d-inline-flex align-items-center gap-1"
+                      :title="t.assignees.map(a => `${a.category || 'whole'}: ${a.name}`).join(', ')">
+                  <i class="bi bi-lock-fill"></i>{{ t.assignees.length }} categor{{ t.assignees.length === 1 ? 'y' : 'ies' }} taken
                 </span>
                 <span class="badge rounded-pill bg-secondary-subtle text-secondary flex-shrink-0">{{ t.language }}</span>
               </label>
@@ -2022,6 +2169,59 @@ let countdownTimer = null
 const reclaiming = ref(false)
 const toast = ref('')
 
+// Team-level switches the admin controls (from /pool/admin/dashboard).
+const teamSettings = ref({ difficulty_annotation: true })
+const savingSetting = ref(false)
+
+/** Set the difficulty-labelling toggle for a slice: one or more tasks (a language = all its tasks), optionally one category. on = annotators must label difficulty there, off = the step is hidden. */
+async function setDifficulty(taskIds, category, on) {
+  try {
+    const r = await api('/pool/admin/tasks/settings', {
+      method: 'POST',
+      body: JSON.stringify({
+        team: teamKey.value, task_ids: taskIds, category: category || '',
+        difficulty_annotation: !!on,
+      }),
+    })
+    flash(r.message)
+    loadTasks()
+    if (taskModal.value?.task?.task_id) await openTask(taskModal.value.task.task_id)
+  } catch (e) {
+    flash(e.message)
+  }
+}
+
+/** A language reads ON when every one of its tasks is on. */
+function langDiffOn(L) {
+  return L.tasks.every(t => t.difficulty_annotation !== false)
+}
+
+/** The task's toggle state in the detail modal (its own value, else the team default). */
+const modalTaskDiffOn = computed(() => {
+  const ds = taskModal.value?.task?.difficulty_settings
+  if (!ds) return true
+  return (ds.task ?? ds.team_default) !== false
+})
+
+/** Flip whether annotators are asked to label difficulty at all. */
+async function toggleDifficultySetting() {
+  const next = !(teamSettings.value.difficulty_annotation !== false)
+  savingSetting.value = true
+  try {
+    const r = await api('/pool/admin/settings', {
+      method: 'POST',
+      body: JSON.stringify({ team: teamKey.value, difficulty_annotation: next }),
+    })
+    teamSettings.value = r.settings || { ...teamSettings.value, difficulty_annotation: next }
+    flash(next ? 'Annotators will now label difficulty on every prompt.'
+               : 'Difficulty labelling is now OFF — annotators only review the text.')
+  } catch (e) {
+    flash(e.message)
+  } finally {
+    savingSetting.value = false
+  }
+}
+
 // ── tasks: one per language x class, the unit the admin hands out ──
 const tasksSubTab = ref('overview')
 const tasks = ref([])
@@ -2553,6 +2753,7 @@ async function load() {
     uploads.value = d.uploads || []
     staleHours.value = d.stale_claim_hours || 48
     difficulties.value = d.difficulties || difficulties.value
+    if (d.settings) teamSettings.value = d.settings
     lastLoaded.value = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
     error.value = ''
   } catch (e) {
@@ -2564,7 +2765,8 @@ async function load() {
 
 // ── tasks ──────────────────────────────────────────────────────────────────
 async function loadTasks() {
-  tasksLoading.value = true
+  // Spinner only while the table is still empty; the auto-refresh swaps data in place with no flicker.
+  tasksLoading.value = !tasks.value.length
   try {
     const d = await api(`/pool/admin/tasks?team=${teamKey.value}`)
     tasks.value = d.tasks || []
@@ -2677,7 +2879,8 @@ function openLanguage(L) {
 async function openAssign(taskIds = [], raterId = '') {
   assignError.value = ''
   assignSearch.value = ''
-  assignModal.value = { rater_id: raterId || '', task_ids: [...taskIds], reassign: false }
+  assignModal.value = { rater_id: raterId || '', task_ids: [...taskIds],
+                        category: '', reassign: false }
   try {
     const d = await api(`/pool/admin/tasks/assignable?team=${teamKey.value}`)
     assignCandidates.value = d.annotators || []
@@ -2690,21 +2893,45 @@ async function openAssign(taskIds = [], raterId = '') {
 const assignRater = computed(() =>
   assignCandidates.value.find(a => String(a.rater_id) === String(assignModal.value?.rater_id)) || null)
 
+/** Categories offered by the Scope picker: the ones every selected task actually contains. */
+const assignCategoryOptions = computed(() => {
+  if (!assignModal.value || !assignModal.value.task_ids.length) return []
+  const picked = assignableTasks.value.filter(t => assignModal.value.task_ids.includes(t.task_id))
+  if (!picked.length) return []
+  let common = null
+  for (const t of picked) {
+    const names = new Set(t.category_names || [])
+    common = common === null ? names : new Set([...common].filter(c => names.has(c)))
+  }
+  return [...(common || [])].sort()
+})
+
 const assignableShown = computed(() => {
   const q = assignSearch.value.trim().toLowerCase()
   if (!q) return assignableTasks.value
   return assignableTasks.value.filter(t =>
-    `${t.task_id} ${t.label} ${t.assignee?.name || ''}`.toLowerCase().includes(q))
+    `${t.task_id} ${t.label} ${t.assignee?.name || ''} `
+      .concat((t.assignees || []).map(a => a.name).join(' ')).toLowerCase().includes(q))
 })
 
-/** Selected tasks that somebody else already holds -- shown by name so taking them over is always a. */
+/** Selected tasks that somebody else already holds (whole, or the chosen category) -- shown by name so taking them over is always an explicit choice. */
 const assignTakeover = computed(() => {
   if (!assignModal.value) return []
-  const me = assignModal.value.rater_id
-  return assignableTasks.value
-    .filter(t => assignModal.value.task_ids.includes(t.task_id)
-                 && t.assignee && String(t.assignee.rater_id) !== String(me))
-    .map(t => `#${t.task_id} (${t.assignee.name})`)
+  const me = String(assignModal.value.rater_id)
+  const cat = assignModal.value.category
+  const out = []
+  for (const t of assignableTasks.value) {
+    if (!assignModal.value.task_ids.includes(t.task_id)) continue
+    const rows = t.assignees || (t.assignee ? [t.assignee] : [])
+    for (const a of rows) {
+      if (String(a.rater_id) === me) continue
+      // whole-task assign collides with every holder; category assign only with the whole-task holder or the same category's holder
+      if (!cat || !a.category || a.category === cat) {
+        out.push(`#${t.task_id}${a.category ? ' · ' + a.category : ''} (${a.name})`)
+      }
+    }
+  }
+  return out
 })
 
 function toggleAssignPick(id) {
@@ -2722,6 +2949,7 @@ async function saveAssignment() {
       method: 'POST',
       body: JSON.stringify({ team: teamKey.value, rater_id: Number(assignModal.value.rater_id),
                              task_ids: assignModal.value.task_ids,
+                             category: assignModal.value.category || '',
                              reassign: assignModal.value.reassign }),
     })
     assignModal.value = null

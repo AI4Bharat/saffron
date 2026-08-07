@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from flask import current_app as app, jsonify, request, Response, send_file
-from sqlalchemy import func, text
+from sqlalchemy import bindparam, func, text
 
 from application.models import (
     db, Rater, Team, TeamMember, PoolItem, PoolUpload, PoolTask,
@@ -21,11 +21,12 @@ from application.views import (
     _serialize_team, _rater_in_scope, ORG_NAME,
 )
 from application.pool_common import (  # noqa: F401  (re-exported for pool_tasks)
-    DIFFICULTIES, FLAG_REASONS, STALE_CLAIM_HOURS, TASK_TYPE_LABELS, ITEM_STATUSES,
+    BATCH_SIZES, DIFFICULTIES, FLAG_REASONS, STALE_CLAIM_HOURS, TASK_TYPE_LABELS, ITEM_STATUSES,
     task_type_label, _ist_day, _today_ist, _ist_stamp, _pool_team, _member,
     _current_rater, _allowed_languages, _serialize_item, _blank_counts,
     _with_progress, task_counts, task_category_counts, active_assignments,
-    assigned_tasks_for, assigned_task_ids, serialize_task, serialize_assignee,
+    assigned_tasks_for, assigned_task_ids, primary_holder, allowed_categories,
+    team_setting, difficulty_required_for, csv_response, serialize_task, serialize_assignee,
     serialize_pull, pull_counts, release_pull_items, close_finished_pulls,
     _revoke_assignments, release_stale_claims, my_work_by_task_type,
 )
@@ -96,8 +97,9 @@ def pool_summary(current_user):
         'outstanding': outstanding,
         'completed_total': done_total,
         'completed_today': today,
-        'pull_size': member.pull_size,
-        'can_pull': outstanding < member.pull_size and sum(available.values()) > 0,
+        'batch_sizes': BATCH_SIZES,
+        'can_pull': sum(available.values()) > 0,
+        'difficulty_annotation': bool(team_setting(team, 'difficulty_annotation', True)),
         'difficulties': DIFFICULTIES,
         'flag_reasons': FLAG_REASONS,
     }), 200
@@ -120,7 +122,8 @@ def pool_pull(current_user):
         return jsonify({'message': 'You are not a member of this team.'}), 403
 
     # --- which task? It must be one of theirs. ---
-    my_tasks = {t.id: t for t, _ in assigned_tasks_for(rater.id, team.id)}
+    my_tasks = {t.id: (t, assignments) for t, assignments in
+                assigned_tasks_for(rater.id, team.id)}
     if not my_tasks:
         return jsonify({'message': 'No tasks have been assigned to you yet. '
                                    'Your team admin assigns the tasks you may work on.',
@@ -129,38 +132,37 @@ def pool_pull(current_user):
         task_id = int(data.get('task_id') or 0)
     except (TypeError, ValueError):
         task_id = 0
-    task = my_tasks.get(task_id)
+    task, assignments = my_tasks.get(task_id, (None, None))
     if task is None:
         return jsonify({'message': 'Pick one of the tasks assigned to you.',
                         'claimed': 0}), 403
+    # None = the whole task is theirs; otherwise only these categories.
+    my_cats = allowed_categories(assignments)
 
-    # --- how many? Never more than their queue has room for. ---
-    outstanding = db.session.query(func.count(PoolItem.id)).filter(
-        PoolItem.team_id == team.id, PoolItem.claimed_by == rater.id,
-        PoolItem.status == 'claimed').scalar() or 0
-    room = member.pull_size - outstanding
-    if room <= 0:
-        return jsonify({
-            'message': f'You still have {outstanding} unfinished prompt(s). '
-                       'Finish them, or return a pull, before taking more work.',
-            'outstanding': outstanding, 'claimed': 0,
-        }), 409
-
-    want = data.get('count')
+    # --- how many? A fixed batch (20/30/50); there is no ceiling on batches. ---
     try:
-        want = int(want) if want else room
+        want = int(data.get('count') or BATCH_SIZES[0])
     except (TypeError, ValueError):
-        want = room
-    want = max(1, min(want, room))
+        want = BATCH_SIZES[0]
+    want = max(1, min(want, 500))
 
     # Plain equality filters inside the same single statement, so the no-overlap guarantee is untouched: whatever the filter, only one pull wins a row.
     category = (data.get('category') or '').strip().lower()
     difficulty = (data.get('difficulty') or '').strip().title()
+    if category and my_cats is not None and category not in my_cats:
+        return jsonify({'message': f"Only {', '.join(sorted(my_cats))} of this task "
+                                   'is assigned to you.', 'claimed': 0}), 403
     extra_sql = ''
     params = {}
+    expanding = []
     if category:
         extra_sql += ' AND category = :category'
         params['category'] = category
+    elif my_cats is not None:
+        # They asked for "any type" but only hold some categories: stay inside them.
+        extra_sql += ' AND category IN :my_cats'
+        params['my_cats'] = sorted(my_cats)
+        expanding.append('my_cats')
     if difficulty:
         extra_sql += ' AND source_difficulty = :difficulty'
         params['difficulty'] = difficulty
@@ -171,7 +173,7 @@ def pool_pull(current_user):
     row_lock = ('FOR UPDATE SKIP LOCKED'
                 if db.engine.dialect.name == 'postgresql' else '')
     try:
-        res = db.session.execute(text(f"""
+        stmt = text(f"""
             UPDATE pool_item
                SET status='claimed', claimed_by=:rid, claimed_at=:now, pull_id=:pull
              WHERE id IN (
@@ -180,8 +182,11 @@ def pool_pull(current_user):
                           {extra_sql}
                     ORDER BY id
                     LIMIT :n {row_lock})
-        """), {'rid': rater.id, 'now': now, 'pull': pull_id,
-               'task': task.id, 'n': want, **params})
+        """)
+        for name in expanding:
+            stmt = stmt.bindparams(bindparam(name, expanding=True))
+        res = db.session.execute(stmt, {'rid': rater.id, 'now': now, 'pull': pull_id,
+                                        'task': task.id, 'n': want, **params})
         claimed = res.rowcount or 0
         if claimed:
             db.session.add(PoolPull(
@@ -237,8 +242,15 @@ def pool_my_items(current_user):
     else:
         q = q.filter(PoolItem.claimed_by == rater.id, PoolItem.status == 'claimed')
         items = q.order_by(PoolItem.id).all()
-    return jsonify({'items': [_serialize_item(i) for i in items],
-                    'count': len(items)}), 200
+
+    # Whether each prompt needs a difficulty label (admin-controlled per language/class/category).
+    tasks = {t.id: t for t in PoolTask.query.filter_by(team_id=team.id).all()}
+    out = []
+    for i in items:
+        d = _serialize_item(i)
+        d['need_difficulty'] = difficulty_required_for(team, tasks.get(i.task_id), i.category)
+        out.append(d)
+    return jsonify({'items': out, 'count': len(items)}), 200
 
 
 @app.route('/api/pool/submit', methods=['POST'])
@@ -257,9 +269,19 @@ def pool_submit(current_user):
     if item.claimed_by != rater.id and item.completed_by != rater.id:
         return jsonify({'message': 'This item is not assigned to you.'}), 403
 
+    # Captured BEFORE the status changes below: is this a fresh submission or an edit of one they already made?
+    is_edit = (item.completed_by == rater.id
+               and item.completed_at is not None
+               and item.status in ('completed', 'flagged'))
+
     flagged = bool(data.get('is_flagged'))
     text_in = data.get('text')
     difficulty = (data.get('difficulty') or '').strip().title()
+    # The admin decides whether this slice (language/class/category) carries a difficulty label.
+    need_difficulty = difficulty_required_for(
+        Team.query.get(item.team_id),
+        PoolTask.query.get(item.task_id) if item.task_id else None,
+        item.category)
 
     if flagged:
         reason = (data.get('flag_reason') or '').strip()
@@ -269,28 +291,33 @@ def pool_submit(current_user):
         item.flag_reason = reason[:255]
         item.status = 'flagged'
     else:
-        if difficulty not in DIFFICULTIES:
+        if need_difficulty and difficulty not in DIFFICULTIES:
+            return jsonify({'message': f'Difficulty must be one of {", ".join(DIFFICULTIES)}.'}), 400
+        if difficulty and difficulty not in DIFFICULTIES:
             return jsonify({'message': f'Difficulty must be one of {", ".join(DIFFICULTIES)}.'}), 400
         cleaned = (text_in if text_in is not None else item.text).strip()
         if not cleaned:
             return jsonify({'message': 'The text cannot be empty.'}), 400
         item.final_text = cleaned
         item.is_edited = cleaned != (item.text or '').strip()
-        item.final_difficulty = difficulty
+        item.final_difficulty = difficulty or None
         item.is_flagged = False
         item.flag_reason = None
         item.status = 'completed'
 
     notes = (data.get('notes') or '').strip()
     item.notes = notes[:2000] if notes else None
+    # An EDIT of an already-submitted item keeps its original submission time, so daily output and payment reports do not shift; the revision counter records the edit.
     item.completed_by = rater.id
-    item.completed_at = datetime.utcnow()
+    if not is_edit:
+        item.completed_at = datetime.utcnow()
     item.revision = (item.revision or 0) + 1
-    try:
-        tt = int(data.get('time_taken_ms') or 0)
-        item.time_taken_ms = max(0, min(tt, 6 * 3600 * 1000))
-    except (TypeError, ValueError):
-        pass
+    if 'time_taken_ms' in data:      # absent on edits -- never wipe the original timing
+        try:
+            tt = int(data.get('time_taken_ms') or 0)
+            item.time_taken_ms = max(0, min(tt, 6 * 3600 * 1000))
+        except (TypeError, ValueError):
+            pass
 
     # A pull with nothing claimed left is finished; recording that keeps the annotator's "current work" list honest without touching a single prompt.
     close_finished_pulls(rater.id)
@@ -315,8 +342,35 @@ def pool_release(current_user):
     """Hand unfinished prompts back to the pool so they can be handed out again."""
     data = request.get_json(silent=True) or {}
     rater = _current_rater(current_user)
+    if not rater:
+        return jsonify({'message': 'Not found'}), 404
+
+    # all_teams: the sign-out sweep -- every unfinished prompt this annotator holds, in every pool, goes back; everything submitted stays theirs.
+    if data.get('all_teams'):
+        n, touched = 0, set()
+        for it in PoolItem.query.filter(PoolItem.claimed_by == rater.id,
+                                        PoolItem.status == 'claimed').all():
+            if it.pull_id:
+                touched.add(it.pull_id)
+            it.status, it.claimed_by, it.claimed_at, it.pull_id = 'available', None, None, None
+            n += 1
+        if touched:
+            now = datetime.utcnow()
+            for pull in PoolPull.query.filter(PoolPull.pull_id.in_(list(touched)),
+                                              PoolPull.status == 'open').all():
+                pull.status = 'released'
+                pull.released_at = now
+        close_finished_pulls(rater.id)
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            app.logger.error(f"pool_release(all_teams) failed: {e}")
+            return jsonify({'message': 'Could not release those items.'}), 500
+        return jsonify({'message': f'{n} prompt(s) returned to the pool.', 'released': n}), 200
+
     team = _pool_team()
-    if not (rater and team):
+    if not team:
         return jsonify({'message': 'Not found'}), 404
 
     pull_key = (data.get('pull_id') or '').strip()
@@ -573,8 +627,11 @@ def pool_admin_dashboard(current_user):
 
     # Which tasks each annotator currently holds -- the ASR equivalent of the TTS "assigned batches" chips, and what makes an idle annotator "stale".
     held = {}
-    for a, _r in active_assignments(team.id).values():
-        held.setdefault(a.rater_id, []).append(a.task_id)
+    for rows in active_assignments(team.id).values():
+        for a, _r in rows:
+            slot = held.setdefault(a.rater_id, [])
+            if a.task_id not in slot:
+                slot.append(a.task_id)
 
     annotators = []
     for rid, m in members.items():
@@ -647,9 +704,34 @@ def pool_admin_dashboard(current_user):
         'daily': daily_series,
         'uploads': uploads,
         'difficulties': DIFFICULTIES,
+        'settings': {'difficulty_annotation':
+                     bool(team_setting(team, 'difficulty_annotation', True))},
         'stale_claim_hours': STALE_CLAIM_HOURS,
         'generated_in_ms': int((time.time() - t0) * 1000),
     }), 200
+
+
+@app.route('/api/pool/admin/settings', methods=['POST'])
+@token_required
+def pool_admin_settings(current_user):
+    """Flip a team-level behaviour switch (e.g. whether annotators label difficulty). Body: {'difficulty_annotation': true/false, ...} -- unknown keys are stored as-is so a future switch needs no API change."""
+    team, err = _admin_pool_team(current_user)
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    updates = {k: v for k, v in data.items() if k != 'team'}
+    if not updates:
+        return jsonify({'message': 'Nothing to change.'}), 400
+    merged = dict(team.settings or {})
+    merged.update(updates)
+    team.settings = merged
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"pool_admin_settings failed: {e}")
+        return jsonify({'message': 'Could not save that setting.'}), 500
+    return jsonify({'message': 'Settings saved.', 'settings': merged}), 200
 
 
 @app.route('/api/pool/admin/items', methods=['GET'])
@@ -935,8 +1017,11 @@ def _run_export(job_id, team_id, filters, fmt, flask_app):
             team_name = team_row.name if team_row else ''
             uploads = {u.id: u.name for u in PoolUpload.query.filter_by(team_id=team_id).all()}
             tasks = {t.id: t for t in PoolTask.query.filter_by(team_id=team_id).all()}
-            holders = {tid: (r.name if r else '')
-                       for tid, (_a, r) in active_assignments(team_id).items()}
+            holders = {}
+            for tid, rows in active_assignments(team_id).items():
+                names_list = [(r.name if r else '') + (f' ({a.category})' if a.category else '')
+                              for a, r in rows]
+                holders[tid] = ' | '.join(n for n in names_list if n)
             os.makedirs(_EXPORT_DIR, exist_ok=True)
             ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
             base = f"asr_pool_export_{ts}_{job_id[:8]}"
@@ -1124,8 +1209,8 @@ def pool_admin_annotator(current_user, rater_id):
         if tid in mine_tasks:
             mine_tasks[tid]['edited'] = cnt
 
-    held_ids = {a.task_id for a, _r in active_assignments(team.id).values()
-                if a.rater_id == rater_id}
+    held_ids = {a.task_id for rows in active_assignments(team.id).values()
+                for a, _r in rows if a.rater_id == rater_id}
     by_task = []
     for tid, c in mine_tasks.items():
         t = tasks.get(tid)
@@ -1272,8 +1357,11 @@ def pool_export_annotators_csv(current_user):
     # Which tasks each annotator holds, so the report answers "who has what" as well as "who did how much".
     tasks = {t.id: t for t in PoolTask.query.filter_by(team_id=team.id).all()}
     held = {}
-    for a, _r in active_assignments(team.id).values():
-        held.setdefault(a.rater_id, []).append(a.task_id)
+    for rows in active_assignments(team.id).values():
+        for a, _r in rows:
+            slot = held.setdefault(a.rater_id, [])
+            if a.task_id not in slot:
+                slot.append(a.task_id)
 
     buf = io.StringIO()
     w = csv.writer(buf)
@@ -1312,9 +1400,7 @@ def pool_export_annotators_csv(current_user):
         w.writerow([i] + row)
 
     stamp = datetime.utcnow().strftime('%Y%m%d')
-    return Response(
-        buf.getvalue(), mimetype='text/csv',
-        headers={'Content-Disposition': f'attachment; filename=asr_annotators_{stamp}.csv'})
+    return csv_response(buf, f'asr_annotators_{stamp}.csv')
 
 
 @app.route('/api/pool/admin/export_tasks_csv', methods=['GET'])
@@ -1352,20 +1438,25 @@ def pool_export_tasks_csv(current_user):
     for (task_id, ttype, cat), v in sorted(
             grouped.items(), key=lambda kv: (kv[0][0], kv[0][2])):
         task = tasks.get(task_id)
-        assignment, holder = holders.get(task_id, (None, None))
+        rows_for_task = holders.get(task_id, [])
+        # The row is one (task, category): its holder is the whole-task assignee or the assignee of exactly this category.
+        holder_name = ''
+        for a, r in rows_for_task:
+            if a.category is None or a.category == cat:
+                holder_name = r.name if r else ''
+                if a.category == cat:
+                    break
         n += 1
         done = v['completed'] + v['flagged']
         w.writerow([n, task_id or '', ttype,
                     task.language if task else '', task.class_label if task else '', cat,
-                    (holder.name if holder else '') if assignment else '',
+                    holder_name,
                     v['total'], v['available'], v['claimed'],
                     v['completed'], v['flagged'],
                     round(100.0 * done / v['total'], 1) if v['total'] else 0, stamp_now])
 
     stamp = datetime.utcnow().strftime('%Y%m%d')
-    return Response(
-        buf.getvalue(), mimetype='text/csv',
-        headers={'Content-Disposition': f'attachment; filename=asr_task_list_{stamp}.csv'})
+    return csv_response(buf, f'asr_task_list_{stamp}.csv')
 
 
 # Activity log Every state change an item goes through carries its own timestamp on the row (claimed_at / completed_at), so the log is derived rather than.
@@ -1500,9 +1591,7 @@ def pool_export_activity_csv(current_user):
                     e['detail'], e['seconds'] if e['seconds'] is not None else ''])
 
     stamp = datetime.utcnow().strftime('%Y%m%d')
-    return Response(
-        buf.getvalue(), mimetype='text/csv',
-        headers={'Content-Disposition': f'attachment; filename=asr_activity_{stamp}.csv'})
+    return csv_response(buf, f'asr_activity_{stamp}.csv')
 
 
 # Per-annotator activity over a date window Mirrors /api/admin/rater_activity on the TTS side: the same date filter, the same headline strip, and a day-by-day.
@@ -1657,6 +1746,4 @@ def pool_export_rater_activity_csv(current_user):
             w.writerow([n, r['name'], r['email'], d['date'], d['completed'], d['flagged'],
                         d['edited'], d['hours'], task_type_label('text-review')])
     stamp = datetime.utcnow().strftime('%Y%m%d')
-    return Response(
-        buf.getvalue(), mimetype='text/csv',
-        headers={'Content-Disposition': f'attachment; filename=asr_annotator_days_{stamp}.csv'})
+    return csv_response(buf, f'asr_annotator_days_{stamp}.csv')

@@ -15,6 +15,8 @@ class Team(db.Model):
     # 'classic' -> batch/assignment workflow (Test + Rating), the original TTS flow 'pool' -> single pool of items annotators pull from (the ASR flow)
     workflow = db.Column(db.String(32), nullable=False, default='classic')
     accent = db.Column(db.String(16), nullable=True, default='#4f46e5')  # UI accent colour
+    # Team-level behaviour switches the admin flips from the dashboard (e.g. 'difficulty_annotation': false hides the difficulty step for annotators). A JSON bag so a new switch needs no schema change.
+    settings = db.Column(db.JSON, nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
@@ -94,6 +96,8 @@ class PoolTask(db.Model):
     # The kind of work this task's items are (mirrors PoolItem.task_type), so a future task type forms its own tasks instead of merging into existing ones.
     task_type = db.Column(db.String(64), nullable=False, default='text-review')
     item_count = db.Column(db.Integer, nullable=False, default=0)
+    # Per-task behaviour overrides (JSON bag). Known keys: 'difficulty_annotation' (bool, overrides the team default for this language+class) and 'difficulty_annotation_by_category' ({category: bool}, overrides both for one category).
+    settings = db.Column(db.JSON, nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
@@ -113,17 +117,20 @@ class PoolTask(db.Model):
 
 
 class PoolTaskAssignment(db.Model):
-    """The admin hands one task to one annotator."""
+    """The admin hands one task -- or one CATEGORY inside a task -- to one annotator. category NULL means the whole task; a task is either held whole by one annotator or split by category, each category to at most one annotator."""
     __tablename__ = 'pool_task_assignment'
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     task_id = db.Column(db.Integer, db.ForeignKey('pool_task.id'), nullable=False, index=True)
     rater_id = db.Column(db.Integer, db.ForeignKey('rater.id'), nullable=False, index=True)
+    # NULL = the whole task; otherwise one category (word/sentence/...) inside it.
+    category = db.Column(db.String(64), nullable=True)
     assigned_by = db.Column(db.String(80), nullable=True)     # admin username
     assigned_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     revoked_at = db.Column(db.DateTime, nullable=True)
 
-    __table_args__ = (db.UniqueConstraint('task_id', 'rater_id', name='uq_pool_task_assignment'),)
+    __table_args__ = (db.UniqueConstraint('task_id', 'rater_id', 'category',
+                                          name='uq_pool_task_assignment'),)
 
     task = db.relationship('PoolTask', backref='assignments', lazy=True)
     rater = db.relationship('Rater', backref='pool_task_assignments', lazy=True)
