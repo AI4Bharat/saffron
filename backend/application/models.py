@@ -117,7 +117,7 @@ class PoolTask(db.Model):
 
 
 class PoolTaskAssignment(db.Model):
-    """The admin hands one task -- or one CATEGORY inside a task -- to one annotator. category NULL means the whole task; a task is either held whole by one annotator or split by category, each category to at most one annotator."""
+    """The admin hands one task -- or one CATEGORY inside a task -- to an annotator. category NULL means the whole task. Several annotators may hold the same task (or the same category) at once and share its pool of prompts; each PROMPT still goes to exactly one annotator, because a pull claims rows atomically (see pool_pull)."""
     __tablename__ = 'pool_task_assignment'
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     task_id = db.Column(db.Integer, db.ForeignKey('pool_task.id'), nullable=False, index=True)

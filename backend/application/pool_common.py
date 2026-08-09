@@ -112,8 +112,17 @@ def team_setting(team, key, default=None):
     return s.get(key, default) if isinstance(s, dict) else default
 
 
+def language_difficulty_setting(team, language):
+    """(override, effective) of the LANGUAGE-level difficulty switch: the stored override for this language (None = not set) and what the language resolves to (its override, else the team default). Stored in Team.settings['difficulty_annotation_by_language'] so each level of the hierarchy has its own storage and flipping one class never moves its language."""
+    byl = team_setting(team, 'difficulty_annotation_by_language')
+    override = byl.get(language) if isinstance(byl, dict) else None
+    if override is not None:
+        return bool(override), bool(override)
+    return None, bool(team_setting(team, 'difficulty_annotation', True))
+
+
 def difficulty_required_for(team, task, category):
-    """Whether a prompt in this (language, class, category) slice must carry a difficulty label. Most specific wins: the category override on the task, then the task (= language + class) override, then the team default (on)."""
+    """Whether a prompt in this (language, class, category) slice must carry a difficulty label. Most specific wins: the category override on the task, then the task (= language + class) override, then the language override on the team, then the team default (on)."""
     s = getattr(task, 'settings', None) if task is not None else None
     if isinstance(s, dict):
         byc = s.get('difficulty_annotation_by_category')
@@ -121,6 +130,9 @@ def difficulty_required_for(team, task, category):
             return bool(byc[category])
         if s.get('difficulty_annotation') is not None:
             return bool(s['difficulty_annotation'])
+    language = getattr(task, 'language', None) if task is not None else None
+    if language:
+        return language_difficulty_setting(team, language)[1]
     return bool(team_setting(team, 'difficulty_annotation', True))
 
 
@@ -228,7 +240,7 @@ def task_category_counts(team_id, task_ids=None):
 
 
 def active_assignments(team_id, task_ids=None):
-    """{task_id: [(assignment, rater), ...]} for the tasks that currently have a holder. A task held whole has one entry (category None, listed first); a task split by category has one entry per category."""
+    """{task_id: [(assignment, rater), ...]} for the tasks that currently have a holder. Whole-task rows (category None) come first, then category rows. A task may carry several rows for the same scope: annotators can share a task (or a category), and only individual prompts are exclusive."""
     q = (db.session.query(PoolTaskAssignment, Rater)
          .join(PoolTask, PoolTask.id == PoolTaskAssignment.task_id)
          .outerjoin(Rater, Rater.id == PoolTaskAssignment.rater_id)
@@ -247,7 +259,7 @@ def active_assignments(team_id, task_ids=None):
 
 
 def primary_holder(holder_rows):
-    """(assignment, rater) of the WHOLE-task holder, or (None, None). Category holders never count as 'the' assignee of a task."""
+    """(assignment, rater) of the FIRST whole-task holder, or (None, None). With shared tasks this is a display convenience only -- anything real must read the full holder list."""
     for a, r in (holder_rows or []):
         if a.category is None:
             return a, r

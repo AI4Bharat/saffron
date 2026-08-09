@@ -179,7 +179,7 @@
           </div>
           <div class="card-body p-4">
             <div class="row g-3 align-items-end">
-              <div class="col-12 col-lg-4">
+              <div class="col-12 col-lg-5">
                 <label class="form-label small fw-semibold text-uppercase text-secondary">Task</label>
                 <select v-model.number="pick.task_id" class="form-select" @change="onTaskChange">
                   <option v-for="t in tasks" :key="t.task_id" :value="t.task_id">
@@ -189,7 +189,7 @@
               </div>
               <div class="col-6 col-lg-3">
                 <label class="form-label small fw-semibold text-uppercase text-secondary">Type of prompt</label>
-                <select v-model="pick.category" class="form-select" @change="pick.difficulty = ''; fitCount()">
+                <select v-model="pick.category" class="form-select" @change="fitCount()">
                   <option value="">Any type</option>
                   <option v-for="c in (currentTask?.available_by_category || [])" :key="c.category" :value="c.category">
                     {{ c.category }} ({{ c.available.toLocaleString() }})
@@ -197,15 +197,6 @@
                 </select>
               </div>
               <div class="col-6 col-lg-2">
-                <label class="form-label small fw-semibold text-uppercase text-secondary">Difficulty</label>
-                <select v-model="pick.difficulty" class="form-select" :disabled="!difficultyOptions.length" @change="fitCount">
-                  <option value="">Any</option>
-                  <option v-for="d in difficultyOptions" :key="d.difficulty" :value="d.difficulty">
-                    {{ d.difficulty }} ({{ d.available.toLocaleString() }})
-                  </option>
-                </select>
-              </div>
-              <div class="col-6 col-lg-1">
                 <label class="form-label small fw-semibold text-uppercase text-secondary">How many</label>
                 <select v-model.number="pick.count" class="form-select">
                   <option v-for="n in countOptions" :key="n" :value="n">{{ n }}</option>
@@ -221,7 +212,7 @@
               </div>
             </div>
             <p class="text-muted small mb-0 mt-3">
-              <span v-if="!matching">Nothing left for that combination — try another type or difficulty.</span>
+              <span v-if="!matching">Nothing left for that combination — try another type of prompt.</span>
               <span v-else>Prompts come in batches of {{ countOptions.join(', ') }}. Take a batch,
                 annotate it, then take the next — there is no limit on how many batches you can do.</span>
             </p>
@@ -670,7 +661,7 @@ const openTree = reactive({})
 const pullPanel = ref(null)
 
 const pulling = ref(false)
-const pick = ref({ task_id: null, category: '', difficulty: '', count: 20 })
+const pick = ref({ task_id: null, category: '', count: 20 })
 
 // Annotator inbox (admin -> annotator messages), same as the TTS workspace
 const messages = ref([])
@@ -742,33 +733,12 @@ const overallDone = computed(() => tasks.value.reduce((s, t) => s + (t.mine?.don
 const overallProgress = computed(() =>
   overallTotal.value ? Math.round((overallDone.value / overallTotal.value) * 100) : 0)
 
-/** The difficulties actually present in the chosen slice -- read from the data, so a new difficulty. */
-const difficultyOptions = computed(() => {
-  const t = currentTask.value
-  if (!t) return []
-  if (pick.value.category) {
-    return t.available_by_category.find(x => x.category === pick.value.category)?.by_difficulty || []
-  }
-  const merged = {}
-  for (const c of t.available_by_category) {
-    for (const d of c.by_difficulty) merged[d.difficulty] = (merged[d.difficulty] || 0) + d.available
-  }
-  return Object.entries(merged).map(([difficulty, available]) => ({ difficulty, available }))
-    .sort((a, b) => a.difficulty.localeCompare(b.difficulty))
-})
-
 /** How many prompts are still free for exactly the chosen combination. */
 const matching = computed(() => {
   const t = currentTask.value
   if (!t) return 0
-  if (!pick.value.category) {
-    if (!pick.value.difficulty) return t.available_total
-    return difficultyOptions.value.find(d => d.difficulty === pick.value.difficulty)?.available || 0
-  }
-  const c = t.available_by_category.find(x => x.category === pick.value.category)
-  if (!c) return 0
-  if (!pick.value.difficulty) return c.available
-  return c.by_difficulty.find(d => d.difficulty === pick.value.difficulty)?.available || 0
+  if (!pick.value.category) return t.available_total
+  return t.available_by_category.find(x => x.category === pick.value.category)?.available || 0
 })
 
 /** Prompts are handed out in fixed batches; take a batch, finish it, take the next — there is no ceiling on how many batches you may take. */
@@ -780,7 +750,6 @@ function fitCount() {
 }
 function onTaskChange() {
   pick.value.category = ''
-  pick.value.difficulty = ''
   fitCount()
 }
 function scrollToPull() {
@@ -868,7 +837,6 @@ async function pullWork() {
         team: teamKey.value,
         task_id: pick.value.task_id,
         category: pick.value.category,
-        difficulty: pick.value.difficulty,
         count: pick.value.count,
       }),
     })

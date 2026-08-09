@@ -38,12 +38,12 @@ POOL_INDEXES = [
     ("ix_test_team", "test(team_id)"),
 ]
 
-# One slice, one annotator: a second ACTIVE assignment of the same (task, category) slice cannot be written at all, so two annotators can never be handed the same prompts. category NULL (= the whole task) collapses to '' so whole-task rows collide with each other too. (The WHERE clause differs per dialect: SQLite stores booleans as 0/1, PostgreSQL as true booleans.)
+# One ACTIVE row per (task, annotator, slice): tasks and categories may be shared by several annotators (prompt exclusivity lives in the atomic pull, not here), but the same annotator can never hold the same slice twice. category NULL (= the whole task) collapses to '' so duplicate whole-task rows collide too. (The WHERE clause differs per dialect: SQLite stores booleans as 0/1, PostgreSQL as true booleans.)
 def _unique_indexes():
     active = "is_active = 1" if db.engine.dialect.name == 'sqlite' else "is_active"
     return [
-        ("uq_pool_task_active_slice",
-         f"pool_task_assignment(task_id, COALESCE(category, '')) WHERE {active}"),
+        ("uq_pool_task_active_holder",
+         f"pool_task_assignment(task_id, rater_id, COALESCE(category, '')) WHERE {active}"),
     ]
 
 
@@ -175,6 +175,13 @@ def _upgrade_assignment_uniques():
     except Exception as e:
         db.session.rollback()
         _log(f"drop of uq_pool_task_active_assignee skipped ({e})")
+    # Its successor enforced one active holder per (task, category) slice; tasks are now shareable by several annotators, so it goes too (replaced by the per-holder index in _unique_indexes).
+    try:
+        db.session.execute(text("DROP INDEX IF EXISTS uq_pool_task_active_slice"))
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        _log(f"drop of uq_pool_task_active_slice skipped ({e})")
     if db.engine.dialect.name == 'postgresql':
         # The (task_id, rater_id) unique constraint would stop one annotator holding two categories of the same task.
         try:

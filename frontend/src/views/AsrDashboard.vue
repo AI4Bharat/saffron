@@ -193,13 +193,6 @@
               <span class="subnav-badge">{{ shownTasks.length }}</span>
             </button>
           </div>
-          <button class="btn btn-sm d-inline-flex align-items-center gap-1"
-                  :class="teamSettings.difficulty_annotation !== false ? 'btn-outline-success' : 'btn-outline-secondary'"
-                  :disabled="savingSetting" :title="'Whether annotators must label difficulty on every prompt'"
-                  @click="toggleDifficultySetting">
-            <i class="bi" :class="teamSettings.difficulty_annotation !== false ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
-            Difficulty labels (team default): {{ teamSettings.difficulty_annotation !== false ? 'On' : 'Off' }}
-          </button>
         </div>
 
         <div v-if="tasksLoading" class="text-center py-5"><span class="spinner-border text-secondary"></span></div>
@@ -281,15 +274,6 @@
                       <i class="bi bi-person-plus me-1"></i>
                       Assign all of {{ L.language }} ({{ L.tasks.length }} task(s))
                     </button>
-                    <div class="ms-auto d-flex align-items-center gap-2">
-                      <span class="text-xs text-muted">Difficulty labels for {{ L.language }}:</span>
-                      <button class="btn btn-sm d-inline-flex align-items-center gap-1"
-                              :class="langDiffOn(L) ? 'btn-outline-success' : 'btn-outline-secondary'"
-                              @click="setDifficulty(L.tasks.map(t => t.task_id), '', !langDiffOn(L))">
-                        <i class="bi" :class="langDiffOn(L) ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
-                        {{ langDiffOn(L) ? 'On' : 'Off' }}
-                      </button>
-                    </div>
                   </div>
                   <div class="table-responsive bg-white rounded border">
                     <table class="table table-sm table-hover align-middle mb-0">
@@ -299,7 +283,7 @@
                           <th>Assigned to</th><th>State</th>
                           <th class="text-end">Prompts</th><th class="text-end">Completed</th>
                           <th class="text-end">In progress</th><th class="text-end">Available</th>
-                          <th style="width:160px">Progress</th><th style="width:105px">Difficulty</th>
+                          <th style="width:160px">Progress</th><th style="width:120px">Difficulty</th>
                           <th style="width:150px"></th>
                         </tr>
                       </thead>
@@ -308,11 +292,11 @@
                           <td><span class="task-id-badge">#{{ t.task_id }}</span></td>
                           <td class="fw-semibold">Class {{ t.class }}</td>
                           <td>
-                            <span v-if="t.assignee" class="text-dark text-xs">{{ t.assignee.name }}</span>
-                            <span v-else-if="t.assignees && t.assignees.length" class="d-inline-flex flex-wrap gap-1">
-                              <span v-for="a in t.assignees" :key="a.rater_id + '-' + (a.category || '')"
-                                    class="badge bg-info-subtle text-info-emphasis rounded-pill">
-                                {{ a.name }}<template v-if="a.category"> · {{ a.category }}</template>
+                            <span v-if="holdersOf(t).length" class="d-inline-flex flex-wrap gap-1 align-items-center">
+                              <span v-for="a in holdersOf(t)" :key="a.rater_id + '-' + (a.category || '')"
+                                    class="holder-chip" :title="holderTitle(a)">
+                                <span class="holder-initial">{{ initialOf(a.name) }}</span>{{ a.name
+                                }}<em v-if="a.category">{{ a.category }}</em>
                               </span>
                             </span>
                             <span v-else class="badge bg-danger-subtle text-danger rounded-pill">Unassigned</span>
@@ -327,21 +311,20 @@
                             <small class="text-muted">{{ showPct(t.progress, t.done) }}%</small>
                           </td>
                           <td @click.stop>
-                            <button class="btn btn-sm py-0 px-1 d-inline-flex align-items-center gap-1"
-                                    :class="t.difficulty_annotation !== false ? 'btn-outline-success' : 'btn-outline-secondary'"
-                                    title="Toggle whether annotators label difficulty on this task"
-                                    @click="setDifficulty([t.task_id], '', t.difficulty_annotation === false)">
-                              <i class="bi" :class="t.difficulty_annotation !== false ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
-                              {{ t.difficulty_annotation !== false ? 'On' : 'Off' }}
-                            </button>
+                            <DiffToggle :on="t.difficulty_annotation !== false"
+                                        :overridden="t.difficulty_override !== null && t.difficulty_override !== undefined"
+                                        inherit="team default"
+                                        @toggle="setDifficulty([t.task_id], '', $event)"
+                                        @clear="setDifficulty([t.task_id], '', null)" />
                           </td>
                           <td class="text-end text-nowrap" @click.stop>
-                            <button class="btn btn-sm btn-outline-primary me-1" @click="openAssign([t.task_id])">
+                            <button class="btn btn-sm btn-outline-primary me-1" title="Assign annotators"
+                                    @click="openAssign([t.task_id])">
                               <i class="bi bi-person-plus"></i>
                             </button>
-                            <button v-if="t.assignee || (t.assignees && t.assignees.length)"
+                            <button v-if="holdersOf(t).length"
                                     class="btn btn-sm btn-outline-secondary"
-                                    title="Take this task back" @click="unassignTask(t)">
+                                    title="Take this task back from everyone" @click="unassignTask(t)">
                               <i class="bi bi-person-dash"></i>
                             </button>
                           </td>
@@ -362,8 +345,9 @@
                 <div>
                   <h5 class="fw-bold text-dark mb-1">All tasks</h5>
                   <p class="text-muted text-xs mb-0">
-                    One task per language &amp; class. A task belongs to one annotator at a time —
-                    click a row to open it, tick rows to assign them together.
+                    One task per language &amp; class. A task can be shared by several annotators —
+                    every prompt is still done by exactly one person. Click a row to open it,
+                    tick rows to assign them together.
                   </p>
                 </div>
                 <div class="d-flex gap-2">
@@ -377,6 +361,11 @@
                             title="Hide the difficulty step on the ticked tasks"
                             @click="setDifficulty(selectedTasks, '', false)">
                       <i class="bi bi-toggle-off me-1"></i>Difficulty Off
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary"
+                            title="Remove the ticked tasks' own switch — they follow their language again"
+                            @click="setDifficulty(selectedTasks, '', null)">
+                      <i class="bi bi-magic me-1"></i>Difficulty Auto
                     </button>
                   </template>
                   <button class="btn btn-sm btn-primary" :disabled="!selectedTasks.length"
@@ -431,7 +420,7 @@
                       <th>Assigned to</th><th>State</th>
                       <th class="text-end">Prompts</th><th class="text-end">Done</th>
                       <th class="text-end">In progress</th><th class="text-end">Available</th>
-                      <th style="width:170px">Progress</th><th style="width:105px">Difficulty</th>
+                      <th style="width:170px">Progress</th><th style="width:120px">Difficulty</th>
                       <th style="width:110px"></th>
                     </tr>
                   </thead>
@@ -445,15 +434,11 @@
                       <td class="fw-semibold text-dark">{{ t.language }}</td>
                       <td>Class {{ t.class }}</td>
                       <td>
-                        <div v-if="t.assignee">
-                          <div class="text-dark text-xs fw-semibold">{{ t.assignee.name }}</div>
-                          <div class="text-muted" style="font-size:.7rem">{{ t.assignee.assigned_at_ist }}</div>
-                        </div>
-                        <div v-else-if="t.assignees && t.assignees.length" class="d-flex flex-wrap gap-1">
-                          <span v-for="a in t.assignees" :key="a.rater_id + '-' + (a.category || '')"
-                                class="badge bg-info-subtle text-info-emphasis rounded-pill"
-                                :title="`Assigned ${a.assigned_at_ist}`">
-                            {{ a.name }}<template v-if="a.category"> · {{ a.category }}</template>
+                        <div v-if="holdersOf(t).length" class="d-flex flex-wrap gap-1 align-items-center">
+                          <span v-for="a in holdersOf(t)" :key="a.rater_id + '-' + (a.category || '')"
+                                class="holder-chip" :title="holderTitle(a)">
+                            <span class="holder-initial">{{ initialOf(a.name) }}</span>{{ a.name
+                            }}<em v-if="a.category">{{ a.category }}</em>
                           </span>
                         </div>
                         <span v-else class="badge bg-danger-subtle text-danger rounded-pill">Unassigned</span>
@@ -468,19 +453,17 @@
                         <small class="text-muted">{{ showPct(t.progress, t.done) }}%</small>
                       </td>
                       <td @click.stop>
-                        <button class="btn btn-sm py-0 px-1 d-inline-flex align-items-center gap-1"
-                                :class="t.difficulty_annotation !== false ? 'btn-outline-success' : 'btn-outline-secondary'"
-                                title="Toggle whether annotators label difficulty on this task"
-                                @click="setDifficulty([t.task_id], '', t.difficulty_annotation === false)">
-                          <i class="bi" :class="t.difficulty_annotation !== false ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
-                          {{ t.difficulty_annotation !== false ? 'On' : 'Off' }}
-                        </button>
+                        <DiffToggle :on="t.difficulty_annotation !== false"
+                                    :overridden="t.difficulty_override !== null && t.difficulty_override !== undefined"
+                                    inherit="team default"
+                                    @toggle="setDifficulty([t.task_id], '', $event)"
+                                    @clear="setDifficulty([t.task_id], '', null)" />
                       </td>
                       <td class="text-end text-nowrap" @click.stop>
-                        <button class="btn btn-sm btn-outline-primary me-1" title="Assign this task"
+                        <button class="btn btn-sm btn-outline-primary me-1" title="Assign annotators"
                                 @click="openAssign([t.task_id])"><i class="bi bi-person-plus"></i></button>
-                        <button v-if="t.assignee || (t.assignees && t.assignees.length)"
-                                class="btn btn-sm btn-outline-secondary" title="Take this task back"
+                        <button v-if="holdersOf(t).length"
+                                class="btn btn-sm btn-outline-secondary" title="Take this task back from everyone"
                                 @click="unassignTask(t)"><i class="bi bi-person-dash"></i></button>
                       </td>
                     </tr>
@@ -1144,9 +1127,9 @@
           <div class="col-12 col-lg-6">
             <div class="bg-white p-4 rounded shadow-sm border h-100">
               <h5 class="fw-bold text-dark mb-2"><i class="bi bi-sliders me-2 text-primary"></i>Annotation controls</h5>
-              <p class="text-muted text-xs">The team-wide default. You can override it for any language
-                (Tasks → Overview), any task, or any single category (open a task) — the most specific
-                setting wins.</p>
+              <p class="text-muted text-xs">The team-wide default. You can override it for any task
+                (its row in the task tables), or any single category (open a task) — the most
+                specific setting wins.</p>
               <div class="d-flex align-items-center justify-content-between gap-2 border rounded p-3">
                 <div>
                   <div class="fw-semibold text-dark small">Difficulty labelling (team default)</div>
@@ -1156,13 +1139,11 @@
                        : 'OFF — annotators only review the text; the difficulty step is hidden.' }}
                   </div>
                 </div>
-                <button class="btn btn-sm flex-shrink-0"
-                        :class="teamSettings.difficulty_annotation !== false ? 'btn-success' : 'btn-outline-secondary'"
-                        :disabled="savingSetting" @click="toggleDifficultySetting">
-                  <span v-if="savingSetting" class="spinner-border spinner-border-sm me-1"></span>
-                  <i v-else class="bi" :class="teamSettings.difficulty_annotation !== false ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
-                  {{ teamSettings.difficulty_annotation !== false ? 'On' : 'Off' }}
-                </button>
+                <span class="d-inline-flex align-items-center gap-2 flex-shrink-0">
+                  <span v-if="savingSetting" class="spinner-border spinner-border-sm text-secondary"></span>
+                  <DiffToggle :on="teamSettings.difficulty_annotation !== false" :overridden="true"
+                              :disabled="savingSetting" @toggle="toggleDifficultySetting" />
+                </span>
               </div>
             </div>
           </div>
@@ -1264,14 +1245,9 @@
             <div class="text-xs text-muted">
               {{ taskModal.task.total.toLocaleString() }} prompts ·
               <span class="badge rounded-pill" :class="stateBadge(taskModal.task.state)">{{ taskModal.task.state }}</span>
-              <span v-if="taskModal.task.assignee"> · held by <strong>{{ taskModal.task.assignee.name }}</strong>
-                since {{ taskModal.task.assignee.assigned_at_ist }}</span>
-              <span v-else-if="taskModal.task.assignees && taskModal.task.assignees.length">
-                · split by category:
-                <span v-for="a in taskModal.task.assignees" :key="a.rater_id + '-' + (a.category || '')"
-                      class="badge bg-info-subtle text-info-emphasis rounded-pill ms-1">
-                  {{ a.name }}<template v-if="a.category"> · {{ a.category }}</template>
-                </span>
+              <span v-if="holdersOf(taskModal.task).length"> ·
+                {{ holdersOf(taskModal.task).length === 1 ? 'held by' : `shared by ${holdersOf(taskModal.task).length} annotators:` }}
+                <strong>{{ holdersOf(taskModal.task).map(a => a.name).join(', ') }}</strong>
               </span>
               <span v-else> · not assigned to anyone</span>
             </div>
@@ -1290,18 +1266,48 @@
               <div class="col-6 col-md-2"><div class="mini-stat"><span>Progress</span><strong>{{ showPct(taskModal.task.progress, taskModal.task.done) }}%</strong></div></div>
             </div>
 
+            <div class="border rounded p-3 mb-3">
+              <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                <h6 class="fw-bold text-uppercase text-muted text-xs mb-0">
+                  <i class="bi bi-people-fill me-1"></i>Assigned annotators
+                  <span v-if="holdersOf(taskModal.task).length"
+                        class="badge bg-light text-secondary border ms-1">{{ holdersOf(taskModal.task).length }}</span>
+                </h6>
+                <button class="btn btn-sm btn-outline-primary" @click="openAssign([taskModal.task.task_id])">
+                  <i class="bi bi-person-plus me-1"></i>Add annotator
+                </button>
+              </div>
+              <div v-if="holdersOf(taskModal.task).length" class="d-flex flex-wrap gap-2">
+                <span v-for="a in holdersOf(taskModal.task)" :key="a.rater_id + '-' + (a.category || '')"
+                      class="holder-pill">
+                  <span class="holder-avatar">{{ initialOf(a.name) }}</span>
+                  <span class="d-inline-flex flex-column lh-sm text-start">
+                    <span class="fw-semibold text-dark small">{{ a.name }}</span>
+                    <small class="text-muted" style="font-size:.68rem">
+                      {{ a.category ? `only “${a.category}”` : 'whole task' }} · since {{ a.assigned_at_ist }}
+                    </small>
+                  </span>
+                  <i class="bi bi-x-circle holder-remove" role="button"
+                     :title="`Take this task back from ${a.name}`"
+                     @click="unassignTask(taskModal.task, a)"></i>
+                </span>
+              </div>
+              <p v-else class="text-muted small mb-0">
+                Nobody yet. A task can be shared by several annotators — each prompt is still
+                handed to exactly one of them, so their work never overlaps.
+              </p>
+            </div>
+
             <div class="d-flex flex-wrap align-items-center gap-2 mb-3 border rounded p-2 bg-light">
               <span class="text-xs fw-bold text-uppercase text-muted">
                 <i class="bi bi-sliders me-1"></i>Difficulty labelling for this task
               </span>
-              <button class="btn btn-sm d-inline-flex align-items-center gap-1"
-                      :class="modalTaskDiffOn ? 'btn-outline-success' : 'btn-outline-secondary'"
-                      @click="setDifficulty([taskModal.task.task_id], '', !modalTaskDiffOn)">
-                <i class="bi" :class="modalTaskDiffOn ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
-                {{ modalTaskDiffOn ? 'On' : 'Off' }}
-              </button>
+              <DiffToggle :on="modalTaskDiff.on" :overridden="modalTaskDiff.overridden"
+                          inherit="team default"
+                          @toggle="setDifficulty([taskModal.task.task_id], '', $event)"
+                          @clear="setDifficulty([taskModal.task.task_id], '', null)" />
               <span class="text-xs text-muted">On = annotators must label difficulty. Each category below
-                can be toggled on its own.</span>
+                has its own switch; “auto” means it follows the level above.</span>
             </div>
 
             <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Granularity inside this task</h6>
@@ -1320,14 +1326,12 @@
                     <td class="text-end text-muted">{{ c.available.toLocaleString() }}</td>
                     <td><div class="progress" style="height:6px"><div class="progress-bar bg-success" :style="{ width: c.progress + '%' }"></div></div></td>
                     <td>
-                      <button class="btn btn-sm py-0 px-1 d-inline-flex align-items-center gap-1"
-                              :class="taskModal.task.difficulty_settings?.effective_by_category?.[c.category] !== false ? 'btn-outline-success' : 'btn-outline-secondary'"
-                              title="Toggle difficulty labelling for this category"
-                              @click="setDifficulty([taskModal.task.task_id], c.category,
-                                                    taskModal.task.difficulty_settings?.effective_by_category?.[c.category] === false)">
-                        <i class="bi" :class="taskModal.task.difficulty_settings?.effective_by_category?.[c.category] !== false ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
-                        {{ taskModal.task.difficulty_settings?.effective_by_category?.[c.category] !== false ? 'On' : 'Off' }}
-                      </button>
+                      <DiffToggle :on="taskModal.task.difficulty_settings?.effective_by_category?.[c.category] !== false"
+                                  :overridden="taskModal.task.difficulty_settings?.by_category?.[c.category] !== null
+                                               && taskModal.task.difficulty_settings?.by_category?.[c.category] !== undefined"
+                                  inherit="task setting"
+                                  @toggle="setDifficulty([taskModal.task.task_id], c.category, $event)"
+                                  @clear="setDifficulty([taskModal.task.task_id], c.category, null)" />
                     </td>
                   </tr>
                 </tbody>
@@ -1413,9 +1417,9 @@
           </template>
         </div>
         <div class="asr-modal-foot">
-          <button v-if="taskModal.task.assignee || (taskModal.task.assignees && taskModal.task.assignees.length)"
+          <button v-if="holdersOf(taskModal.task).length"
                   class="btn btn-outline-danger me-auto" @click="unassignTask(taskModal.task)">
-            <i class="bi bi-person-dash me-1"></i>Take this task back
+            <i class="bi bi-person-dash me-1"></i>Take back from everyone
           </button>
           <button class="btn btn-outline-secondary" @click="browseTask(taskModal.task.task_id)">
             <i class="bi bi-list-check me-1"></i>See its submissions
@@ -1434,12 +1438,18 @@
           <!-- Header -->
           <div class="assign-modal-header d-flex justify-content-between align-items-center">
             <div class="d-flex align-items-center gap-3">
-              <div class="avatar-circle-lg">{{ (assignRater?.name || '?').charAt(0).toUpperCase() }}</div>
+              <div v-if="assignRaters.length" class="avatar-stack">
+                <div v-for="a in assignRaters.slice(0, 3)" :key="a.rater_id" class="avatar-circle-lg stacked"
+                     :title="a.name">{{ initialOf(a.name) }}</div>
+                <div v-if="assignRaters.length > 3" class="avatar-circle-lg stacked more">+{{ assignRaters.length - 3 }}</div>
+              </div>
+              <div v-else class="avatar-circle-lg">?</div>
               <div>
                 <h5 class="fw-bold mb-0 text-dark">Assign Tasks</h5>
                 <small class="text-muted">
-                  <span v-if="assignRater">{{ assignRater.name }} · {{ assignRater.email }}</span>
-                  <span v-else>Choose an annotator to hand these tasks to</span>
+                  <span v-if="assignRaters.length === 1">{{ assignRaters[0].name }} · {{ assignRaters[0].email }}</span>
+                  <span v-else-if="assignRaters.length">{{ assignRaters.map(a => a.name).join(', ') }}</span>
+                  <span v-else>Choose one or more annotators to hand these tasks to</span>
                 </small>
               </div>
             </div>
@@ -1448,20 +1458,37 @@
 
           <!-- Body -->
           <div class="assign-modal-body">
-            <!-- Lock notice -->
+            <!-- Sharing notice -->
             <div class="d-flex align-items-start gap-2 py-2 px-3 rounded-3 bg-info-subtle mb-3">
-              <i class="bi bi-lock-fill text-info mt-1"></i>
-              <small class="text-info-emphasis">Selected tasks are <strong>locked to this annotator</strong>.
-                No one else will be able to pull from them. Taking a task back unlocks it again.</small>
+              <i class="bi bi-people-fill text-info mt-1"></i>
+              <small class="text-info-emphasis"><strong>Tasks can be shared.</strong> Everyone you pick
+                can pull prompts from the selected tasks — but each prompt is only ever handed to
+                <strong>one</strong> annotator, so nobody's work overlaps.</small>
             </div>
 
-            <label class="form-label fw-semibold text-dark small mb-1">Annotator</label>
-            <select v-model="assignModal.rater_id" class="form-select mb-3">
-              <option value="">Choose an annotator…</option>
-              <option v-for="a in assignCandidates" :key="a.rater_id" :value="a.rater_id">
-                {{ a.name }} — holds {{ a.tasks_held }} task(s)
-              </option>
-            </select>
+            <div class="d-flex justify-content-between align-items-center mb-1">
+              <label class="form-label fw-semibold text-dark small mb-0">Annotators</label>
+              <span class="text-xs" :class="assignModal.rater_ids.length ? 'text-muted' : 'text-danger'">
+                {{ assignModal.rater_ids.length || 'none' }} selected
+              </span>
+            </div>
+            <div class="batch-picker border rounded-3 mb-3" style="max-height: 190px;">
+              <label v-for="a in assignCandidates" :key="a.rater_id"
+                     :class="['batch-row d-flex align-items-center gap-3 px-3 py-2',
+                              assignModal.rater_ids.includes(a.rater_id) ? 'selected' : '']">
+                <input type="checkbox" class="form-check-input mt-0 flex-shrink-0"
+                       :checked="assignModal.rater_ids.includes(a.rater_id)" @change="toggleAssignRater(a.rater_id)" />
+                <span class="holder-initial lg flex-shrink-0">{{ initialOf(a.name) }}</span>
+                <span class="flex-grow-1 text-truncate">
+                  <span class="text-dark small fw-semibold">{{ a.name }}</span>
+                  <span class="text-muted ms-1" style="font-size:.72rem">{{ a.email }}</span>
+                </span>
+                <span class="text-muted flex-shrink-0" style="font-size:.72rem">holds {{ a.tasks_held }} task(s)</span>
+              </label>
+              <div v-if="!assignCandidates.length" class="text-center text-muted py-3 small">
+                No active annotators in this team yet — add members first.
+              </div>
+            </div>
 
             <label class="form-label fw-semibold text-dark small mb-1">Scope</label>
             <select v-model="assignModal.category" class="form-select mb-1">
@@ -1469,8 +1496,8 @@
               <option v-for="c in assignCategoryOptions" :key="c" :value="c">Only the “{{ c }}” category</option>
             </select>
             <p class="text-muted mb-3" style="font-size:.72rem">
-              A task can be handed over whole, or split so each category (word, sentence, …) goes to a
-              different annotator.
+              A task can be handed over whole or narrowed to one category (word, sentence, …) —
+              and either way it can go to several annotators at once.
               <span v-if="assignModal.category && assignModal.task_ids.length > 1">
                 The category applies to every selected task.</span>
             </p>
@@ -1509,15 +1536,10 @@
                 <span class="badge bg-light text-dark border flex-shrink-0 text-center" style="min-width: 52px;">#{{ t.task_id }}</span>
                 <span class="flex-grow-1 text-truncate text-dark small">{{ t.label }}</span>
                 <span class="text-muted flex-shrink-0" style="font-size: .72rem;">{{ t.available.toLocaleString() }} free</span>
-                <span v-if="t.assignee"
-                      class="badge rounded-pill bg-warning-subtle text-warning-emphasis flex-shrink-0 d-inline-flex align-items-center gap-1"
-                      :title="`Already locked to ${t.assignee.name}`">
-                  <i class="bi bi-lock-fill"></i>{{ t.assignee.name }}
-                </span>
-                <span v-else-if="t.assignees && t.assignees.length"
-                      class="badge rounded-pill bg-warning-subtle text-warning-emphasis flex-shrink-0 d-inline-flex align-items-center gap-1"
-                      :title="t.assignees.map(a => `${a.category || 'whole'}: ${a.name}`).join(', ')">
-                  <i class="bi bi-lock-fill"></i>{{ t.assignees.length }} categor{{ t.assignees.length === 1 ? 'y' : 'ies' }} taken
+                <span v-if="holdersOf(t).length"
+                      class="badge rounded-pill bg-info-subtle text-info-emphasis flex-shrink-0 d-inline-flex align-items-center gap-1"
+                      :title="'Already working on it: ' + holdersOf(t).map(a => `${a.name}${a.category ? ' · ' + a.category : ''}`).join(', ')">
+                  <i class="bi bi-people-fill"></i>{{ holdersOf(t).length }}
                 </span>
                 <span class="badge rounded-pill bg-secondary-subtle text-secondary flex-shrink-0">{{ t.language }}</span>
               </label>
@@ -1527,29 +1549,50 @@
               </div>
             </div>
 
-            <div v-if="assignTakeover.length" class="alert alert-warning mt-3 py-2 mb-0">
-              <i class="bi bi-exclamation-triangle-fill me-1"></i>
-              {{ assignTakeover.length }} of the selected task(s) already belong to somebody else
-              ({{ assignTakeover.join(', ') }}). Tick below to take them over — the previous holder
-              keeps everything they have already submitted.
-              <div class="form-check mt-2">
-                <input class="form-check-input" type="checkbox" id="reassignOk" v-model="assignModal.reassign">
-                <label class="form-check-label text-xs" for="reassignOk">Yes, move these tasks</label>
+            <template v-if="assignOtherHolders.length">
+              <label class="form-label fw-semibold text-dark small mb-1 mt-3">
+                Some of the selection is already being worked on — what should happen?
+              </label>
+              <div class="d-flex flex-column flex-md-row gap-2 mb-1">
+                <label :class="['mode-card flex-fill', assignModal.mode === 'add' ? 'active' : '']">
+                  <input type="radio" class="form-check-input mt-0" value="add" v-model="assignModal.mode">
+                  <span>
+                    <span class="fw-semibold text-dark small d-block"><i class="bi bi-people me-1"></i>Share</span>
+                    <small class="text-muted">Current annotators stay on; the new ones join them.</small>
+                  </span>
+                </label>
+                <label :class="['mode-card flex-fill', assignModal.mode === 'replace' ? 'active' : '']">
+                  <input type="radio" class="form-check-input mt-0" value="replace" v-model="assignModal.mode">
+                  <span>
+                    <span class="fw-semibold text-dark small d-block"><i class="bi bi-arrow-left-right me-1"></i>Replace</span>
+                    <small class="text-muted">Take the task(s) back from everyone else first.
+                      Submitted work is kept; unfinished prompts return to the pool.</small>
+                  </span>
+                </label>
               </div>
-            </div>
+              <p class="mb-0" style="font-size:.72rem"
+                 :class="assignModal.mode === 'replace' ? 'text-danger' : 'text-muted'">
+                <template v-if="assignModal.mode === 'replace'">
+                  Will be taken back: {{ assignOtherHolders.join(', ') }}.
+                </template>
+                <template v-else>
+                  Already working on the selection: {{ assignOtherHolders.join(', ') }} — they keep their part.
+                </template>
+              </p>
+            </template>
           </div>
 
           <!-- Footer -->
           <div class="assign-modal-footer d-flex justify-content-between align-items-center gap-3">
             <small v-if="assignError" class="text-danger"><i class="bi bi-exclamation-circle me-1"></i>{{ assignError }}</small>
             <small v-else class="text-muted">
-              {{ assignModal.task_ids.length }} task(s) will be locked to
-              <strong>{{ assignRater?.name || 'the chosen annotator' }}</strong>
+              {{ assignModal.task_ids.length }} task(s) →
+              <strong>{{ assignRaters.length ? assignRaters.map(a => a.name).join(', ') : 'the chosen annotator(s)' }}</strong>
             </small>
             <div class="d-flex gap-2 flex-shrink-0">
               <button class="btn btn-light border" @click="assignModal = null" :disabled="assigning">Cancel</button>
               <button class="btn btn-primary d-inline-flex align-items-center gap-2"
-                      :disabled="assigning || !assignModal.rater_id || !assignModal.task_ids.length"
+                      :disabled="assigning || !assignModal.rater_ids.length || !assignModal.task_ids.length"
                       @click="saveAssignment">
                 <span v-if="assigning" class="spinner-border spinner-border-sm"></span>
                 <i v-else class="bi bi-check2-circle"></i>
@@ -2134,6 +2177,7 @@ import { ref, computed, reactive, nextTick, onMounted, onBeforeUnmount } from 'v
 import { useRoute } from 'vue-router'
 import { api, authToken, session } from '@/session'
 import { API_BASE_URL } from '@/config'
+import DiffToggle from '@/components/DiffToggle.vue'
 
 // Which team's dashboard this is (from /<team>/admin); works for any pool team.
 const route = useRoute()
@@ -2173,14 +2217,14 @@ const toast = ref('')
 const teamSettings = ref({ difficulty_annotation: true })
 const savingSetting = ref(false)
 
-/** Set the difficulty-labelling toggle for a slice: one or more tasks (a language = all its tasks), optionally one category. on = annotators must label difficulty there, off = the step is hidden. */
+/** Set the difficulty-labelling toggle for tasks (optionally one category). on = true / false / null — null clears the override so the level above decides. Each level stores its own value; nothing writes through to another level. */
 async function setDifficulty(taskIds, category, on) {
   try {
     const r = await api('/pool/admin/tasks/settings', {
       method: 'POST',
       body: JSON.stringify({
         team: teamKey.value, task_ids: taskIds, category: category || '',
-        difficulty_annotation: !!on,
+        difficulty_annotation: on === null ? null : !!on,
       }),
     })
     flash(r.message)
@@ -2191,16 +2235,14 @@ async function setDifficulty(taskIds, category, on) {
   }
 }
 
-/** A language reads ON when every one of its tasks is on. */
-function langDiffOn(L) {
-  return L.tasks.every(t => t.difficulty_annotation !== false)
-}
-
-/** The task's toggle state in the detail modal (its own value, else the team default). */
-const modalTaskDiffOn = computed(() => {
+/** The task's toggle state in the detail modal: the resolved value plus whether it is set on the task itself. */
+const modalTaskDiff = computed(() => {
   const ds = taskModal.value?.task?.difficulty_settings
-  if (!ds) return true
-  return (ds.task ?? ds.team_default) !== false
+  if (!ds) return { on: true, overridden: false }
+  return {
+    on: (ds.task_effective ?? ds.task ?? ds.language_effective ?? ds.team_default) !== false,
+    overridden: ds.task !== null && ds.task !== undefined,
+  }
 })
 
 /** Flip whether annotators are asked to label difficulty at all. */
@@ -2775,6 +2817,10 @@ async function loadTasks() {
     taskClasses.value = d.classes || []
     taskTypes.value = d.task_types || []
     taskStates.value = d.states || []
+    if (typeof d.difficulty_team_default === 'boolean') {
+      teamSettings.value = { ...teamSettings.value,
+                             difficulty_annotation: d.difficulty_team_default }
+    }
   } catch (e) {
     error.value = e.message
   } finally {
@@ -2790,11 +2836,12 @@ const shownTasks = computed(() => {
     if (taskFilters.class && String(t.class) !== taskFilters.class) return false
     if (taskFilters.type && (t.task_type || 'text-review') !== taskFilters.type) return false
     if (taskFilters.state && t.state !== taskFilters.state) return false
-    if (taskFilters.annotator === 'none' && t.assignee) return false
+    if (taskFilters.annotator === 'none' && holdersOf(t).length) return false
     if (taskFilters.annotator && taskFilters.annotator !== 'none'
-        && String(t.assignee?.rater_id ?? '') !== taskFilters.annotator) return false
+        && !holdersOf(t).some(a => String(a.rater_id) === taskFilters.annotator)) return false
     if (q) {
-      const hay = `${t.task_id} ${t.language} ${t.class} ${t.assignee?.name || ''}`.toLowerCase()
+      const hay = `${t.task_id} ${t.language} ${t.class} `
+        .concat(holdersOf(t).map(a => a.name).join(' ')).toLowerCase()
       if (!hay.includes(q)) return false
     }
     return true
@@ -2809,7 +2856,7 @@ const tasksByLanguage = computed(() => {
       total: 0, completed: 0, flagged: 0, claimed: 0, available: 0, done: 0,
     })
     L.tasks.push(t)
-    if (t.assignee) L.assigned += 1
+    if (holdersOf(t).length) L.assigned += 1
     for (const k of ['total', 'completed', 'flagged', 'claimed', 'available', 'done']) L[k] += t[k]
   }
   return Object.values(out)
@@ -2876,11 +2923,28 @@ function openLanguage(L) {
 }
 
 // ── assignment ─────────────────────────────────────────────────────────────
+
+/** Every active holder of a task, whatever shape the API row came in. */
+function holdersOf(t) {
+  if (!t) return []
+  if (t.assignees && t.assignees.length) return t.assignees
+  return t.assignee ? [t.assignee] : []
+}
+
+function initialOf(name) {
+  return (name || '?').trim().charAt(0).toUpperCase() || '?'
+}
+
+function holderTitle(a) {
+  return `${a.name} — ${a.category ? `only “${a.category}”` : 'whole task'}`
+       + (a.assigned_at_ist ? ` · since ${a.assigned_at_ist}` : '')
+}
+
 async function openAssign(taskIds = [], raterId = '') {
   assignError.value = ''
   assignSearch.value = ''
-  assignModal.value = { rater_id: raterId || '', task_ids: [...taskIds],
-                        category: '', reassign: false }
+  assignModal.value = { rater_ids: raterId ? [Number(raterId)] : [], task_ids: [...taskIds],
+                        category: '', mode: 'add' }
   try {
     const d = await api(`/pool/admin/tasks/assignable?team=${teamKey.value}`)
     assignCandidates.value = d.annotators || []
@@ -2890,8 +2954,17 @@ async function openAssign(taskIds = [], raterId = '') {
   }
 }
 
-const assignRater = computed(() =>
-  assignCandidates.value.find(a => String(a.rater_id) === String(assignModal.value?.rater_id)) || null)
+const assignRaters = computed(() => {
+  const picked = new Set((assignModal.value?.rater_ids || []).map(Number))
+  return assignCandidates.value.filter(a => picked.has(Number(a.rater_id)))
+})
+
+function toggleAssignRater(id) {
+  const list = assignModal.value.rater_ids
+  const i = list.indexOf(id)
+  if (i === -1) list.push(id)
+  else list.splice(i, 1)
+}
 
 /** Categories offered by the Scope picker: the ones every selected task actually contains. */
 const assignCategoryOptions = computed(() => {
@@ -2910,25 +2983,23 @@ const assignableShown = computed(() => {
   const q = assignSearch.value.trim().toLowerCase()
   if (!q) return assignableTasks.value
   return assignableTasks.value.filter(t =>
-    `${t.task_id} ${t.label} ${t.assignee?.name || ''} `
-      .concat((t.assignees || []).map(a => a.name).join(' ')).toLowerCase().includes(q))
+    `${t.task_id} ${t.label} `
+      .concat(holdersOf(t).map(a => a.name).join(' ')).toLowerCase().includes(q))
 })
 
-/** Selected tasks that somebody else already holds (whole, or the chosen category) -- shown by name so taking them over is always an explicit choice. */
-const assignTakeover = computed(() => {
+/** Holders of the selected scope who are NOT among the chosen annotators: kept alongside in 'add' mode, taken back in 'replace' mode. */
+const assignOtherHolders = computed(() => {
   if (!assignModal.value) return []
-  const me = String(assignModal.value.rater_id)
+  const picked = new Set(assignModal.value.rater_ids.map(Number))
   const cat = assignModal.value.category
   const out = []
   for (const t of assignableTasks.value) {
     if (!assignModal.value.task_ids.includes(t.task_id)) continue
-    const rows = t.assignees || (t.assignee ? [t.assignee] : [])
-    for (const a of rows) {
-      if (String(a.rater_id) === me) continue
-      // whole-task assign collides with every holder; category assign only with the whole-task holder or the same category's holder
-      if (!cat || !a.category || a.category === cat) {
-        out.push(`#${t.task_id}${a.category ? ' · ' + a.category : ''} (${a.name})`)
-      }
+    for (const a of holdersOf(t)) {
+      if (picked.has(Number(a.rater_id))) continue
+      // a category assign only touches that category's holders; whole-task holders keep the rest either way
+      if (cat && a.category !== cat) continue
+      out.push(`#${t.task_id}${a.category ? ' · ' + a.category : ''} (${a.name})`)
     }
   }
   return out
@@ -2947,10 +3018,11 @@ async function saveAssignment() {
   try {
     const r = await api('/pool/admin/tasks/assign', {
       method: 'POST',
-      body: JSON.stringify({ team: teamKey.value, rater_id: Number(assignModal.value.rater_id),
+      body: JSON.stringify({ team: teamKey.value,
+                             rater_ids: assignModal.value.rater_ids.map(Number),
                              task_ids: assignModal.value.task_ids,
                              category: assignModal.value.category || '',
-                             reassign: assignModal.value.reassign }),
+                             mode: assignModal.value.mode }),
     })
     assignModal.value = null
     selectedTasks.value = []
@@ -2963,19 +3035,28 @@ async function saveAssignment() {
   }
 }
 
-async function unassignTask(t) {
-  const holder = t.assignee?.name || 'the annotator'
-  if (!confirm(`Take task #${t.task_id} (${t.label || t.language}) back from ${holder}?\n\n`
-             + 'Everything they have already submitted is kept. Anything they are still '
-             + 'holding goes back to the pool so the task can be given to someone else.')) return
+/** Take a task back — from one annotator (pass their assignee row) or from everyone. */
+async function unassignTask(t, a = null) {
+  const who = a ? a.name
+              : (holdersOf(t).map(h => h.name).join(', ') || 'the annotator')
+  const scope = a?.category ? ` (their “${a.category}” part)` : ''
+  if (!confirm(`Take task #${t.task_id} (${t.label || t.language})${scope} back from ${who}?\n\n`
+             + 'Everything already submitted is kept. Any unfinished prompts go back to the '
+             + 'pool for the remaining annotators.')) return
   try {
+    const body = { team: teamKey.value, task_ids: [t.task_id], return_claimed: true }
+    if (a) {
+      body.rater_id = a.rater_id
+      if (a.category) body.category = a.category
+    }
     const r = await api('/pool/admin/tasks/unassign', {
       method: 'POST',
-      body: JSON.stringify({ team: teamKey.value, task_ids: [t.task_id], return_claimed: true }),
+      body: JSON.stringify(body),
     })
     flash(r.message)
-    taskModal.value = null
-    await Promise.all([loadTasks(), load()])
+    if (!a) taskModal.value = null
+    await Promise.all([loadTasks(), load(),
+                       a && taskModal.value ? openTask(t.task_id) : Promise.resolve()])
   } catch (e) {
     flash(e.message)
   }
@@ -3444,6 +3525,40 @@ onBeforeUnmount(() => {
                     background: linear-gradient(135deg, #d8661b, #f4a93c); color: #fff;
                     display: flex; align-items: center; justify-content: center;
                     font-weight: 700; font-size: 1.2rem; flex-shrink: 0; }
+.avatar-stack { display: flex; flex-shrink: 0; }
+.avatar-stack .stacked { width: 40px; height: 40px; font-size: 1rem; border: 2px solid #fff; }
+.avatar-stack .stacked + .stacked { margin-left: -12px; }
+.avatar-stack .stacked.more { background: #f1f5f9; color: #64748b; font-size: .8rem; }
+
+/* One annotator holding (part of) a task — the same chip everywhere a holder is shown. */
+.holder-chip { display: inline-flex; align-items: center; gap: .3rem; background: #fceee3;
+               color: #7c3f10; border: 1px solid #f3cdaa; font-weight: 600; font-size: .72rem;
+               padding: .1rem .5rem .1rem .15rem; border-radius: 999px; white-space: nowrap; }
+.holder-chip em { font-style: normal; color: #b4530f; background: #fff;
+                  border: 1px solid #f3cdaa; border-radius: 999px;
+                  padding: 0 .35rem; font-size: .64rem; }
+.holder-initial { width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0;
+                  background: linear-gradient(135deg, #d8661b, #f4a93c); color: #fff;
+                  display: inline-flex; align-items: center; justify-content: center;
+                  font-size: .6rem; font-weight: 700; }
+.holder-initial.lg { width: 26px; height: 26px; font-size: .72rem; }
+
+/* The richer card used in the task-detail modal, with a per-annotator remove control. */
+.holder-pill { display: inline-flex; align-items: center; gap: .55rem; background: #fff;
+               border: 1px solid #f3cdaa; border-radius: .65rem; padding: .35rem .6rem; }
+.holder-pill .holder-avatar { width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+                              background: linear-gradient(135deg, #d8661b, #f4a93c); color: #fff;
+                              display: inline-flex; align-items: center; justify-content: center;
+                              font-size: .8rem; font-weight: 700; }
+.holder-pill .holder-remove { color: #adb5bd; font-size: .9rem; transition: color .15s ease; }
+.holder-pill .holder-remove:hover { color: #dc3545; }
+
+/* Share vs replace choice in the assign dialog. */
+.mode-card { display: flex; align-items: flex-start; gap: .55rem; border: 1px solid #dee2e6;
+             border-radius: .6rem; padding: .55rem .75rem; cursor: pointer; margin: 0;
+             transition: border-color .15s ease, background .15s ease; }
+.mode-card:hover { border-color: #f3cdaa; }
+.mode-card.active { border-color: #d8661b; background: #fceee3; }
 .selected-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
 .selected-chips .chip { display: inline-flex; align-items: center; gap: .35rem; background: #fceee3;
                         color: #b4530f; border: 1px solid #f3cdaa; font-weight: 600;
@@ -3514,4 +3629,25 @@ onBeforeUnmount(() => {
 .asr-toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
              background: #212529; color: #fff; padding: .6rem 1.1rem; border-radius: 2rem;
              font-size: .86rem; z-index: 1100; box-shadow: 0 .5rem 1.5rem rgba(0,0,0,.25); }
+
+/* Small screens: the whole dashboard stays usable on a phone — tabs scroll sideways instead of stacking, dialogs use the full width, and fixed min-widths relax. Desktop is untouched. */
+@media (max-width: 767.98px) {
+  .dashboard-container { padding: 0 10px; }
+  .tabs-nav { flex-wrap: nowrap !important; overflow-x: auto; -webkit-overflow-scrolling: touch;
+              scrollbar-width: none; }
+  .tabs-nav::-webkit-scrollbar { display: none; }
+  .tab-btn { min-width: auto; flex: 1 0 auto; white-space: nowrap;
+             padding-left: .8rem; padding-right: .8rem; }
+  .asr-modal-backdrop, .assign-modal-backdrop { padding: .5rem; }
+  .asr-modal-body, .assign-modal-body { padding: .9rem; }
+  .asr-modal-head, .assign-modal-header { padding: .75rem .9rem; }
+  .asr-modal-foot, .assign-modal-footer { padding: .75rem .9rem; flex-wrap: wrap; }
+  .asr-modal-foot .me-auto { margin-right: 0 !important; }
+  .lang-row { flex-wrap: wrap; row-gap: .35rem; }
+  .lang-row .progress { flex-basis: 100%; order: 10; }
+  .cell-text { max-width: 240px; }
+  .ov-tile { min-width: 140px; flex: 1 1 45%; }
+  .filter-bar { margin: 0 -0.9rem 1rem; padding-left: .9rem; padding-right: .9rem; }
+  .avatar-stack .stacked + .stacked { margin-left: -16px; }
+}
 </style>

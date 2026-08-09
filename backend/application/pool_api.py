@@ -1439,13 +1439,14 @@ def pool_export_tasks_csv(current_user):
             grouped.items(), key=lambda kv: (kv[0][0], kv[0][2])):
         task = tasks.get(task_id)
         rows_for_task = holders.get(task_id, [])
-        # The row is one (task, category): its holder is the whole-task assignee or the assignee of exactly this category.
-        holder_name = ''
+        # The row is one (task, category): its holders are every whole-task assignee plus everyone assigned exactly this category.
+        names = []
         for a, r in rows_for_task:
             if a.category is None or a.category == cat:
-                holder_name = r.name if r else ''
-                if a.category == cat:
-                    break
+                nm = r.name if r else f'Annotator #{a.rater_id}'
+                if nm not in names:
+                    names.append(nm)
+        holder_name = ' | '.join(names)
         n += 1
         done = v['completed'] + v['flagged']
         w.writerow([n, task_id or '', ttype,
