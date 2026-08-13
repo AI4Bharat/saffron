@@ -5,11 +5,14 @@ import os
 import re
 import sys
 
+# Both the sibling tools modules (qc_upload_jobs) and the backend root (main, application.*) must be importable.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import qc_upload_jobs as jobs
 
-BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+# This file lives in backend/tools/ -- the backend root is one directory up.
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AUDIO_SEG_BASE_DIR = os.path.join(BACKEND_DIR, "audio_segmentation")
 DEFAULT_EXCEL_DRIVE_FOLDER = "https://drive.google.com/drive/folders/1nP_Eu7rtI_R49vd_s4c6JxzyaI-vb8HD"
 

@@ -204,7 +204,7 @@
               </div>
               <div class="col-6 col-lg-2 d-grid">
                 <button class="btn btn-success rounded-pill py-2 d-flex align-items-center justify-content-center gap-2"
-                        :disabled="pulling || !matching" @click="pullWork">
+                        :disabled="pulling || !matching || atCap" @click="pullWork">
                   <span v-if="pulling" class="spinner-border spinner-border-sm"></span>
                   <i v-else class="bi bi-download"></i>
                   {{ pulling ? 'Getting…' : 'Get prompts' }}
@@ -212,9 +212,17 @@
               </div>
             </div>
             <p class="text-muted small mb-0 mt-3">
-              <span v-if="!matching">Nothing left for that combination — try another type of prompt.</span>
+              <span v-if="atCap" class="text-danger">
+                You are holding {{ heldNow }} unfinished prompt(s) — the limit is
+                {{ openCap }} at a time. Submit those first, then you can pull more.
+              </span>
+              <span v-else-if="!matching">Nothing left for that combination — try another type of prompt.</span>
               <span v-else>Prompts come in batches of {{ countOptions.join(', ') }}. Take a batch,
-                annotate it, then take the next — there is no limit on how many batches you can do.</span>
+                annotate it, then take the next.
+                <template v-if="openCap"> You can hold at most {{ openCap }} unfinished
+                  prompt(s) at a time<template v-if="allowance < pick.count"> — right now
+                  you can take {{ allowance }} more</template>.</template>
+              </span>
             </p>
 
             <!-- What you are working on -->
@@ -741,8 +749,15 @@ const matching = computed(() => {
   return t.available_by_category.find(x => x.category === pick.value.category)?.available || 0
 })
 
-/** Prompts are handed out in fixed batches; take a batch, finish it, take the next — there is no ceiling on how many batches you may take. */
+/** Prompts are handed out in fixed batches; take a batch, finish it, take the next. */
 const countOptions = computed(() => stats.value.batch_sizes || [20, 30, 50])
+
+/** The ceiling on unfinished prompts one annotator may hold at once (0 = none). The server enforces it; these only drive the button state and the explanation. */
+const openCap = computed(() => stats.value.max_open_items || 0)
+const heldNow = computed(() => stats.value.outstanding || 0)
+const atCap = computed(() => openCap.value > 0 && heldNow.value >= openCap.value)
+const allowance = computed(() =>
+  openCap.value ? Math.max(0, openCap.value - heldNow.value) : Infinity)
 
 function fitCount() {
   const opts = countOptions.value
@@ -812,7 +827,8 @@ async function refresh() {
     tasks.value = w.tasks || []
     pulls.value = w.pulls || []
     stats.value = { ...w.stats, team_name: w.team?.name,
-                    batch_sizes: w.batch_sizes || [20, 30, 50] }
+                    batch_sizes: w.batch_sizes || [20, 30, 50],
+                    max_open_items: w.max_open_items || 0 }
     tree.value = t
     if (!currentTask.value) {
       const first = tasks.value.find(x => x.available_total > 0) || tasks.value[0]

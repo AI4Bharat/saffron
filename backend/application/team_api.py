@@ -134,6 +134,20 @@ def admin_team_members(current_user):
                     'candidates': candidates}), 200
 
 
+@app.route('/api/admin/team/pending', methods=['GET'])
+@token_required
+def admin_team_pending(current_user):
+    """Annotators who signed up but belong to no team yet -- the approval queue. Every team's admin sees the same queue and approves people into THEIR team; a rater with any membership row (active or not) is off the queue."""
+    if not _is_admin(current_user):
+        return jsonify({'message': 'Unauthorized'}), 401
+    member_anywhere = {rid for (rid,) in db.session.query(TeamMember.rater_id).distinct()}
+    pending = [r for r in Rater.query.order_by(Rater.id.desc()).all()
+               if r.id not in member_anywhere and getattr(r, 'is_active', True)]
+    return jsonify({'pending': [{'rater_id': r.id, 'name': r.name, 'email': r.email,
+                                 'age': r.age, 'gender': r.gender}
+                                for r in pending]}), 200
+
+
 @app.route('/api/admin/team/member', methods=['POST'])
 @token_required
 def admin_team_member(current_user):

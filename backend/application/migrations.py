@@ -254,18 +254,7 @@ def backfill_tts_ownership(teams):
     if n:
         _log(f"backfilled team_id=tts on {n} existing batch(es)")
 
-    # One TeamMember row per pre-existing annotator, TTS team.
-    existing = {m.rater_id for m in TeamMember.query.filter_by(team_id=tts.id).all()}
-    added = 0
-    for rater in Rater.query.all():
-        if rater.id in existing:
-            continue
-        # Membership means "belongs to this team"; whether the ACCOUNT is switched off is Rater.is_active and is handled separately (the dashboard has its own "show.
-        db.session.add(TeamMember(team_id=tts.id, rater_id=rater.id, role='annotator'))
-        added += 1
-    if added:
-        db.session.commit()
-        _log(f"added {added} existing annotator(s) to the TTS team")
+    # RETIRED 2026-08-11: the one-time "adopt pre-teams annotators into TTS" sweep. It kept running on every boot and adopted every NEW non-TTS signup into the TTS roster too. Since the approval flow, a rater with no membership is a normal, expected state (signed up, awaiting a team admin's approval) -- adopting them anywhere would break that queue.
 
 
 def backfill_denormalised():

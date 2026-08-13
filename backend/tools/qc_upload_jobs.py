@@ -9,7 +9,8 @@ import time
 import uuid
 from datetime import datetime
 
-BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+# This file lives in backend/tools/ -- the backend root is one directory up.
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JOBS_DIR = os.path.join(BACKEND_DIR, "qc_jobs")
 VENV_PY = os.path.join(BACKEND_DIR, "venv", "bin", "python")
 

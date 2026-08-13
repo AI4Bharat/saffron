@@ -125,14 +125,6 @@
           </div>
 
           <div class="mb-3">
-            <label for="team" class="form-label">Team you are joining</label>
-            <select id="team" v-model="team" class="form-select" required>
-              <option v-for="t in teams" :key="t.key" :value="t.key">{{ t.name }}</option>
-            </select>
-            <div class="form-text">{{ teamDescription }}</div>
-          </div>
-
-          <div class="mb-3">
             <label for="signupPin" class="form-label">Signup PIN</label>
             <input
               type="text"
@@ -176,12 +168,11 @@ import { API_BASE_URL } from '@/config';
 
 const MIN_PASSWORD = 6
 
-// Form fields
+// Form fields. Signup carries NO team: a new account waits in the approval
+// queue until a team admin claims it into their team (Annotators tab).
 const name = ref('')
 const age = ref('')
 const gender = ref('')
-const team = ref('tts')
-const teams = ref([{ key: 'tts', name: 'TTS Team' }, { key: 'asr', name: 'ASR Team' }])
 const email = ref('')
 const password = ref('')
 const confirmPassword = ref('')
@@ -223,21 +214,8 @@ const validateForm = () => {
   return true
 }
 
-const teamDescription = computed(() =>
-  teams.value.find(t => t.key === team.value)?.description || '')
-
-onMounted(async () => {
+onMounted(() => {
   nameInput.value?.focus()
-  try {
-    const res = await fetch(`${API_BASE_URL}/teams`)
-    if (res.ok) {
-      const data = await res.json()
-      if (data.teams?.length) {
-        teams.value = data.teams
-        if (!data.teams.some(t => t.key === team.value)) team.value = data.teams[0].key
-      }
-    }
-  } catch { /* fall back to the built-in list */ }
 })
 
 const handleSubmit = async () => {
@@ -258,7 +236,6 @@ const handleSubmit = async () => {
         gender: gender.value,
         email: email.value.trim(),
         password: password.value,
-        team: team.value,
         signup_key: signupPin.value.trim()
       })
     })
@@ -269,7 +246,8 @@ const handleSubmit = async () => {
     }
 
     localStorage.setItem('authToken', data.token) // Save token for authentication
-    window.location.href = '/' // Redirect to home page with full refresh
+    // A fresh account belongs to no team yet -- straight to the waiting room until an admin approves them.
+    window.location.href = '/no-workspace'
   } catch (err) {
     console.error('Signup error:', err)
     error.value = err instanceof TypeError

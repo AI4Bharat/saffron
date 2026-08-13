@@ -9,7 +9,8 @@ import os
 import re
 import sys
 
-BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+# This script lives in backend/exporters/, so the backend root is one level up.
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(BACKEND_DIR)
 
 from main import app

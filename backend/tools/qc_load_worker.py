@@ -6,14 +6,17 @@ import re
 import subprocess
 import sys
 
+# Both the sibling tools modules (qc_upload_jobs) and the backend root (main, application.*) must be importable.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import qc_upload_jobs as jobs
 
-BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+# This file lives in backend/tools/ -- the backend root is one directory up.
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AUDIO_SEG_BASE_DIR = os.path.join(BACKEND_DIR, "audio_segmentation")
 VENV_PY = os.path.join(BACKEND_DIR, "venv", "bin", "python")
-LOADER = os.path.join(BACKEND_DIR, "load_audio_set.py")
+LOADER = os.path.join(BACKEND_DIR, "loaders", "load_audio_set.py")
 
 
 def summarise_set_dir(set_dir):

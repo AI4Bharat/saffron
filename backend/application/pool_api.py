@@ -26,7 +26,8 @@ from application.pool_common import (  # noqa: F401  (re-exported for pool_tasks
     _current_rater, _allowed_languages, _serialize_item, _blank_counts,
     _with_progress, task_counts, task_category_counts, active_assignments,
     assigned_tasks_for, assigned_task_ids, primary_holder, allowed_categories,
-    team_setting, difficulty_required_for, csv_response, serialize_task, serialize_assignee,
+    team_setting, open_items_cap, open_items_held, difficulty_required_for,
+    csv_response, serialize_task, serialize_assignee,
     serialize_pull, pull_counts, release_pull_items, close_finished_pulls,
     _revoke_assignments, release_stale_claims, my_work_by_task_type,
 )
@@ -98,7 +99,9 @@ def pool_summary(current_user):
         'completed_total': done_total,
         'completed_today': today,
         'batch_sizes': BATCH_SIZES,
-        'can_pull': sum(available.values()) > 0,
+        'max_open_items': open_items_cap(team),
+        'can_pull': sum(available.values()) > 0 and
+                    (not open_items_cap(team) or outstanding < open_items_cap(team)),
         'difficulty_annotation': bool(team_setting(team, 'difficulty_annotation', True)),
         'difficulties': DIFFICULTIES,
         'flag_reasons': FLAG_REASONS,
@@ -139,12 +142,21 @@ def pool_pull(current_user):
     # None = the whole task is theirs; otherwise only these categories.
     my_cats = allowed_categories(assignments)
 
-    # --- how many? A fixed batch (20/30/50); there is no ceiling on batches. ---
+    # --- how many? A fixed batch (20/30/50), bounded by the team's ceiling on claimed-but-unfinished prompts: whatever they still hold counts against it, so they must submit before they can pull more. ---
+    cap = open_items_cap(team)
+    held = open_items_held(team.id, rater.id) if cap else 0
+    if cap and held >= cap:
+        return jsonify({'message': f'You are holding {held} unfinished prompt(s) — the '
+                                   f'limit is {cap} at a time. Submit those first, '
+                                   'then you can pull more.',
+                        'claimed': 0, 'outstanding': held, 'max_open_items': cap}), 403
     try:
         want = int(data.get('count') or BATCH_SIZES[0])
     except (TypeError, ValueError):
         want = BATCH_SIZES[0]
     want = max(1, min(want, 500))
+    if cap:
+        want = min(want, cap - held)
 
     # Plain equality filters inside the same single statement, so the no-overlap guarantee is untouched: whatever the filter, only one pull wins a row.
     category = (data.get('category') or '').strip().lower()
@@ -705,7 +717,8 @@ def pool_admin_dashboard(current_user):
         'uploads': uploads,
         'difficulties': DIFFICULTIES,
         'settings': {'difficulty_annotation':
-                     bool(team_setting(team, 'difficulty_annotation', True))},
+                     bool(team_setting(team, 'difficulty_annotation', True)),
+                     'max_open_items': open_items_cap(team)},
         'stale_claim_hours': STALE_CLAIM_HOURS,
         'generated_in_ms': int((time.time() - t0) * 1000),
     }), 200

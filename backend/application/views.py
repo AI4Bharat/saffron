@@ -221,10 +221,21 @@ def serve_audio(filename):
     import re
     from flask import request, Response
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    audio_dir = os.path.join(base_dir, 'audio_segmentation')
-    filepath = os.path.join(audio_dir, filename)
-    
-    if not os.path.exists(filepath):
+    # Audio lives in more than one place now: audio_segmentation/ holds the recording
+    # sets (paths like 'set3/x.wav'), aivanta_task/ the transcript-correction clips
+    # (paths like 'aivanta_task/Hindi_E_Commerce/x.wav'). A path whose first segment
+    # names an allowed root resolves against backend/; anything else keeps the old
+    # meaning and resolves inside audio_segmentation/.
+    AUDIO_ROOTS = ('audio_segmentation', 'aivanta_task')
+    head = filename.split('/', 1)[0]
+    root = base_dir if head in AUDIO_ROOTS else os.path.join(base_dir, 'audio_segmentation')
+    filepath = os.path.normpath(os.path.join(root, filename))
+
+    # '..' in the URL must not reach outside the root, and only audio is servable.
+    if not filepath.startswith(os.path.join(root, '')) or not filepath.lower().endswith('.wav'):
+        return "File not found", 404
+
+    if not os.path.isfile(filepath):
         return "File not found", 404
         
     file_size = os.path.getsize(filepath)
@@ -614,10 +625,6 @@ def signup():
     email = data.get('email')
     password = data.get('password')
 
-    # Which team is this person joining? (defaults to TTS so an old client that does not send a team still works.)
-    team = _team_by_key(data.get('team') or 'tts')
-    if team is None or not team.is_active:
-        return jsonify({'message': 'Please choose a valid team to join.'}), 400
     if AdminUser.query.filter_by(username=(name or '').strip()).first():
         return jsonify({'message': 'That username is reserved.'}), 400
 
@@ -641,11 +648,9 @@ def signup():
         password=password.strip()
     )
 
-    # Add the new user to the database, and put them in the team they chose.
+    # A new account joins NO team: it waits in the approval queue until a team admin claims it into their team from the dashboard (Annotators -> Pending approval).
     try:
         db.session.add(new_user)
-        db.session.flush()          # need the id for the membership row
-        db.session.add(TeamMember(team_id=team.id, rater_id=new_user.id, role='annotator'))
         db.session.commit()  # Commit to save the user in the database
     except Exception as e:
         db.session.rollback()  # In case of error, rollback the transaction

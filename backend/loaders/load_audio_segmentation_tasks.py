@@ -5,11 +5,11 @@ import pandas as pd
 import json
 
 # Add backend directory to path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # backend root
 
 from main import app
 from application.database import db
-from application.models import Test
+from application.models import Test, Team
 
 AUDIO_SEG_BASE_DIR = "/root/saffron/backend/audio_segmentation"
 DEFAULT_SET = "set0"
@@ -119,11 +119,18 @@ def main():
             if entries and str(entries[0].get("audio_filename", "")).split("/")[0] == set_name:
                 existing_test = t
                 break
+        # Batches are team-scoped on the dashboard: a Test without team_id is invisible to every team admin (the old boot backfill that patched this up at the NEXT restart is retired), so stamp the owning team here.
+        owner = Team.query.filter_by(
+            key=os.environ.get('AUDIO_SEG_TEAM_KEY', 'tts')).first()
         if existing_test:
             print(f"Test for dir '{set_name}' already exists in DB with ID: {existing_test.id}")
             existing_test.json_entry = tasks
             existing_test.description = description
             existing_test.test_type = "audio-segmentation"
+            if existing_test.team_id is None and owner:
+                existing_test.team_id = owner.id
+            existing_test.item_count = len(tasks)
+            existing_test.language_hint = language.lower()
             db.session.commit()
             print(f"Updated existing Test ID={existing_test.id} '{description}' with {len(tasks)} tasks.")
         else:
@@ -132,7 +139,10 @@ def main():
                 id=next_id,
                 test_type="audio-segmentation",
                 description=description,
-                json_entry=tasks
+                json_entry=tasks,
+                team_id=owner.id if owner else None,
+                item_count=len(tasks),
+                language_hint=language.lower(),
             )
             db.session.add(test)
             db.session.commit()

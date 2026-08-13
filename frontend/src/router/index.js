@@ -10,6 +10,7 @@ import OrgOverview from '@/views/OrgOverview.vue';
 import AsrWorkspace from '@/views/AsrWorkspace.vue';
 import AsrTaskView from '@/views/AsrTaskView.vue';
 import TeamDashboardView from '@/views/TeamDashboardView.vue';
+import PendingApprovalView from '@/views/PendingApprovalView.vue';
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -89,6 +90,13 @@ const router = createRouter({
       // Historical URL -- everything that linked to /tracking still works.
       path: '/tracking',
       redirect: '/tts/admin',
+    },
+    {
+      // Signed up but not yet approved into any team: the waiting room. (Was an unrouted path that fell through to the raw test page.)
+      path: '/no-workspace',
+      name: 'PendingApproval',
+      component: PendingApprovalView,
+      meta: { requiresAuth: true },
     },
     {
       // Admin-only review of a task's submitted annotations (per-annotator tabs).

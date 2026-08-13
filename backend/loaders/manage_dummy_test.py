@@ -4,7 +4,7 @@ import json
 import argparse
 
 # Add backend directory to path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # backend root
 
 from main import app
 from application.database import db

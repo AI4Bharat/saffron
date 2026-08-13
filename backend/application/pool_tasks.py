@@ -17,7 +17,8 @@ from application.pool_common import (
     _ist_day, _today_ist, _ist_stamp,
     _pool_team, _member, _current_rater, _serialize_item, _blank_counts, _with_progress,
     task_counts, task_category_counts, active_assignments, assigned_tasks_for,
-    primary_holder, allowed_categories, team_setting, difficulty_required_for,
+    primary_holder, allowed_categories, team_setting, open_items_cap,
+    difficulty_required_for,
     language_difficulty_setting, csv_response,
     serialize_task, serialize_assignee, serialize_pull, pull_counts,
     release_pull_items, close_finished_pulls, release_stale_claims,
@@ -877,8 +878,9 @@ def pool_my_workspace(current_user):
             'available_total': sum(t['available_total'] for t in tasks),
             'by_task_type': by_task_type,
         },
-        # Prompts are handed out in fixed batches; there is no ceiling on how many batches an annotator may take.
+        # Prompts are handed out in fixed batches; an annotator may hold at most max_open_items unfinished prompts at a time (0 = no ceiling).
         'batch_sizes': BATCH_SIZES,
+        'max_open_items': open_items_cap(team),
         'difficulty_annotation': bool(team_setting(team, 'difficulty_annotation', True)),
         'stale_claim_hours': STALE_CLAIM_HOURS,
         'difficulties': DIFFICULTIES,

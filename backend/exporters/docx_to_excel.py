@@ -15,7 +15,8 @@ import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+# This file lives in backend/exporters/ -- the backend root is one directory up.
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXCEL_DRIVE_FOLDER_ID = "1nP_Eu7rtI_R49vd_s4c6JxzyaI-vb8HD"
 EXCEL_DRIVE_URL = f"https://drive.google.com/drive/folders/{EXCEL_DRIVE_FOLDER_ID}"
 # Source conversation DOCX files live here (same folder export_upload_docs.py uploads to)
@@ -194,15 +195,15 @@ def _norm(s):
 
 
 def find_docx_locally(language, persona, set_no):
-    """Fallback: look for the docx in past export runs (exports/auto_docs/*/docx) for sets that were generated on this server but not (yet) uploaded to Drive."""
+    """Fallback: look for the docx in past export runs (exports/auto_docs/*/docx) and the local docx cache (exports/_docx_cache) for sets that were generated on this server but are not (or no longer) on Drive."""
     want = (_norm(language), _norm(persona), int(set_no))
-    auto_docs = os.path.join(BACKEND_DIR, "exports", "auto_docs")
     hits = []
-    for root, _, names in os.walk(auto_docs):
-        for n in names:
-            m = DOCX_NAME_RE.match(n)
-            if m and (_norm(m.group(1)), _norm(m.group(2)), int(m.group(3))) == want:
-                hits.append(os.path.join(root, n))
+    for rel in (("exports", "auto_docs"), ("exports", "_docx_cache")):
+        for root, _, names in os.walk(os.path.join(BACKEND_DIR, *rel)):
+            for n in names:
+                m = DOCX_NAME_RE.match(n)
+                if m and (_norm(m.group(1)), _norm(m.group(2)), int(m.group(3))) == want:
+                    hits.append(os.path.join(root, n))
     return max(hits, key=os.path.getmtime) if hits else None
 
 

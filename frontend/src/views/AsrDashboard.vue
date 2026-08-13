@@ -478,8 +478,67 @@
 
       <!-- ══════════════════ ANNOTATORS ══════════════════ -->
       <div v-else-if="tab === 'annotators'" class="tab-pane-active">
+        <!-- Sub-tabs: the team's members vs. the org-wide signup approval queue (same pill subnav as the Tasks tab) -->
+        <div class="d-flex justify-content-center align-items-center gap-3 flex-wrap mb-4">
+          <div class="tasks-subnav d-inline-flex align-items-center">
+            <button type="button" @click="annotSubTab = 'members'"
+                    :class="['subnav-btn', { active: annotSubTab === 'members' }]">
+              <i class="bi bi-people-fill"></i><span>Team Members</span>
+              <span class="subnav-badge">{{ shownAnnotators.length }}</span>
+            </button>
+            <button type="button" @click="annotSubTab = 'pending'; loadPending()"
+                    :class="['subnav-btn', { active: annotSubTab === 'pending' }]">
+              <i class="bi bi-person-plus-fill"></i><span>Pending Approval</span>
+              <span v-if="pendingSignups.length" class="subnav-badge">{{ pendingSignups.length }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Approval queue: signups that belong to no team yet -->
+        <div v-if="annotSubTab === 'pending'" class="card shadow-sm border">
+          <div class="card-header bg-white py-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <div>
+              <h3 class="fw-bold text-dark m-0 fs-5">Waiting to join a team</h3>
+              <small class="text-muted">Everyone who signed up and has not been let into any team yet.
+                Approving adds them to <b>this</b> team; other teams' admins see the same queue.</small>
+            </div>
+            <button class="btn btn-outline-secondary btn-sm" :disabled="pendingLoading" @click="loadPending">
+              <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+            </button>
+          </div>
+          <div class="table-responsive">
+            <table class="table align-middle mb-0">
+              <thead>
+                <tr class="text-xs text-uppercase text-secondary">
+                  <th class="ps-3">Name</th><th>Email</th><th>Age</th><th>Gender</th><th class="text-end pe-3">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="p in pendingSignups" :key="p.rater_id">
+                  <td class="ps-3 fw-semibold text-dark">{{ p.name }}</td>
+                  <td class="text-muted">{{ p.email }}</td>
+                  <td>{{ p.age }}</td>
+                  <td class="text-capitalize">{{ p.gender }}</td>
+                  <td class="text-end pe-3">
+                    <button class="btn btn-sm btn-success" :disabled="approving === p.rater_id"
+                            @click="approveSignup(p)">
+                      <span v-if="approving === p.rater_id" class="spinner-border spinner-border-sm me-1"></span>
+                      <i v-else class="bi bi-person-check me-1"></i>Approve into this team
+                    </button>
+                  </td>
+                </tr>
+                <tr v-if="!pendingSignups.length">
+                  <td colspan="5" class="text-center text-muted py-5">
+                    {{ pendingLoading ? 'Loading…' : 'Nobody is waiting right now — new signups appear here.' }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <!-- Stale-annotator alert -->
-        <div v-if="staleRaters.length" class="alert stale-alert d-flex align-items-center gap-2 shadow-sm mb-3">
+        <div v-if="annotSubTab === 'members' && staleRaters.length" class="alert stale-alert d-flex align-items-center gap-2 shadow-sm mb-3">
           <i class="bi bi-exclamation-triangle-fill fs-5"></i>
           <div class="flex-grow-1">
             <strong>{{ staleRaters.length }}</strong>
@@ -495,13 +554,13 @@
           </button>
         </div>
 
-        <div class="card shadow-sm border">
+        <div v-show="annotSubTab === 'members'" class="card shadow-sm border">
           <!-- Toolbar -->
           <div class="card-header bg-white py-3">
             <div class="d-flex flex-wrap align-items-center gap-3">
               <div class="me-auto">
                 <h3 class="fw-bold text-dark m-0 fs-5">Annotators &amp; Task Assignment</h3>
-                <small class="text-muted">A task is <strong>locked</strong> to one annotator at a time.</small>
+                <small class="text-muted">Tasks can be shared — every prompt still goes to exactly one annotator.</small>
               </div>
 
               <div class="search-wrap position-relative">
@@ -1097,6 +1156,8 @@
                   <i class="bi bi-clipboard me-1"></i>{{ pinCopied ? 'Copied' : 'Copy' }}
                 </button>
               </div>
+              <p class="text-muted text-xs mb-0 mt-2">After signing up, new annotators wait in
+                <b>Annotators → Pending approval</b> until you let them into the team.</p>
             </div>
           </div>
 
@@ -1143,6 +1204,24 @@
                   <span v-if="savingSetting" class="spinner-border spinner-border-sm text-secondary"></span>
                   <DiffToggle :on="teamSettings.difficulty_annotation !== false" :overridden="true"
                               :disabled="savingSetting" @toggle="toggleDifficultySetting" />
+                </span>
+              </div>
+              <div class="d-flex align-items-center justify-content-between gap-2 border rounded p-3 mt-3">
+                <div>
+                  <div class="fw-semibold text-dark small">Pull limit per annotator</div>
+                  <div class="text-xs text-muted">
+                    {{ pullCapDraft > 0
+                       ? `An annotator may hold at most ${pullCapDraft} unfinished prompt(s); they must submit those before pulling more.`
+                       : 'No limit — annotators may pull as many prompts as they like.' }}
+                  </div>
+                </div>
+                <span class="d-inline-flex align-items-center gap-2 flex-shrink-0">
+                  <input v-model.number="pullCapDraft" type="number" min="0" step="1"
+                         class="form-control form-control-sm" style="width: 90px"
+                         :disabled="savingSetting" />
+                  <button class="btn btn-sm btn-primary"
+                          :disabled="savingSetting || pullCapDraft === (teamSettings.max_open_items || 0)"
+                          @click="savePullCap">Save</button>
                 </span>
               </div>
             </div>
@@ -2216,6 +2295,28 @@ const toast = ref('')
 // Team-level switches the admin controls (from /pool/admin/dashboard).
 const teamSettings = ref({ difficulty_annotation: true })
 const savingSetting = ref(false)
+// The pull-limit input, edited freely and only saved on the button press.
+const pullCapDraft = ref(0)
+
+/** Save the ceiling on unfinished prompts one annotator may hold (0 = no limit). */
+async function savePullCap() {
+  const cap = Math.max(0, Math.floor(Number(pullCapDraft.value) || 0))
+  savingSetting.value = true
+  try {
+    const r = await api('/pool/admin/settings', {
+      method: 'POST',
+      body: JSON.stringify({ team: teamKey.value, max_open_items: cap }),
+    })
+    teamSettings.value = r.settings || { ...teamSettings.value, max_open_items: cap }
+    pullCapDraft.value = cap
+    flash(cap ? `Annotators can now hold at most ${cap} unfinished prompt(s) at a time.`
+              : 'The pull limit is off — annotators can hold any number of prompts.')
+  } catch (e) {
+    flash(e.message)
+  } finally {
+    savingSetting.value = false
+  }
+}
 
 /** Set the difficulty-labelling toggle for tasks (optionally one category). on = true / false / null — null clears the override so the level above decides. Each level stores its own value; nothing writes through to another level. */
 async function setDifficulty(taskIds, category, on) {
@@ -2311,6 +2412,41 @@ const broadcastModal = ref(null)
 const sending = ref(false)
 const signupPin = ref('')
 const pinCopied = ref(false)
+
+// ── annotators tab: members vs the signup approval queue ──
+const annotSubTab = ref('members')
+const pendingSignups = ref([])
+const pendingLoading = ref(false)
+const approving = ref(0)
+
+async function loadPending() {
+  pendingLoading.value = true
+  try {
+    pendingSignups.value = (await api('/admin/team/pending')).pending || []
+  } catch (e) {
+    flash(e.message)
+  } finally {
+    pendingLoading.value = false
+  }
+}
+
+/** Let a pending signup into THIS team (they stay visible to other teams until someone approves them). */
+async function approveSignup(p) {
+  approving.value = p.rater_id
+  try {
+    const r = await api('/pool/admin/member', {
+      method: 'POST',
+      body: JSON.stringify({ team: teamKey.value, rater_id: p.rater_id }),
+    })
+    flash(r.message || `${p.name} is now in the team.`)
+    await loadPending()
+    load()
+  } catch (e) {
+    flash(e.message)
+  } finally {
+    approving.value = 0
+  }
+}
 
 // ── annotators tab: search, sort, stale alert, menus, drill-down ──
 const STALE_DAYS = 5
@@ -2795,7 +2931,12 @@ async function load() {
     uploads.value = d.uploads || []
     staleHours.value = d.stale_claim_hours || 48
     difficulties.value = d.difficulties || difficulties.value
-    if (d.settings) teamSettings.value = d.settings
+    if (d.settings) {
+      // The auto-refresh must not clobber a half-typed pull limit: only follow the server value while the draft is unedited.
+      const prev = teamSettings.value.max_open_items || 0
+      teamSettings.value = d.settings
+      if (pullCapDraft.value === prev) pullCapDraft.value = d.settings.max_open_items || 0
+    }
     lastLoaded.value = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
     error.value = ''
   } catch (e) {
@@ -3386,6 +3527,7 @@ onMounted(() => {
   // Load-as-you-go: the overview and the task list arrive independently, and each section paints as soon as its own data is in.
   load()
   loadTasks()
+  loadPending()   // primes the "Pending approval" badge
   if (isAutoRefreshActive.value) startTimers()
 })
 onBeforeUnmount(() => {

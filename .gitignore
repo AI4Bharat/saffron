@@ -201,3 +201,8 @@ backend/tasks/
 backend/state/signup_key.txt
 backend/logs/
 backend/qc_jobs/
+
+# Transcript-correction source clips: 1.4 GB of wav copied from the TTS VM.
+# manifest.jsonl (the task definition) stays tracked; the audio does not.
+backend/aivanta_task/**/*.wav
+backend/aivanta_task/*.vm_original

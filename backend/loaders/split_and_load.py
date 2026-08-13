@@ -4,7 +4,7 @@ import os
 import sys
 
 # Add backend directory to path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # backend root
 
 from load_jsonl import load_jsonl_config
 from load_config import TestType

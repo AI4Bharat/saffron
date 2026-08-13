@@ -35,8 +35,10 @@ if ss -ltn | grep -q ':4020'; then
 fi
 
 echo "==> starting fresh gunicorn in tmux session 'saffron'"
-tmux kill-session -t saffron 2>/dev/null
-tmux new-session -d -s saffron     'bash /root/saffron/backend/scripts/start_saffron.sh 2>&1 | tee -a /root/saffron/backend/logs/gunicorn.log'
+# start_saffron.sh must run OUTSIDE tmux: it kills the 'saffron' session itself and
+# then creates a new one running its 'run' branch. Wrapping it in tmux made it kill
+# its own pane before gunicorn ever spawned (site stayed down; happened 2026-08-11).
+bash /root/saffron/backend/scripts/start_saffron.sh
 
 for i in $(seq 1 20); do
     sleep 1

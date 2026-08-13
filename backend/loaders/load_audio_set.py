@@ -7,10 +7,11 @@ import re
 import subprocess
 import sys
 
-BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+# This file lives in backend/loaders/ -- the backend root is one directory up.
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AUDIO_SEG_BASE_DIR = os.path.join(BACKEND_DIR, "audio_segmentation")
 VENV_PY = os.path.join(BACKEND_DIR, "venv", "bin", "python")
-LOADER = os.path.join(BACKEND_DIR, "load_audio_segmentation_tasks.py")
+LOADER = os.path.join(BACKEND_DIR, "loaders", "load_audio_segmentation_tasks.py")
 
 DEFAULT_EXCEL_DRIVE_FOLDER = "https://drive.google.com/drive/folders/1nP_Eu7rtI_R49vd_s4c6JxzyaI-vb8HD"
 
@@ -184,6 +185,58 @@ def download_id_wavs(audio_link, dest_dir, id_subfolder, lang_code, core_index=N
               f"'{lang_code}_Conv_..'); check the audio folder is for this persona/set.")
 
 
+def _docx_to_excel_mod():
+    """exporters/docx_to_excel.py as an importable module."""
+    sys.path.insert(0, os.path.join(BACKEND_DIR, "exporters"))
+    import docx_to_excel
+    return docx_to_excel
+
+
+def capture_recorder(excel_link, dest_dir, language, persona, excel_set):
+    """recorder.txt from the recording Excel's Drive PATH ('<Language>/<persona - Recorder>/...') -- the path is the only thing we still need the old Excel for."""
+    try:
+        files = _list_folder(excel_link)
+        want = f"{language}_{persona}_set{excel_set}".lower().replace(" ", "_")
+        for f in files:
+            base = os.path.basename(f.path).replace("Copy of ", "").strip()
+            if not f.path.lower().endswith(".xlsx") or base.startswith("~$"):
+                continue
+            if os.path.splitext(base)[0].lower() != want:
+                continue
+            parts = f.path.split("/")
+            if len(parts) >= 2 and " - " in parts[-2]:
+                recorder = parts[-2].split(" - ")[-1].strip()
+                if recorder:
+                    with open(os.path.join(dest_dir, "recorder.txt"), "w", encoding="utf-8") as fh:
+                        fh.write(recorder + "\n")
+                    print(f"[+] Recorder: {recorder}")
+            return
+    except Exception as e:
+        print(f"[i] Could not read the recorder name from the Excel folder: {e}")
+
+
+def build_excel_from_docs(dest_dir, language, persona, excel_set, lang_code):
+    """Rebuild the recording Excel FRESH from the conversation DOCX (the ACTUAL script). The pre-existing Drive Excels carry transliterated dialogue; the DOCX is the source of truth, and rebuilding with the same docx_to_excel functions keeps the IDs identical."""
+    from docx import Document
+
+    dx = _docx_to_excel_mod()
+    src_dir = os.path.join(dest_dir, "_source_docx")
+    docx_path = dx.fetch_docx_from_drive(language, persona, int(excel_set), src_dir)
+    conversations = dx.parse_doc(Document(docx_path))
+    if not conversations:
+        raise SystemExit(f"[-] No conversations parsed from {os.path.basename(docx_path)}")
+    turns = sum(len(c["turns"]) for c in conversations)
+
+    persona_title = "_".join(w.title() for w in str(persona).replace(" ", "_").split("_"))
+    out_path = os.path.join(dest_dir,
+                            f"{language.title()}_{persona_title}_Set{int(excel_set)}.xlsx")
+    os.makedirs(dest_dir, exist_ok=True)
+    dx.build_workbook(conversations, lang_code).save(out_path)
+    print(f"[+] Excel rebuilt fresh from '{os.path.basename(docx_path)}' "
+          f"({len(conversations)} conversations, {turns} turns): {out_path}")
+    return out_path
+
+
 def download_matching_excel(excel_link, dest_dir, language, persona, excel_set):
     files = _list_folder(excel_link)
     want = f"{language}_{persona}_set{excel_set}".lower().replace(" ", "_")
@@ -294,6 +347,11 @@ def main():
                    help="[two-source mode] the Set<n> number of the Excel to fetch, e.g. 2")
     p.add_argument("--id-subfolder", dest="id_subfolder", default="EXPORTED ID",
                    help="[two-source mode] WAV subfolder name to pull (default: 'EXPORTED ID')")
+    p.add_argument("--excel-source", dest="excel_source", choices=["docs", "drive"],
+                   default="docs",
+                   help="Where the recording Excel comes from: 'docs' rebuilds it fresh from "
+                        "the conversation DOCX (the actual script; default), 'drive' downloads "
+                        "the pre-existing Excel (transliterated dialogue).")
     # shared
     p.add_argument("--set", dest="set_name", help="Local set directory name, e.g. set5 (default: next free setN)")
     p.add_argument("--skip-download", action="store_true", help="Use the existing local set directory as-is")
@@ -322,9 +380,15 @@ def main():
         lang = args.language.lower().strip()
         lang_code = lang_prefix(lang)
         print(f"[*] Two-source load: language={lang} persona={args.persona} excel-set={args.excel_set} "
-              f"-> local {set_name} (Excel ID prefix '{lang_code}')")
+              f"excel-source={args.excel_source} -> local {set_name} (Excel ID prefix '{lang_code}')")
         # Excel first: its ID column is the authoritative source of WAV names.
-        excel_path = download_matching_excel(args.excel_link, dest_dir, lang, args.persona, args.excel_set)
+        if args.excel_source == "docs":
+            excel_path = build_excel_from_docs(dest_dir, lang, args.persona,
+                                               args.excel_set, lang_code)
+            capture_recorder(args.excel_link, dest_dir, lang, args.persona, args.excel_set)
+        else:
+            excel_path = download_matching_excel(args.excel_link, dest_dir, lang,
+                                                 args.persona, args.excel_set)
         core_index = excel_core_index(excel_path)
         download_id_wavs(args.audio_link, dest_dir, args.id_subfolder, lang_code, core_index)
     else:

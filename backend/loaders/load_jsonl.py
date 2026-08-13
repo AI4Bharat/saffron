@@ -4,7 +4,7 @@ import sys
 import os
 
 # Add the parent directory or backend root to path to ensure imports work
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # backend root
 
 from load_config import TestType, populate_database_from_config
 

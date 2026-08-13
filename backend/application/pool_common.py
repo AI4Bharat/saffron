@@ -45,7 +45,7 @@ try:
 except (ValueError, TypeError):
     pass
 
-# The fixed batch sizes a "Get prompts" press offers. There is no ceiling on how many batches an annotator may take; extendable through the environment without a code change.
+# The fixed batch sizes a "Get prompts" press offers; extendable through the environment without a code change.
 try:
     BATCH_SIZES = [int(x) for x in
                    os.environ.get('POOL_BATCH_SIZES', '20,30,50').split(',') if x.strip()]
@@ -53,6 +53,9 @@ except ValueError:
     BATCH_SIZES = []
 if not BATCH_SIZES:
     BATCH_SIZES = [20, 30, 50]
+
+# The ceiling on claimed-but-unfinished prompts one annotator may hold at once: they must submit what they hold before pulling more, so nobody hoards prompts others could be working on. Per-team override in Team.settings['max_open_items']; 0 = no ceiling.
+MAX_OPEN_ITEMS = int(os.environ.get('POOL_MAX_OPEN_ITEMS', '40'))
 
 # The states a pool item can be in, in the order the dashboards read them.
 ITEM_STATUSES = ['available', 'claimed', 'completed', 'flagged']
@@ -110,6 +113,21 @@ def team_setting(team, key, default=None):
     """One switch out of the team's settings bag (Team.settings JSON)."""
     s = getattr(team, 'settings', None) if team is not None else None
     return s.get(key, default) if isinstance(s, dict) else default
+
+
+def open_items_cap(team):
+    """This team's ceiling on claimed-but-unfinished prompts per annotator (0 = none)."""
+    try:
+        return max(0, int(team_setting(team, 'max_open_items', MAX_OPEN_ITEMS)))
+    except (TypeError, ValueError):
+        return MAX_OPEN_ITEMS
+
+
+def open_items_held(team_id, rater_id):
+    """How many claimed-but-unfinished prompts this annotator holds right now."""
+    return db.session.query(func.count(PoolItem.id)).filter(
+        PoolItem.team_id == team_id, PoolItem.claimed_by == rater_id,
+        PoolItem.status == 'claimed').scalar() or 0
 
 
 def language_difficulty_setting(team, language):

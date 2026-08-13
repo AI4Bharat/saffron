@@ -690,8 +690,66 @@
 
       <!-- ANNOTATORS TAB -->
       <div v-if="activeTab === 'annotators'">
+        <!-- Sub-tabs: the team's members vs. the org-wide signup approval queue (same pill subnav as the ASR dashboard's Tasks tab) -->
+        <div class="d-flex justify-content-center align-items-center gap-3 flex-wrap mb-4">
+          <div class="tasks-subnav d-inline-flex align-items-center">
+            <button type="button" @click="annotSubTab = 'members'"
+                    :class="['subnav-btn', { active: annotSubTab === 'members' }]">
+              <i class="bi bi-people-fill"></i><span>Team Members</span>
+            </button>
+            <button type="button" @click="annotSubTab = 'pending'; loadPending()"
+                    :class="['subnav-btn', { active: annotSubTab === 'pending' }]">
+              <i class="bi bi-person-plus-fill"></i><span>Pending Approval</span>
+              <span v-if="pendingSignups.length" class="subnav-badge">{{ pendingSignups.length }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Approval queue: signups that belong to no team yet -->
+        <div v-if="annotSubTab === 'pending'" class="card shadow-sm border">
+          <div class="card-header bg-white py-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <div>
+              <h3 class="fw-bold text-dark m-0 fs-5">Waiting to join a team</h3>
+              <small class="text-muted">Everyone who signed up and has not been let into any team yet.
+                Approving adds them to <b>this</b> team; other teams' admins see the same queue.</small>
+            </div>
+            <button class="btn btn-outline-secondary btn-sm" :disabled="pendingLoading" @click="loadPending">
+              <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+            </button>
+          </div>
+          <div class="table-responsive">
+            <table class="table align-middle mb-0">
+              <thead>
+                <tr class="text-xs text-uppercase text-secondary">
+                  <th class="ps-3">Name</th><th>Email</th><th>Age</th><th>Gender</th><th class="text-end pe-3">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="p in pendingSignups" :key="p.rater_id">
+                  <td class="ps-3 fw-semibold text-dark">{{ p.name }}</td>
+                  <td class="text-muted">{{ p.email }}</td>
+                  <td>{{ p.age }}</td>
+                  <td class="text-capitalize">{{ p.gender }}</td>
+                  <td class="text-end pe-3">
+                    <button class="btn btn-sm btn-success" :disabled="approvingId === p.rater_id"
+                            @click="approveSignup(p)">
+                      <span v-if="approvingId === p.rater_id" class="spinner-border spinner-border-sm me-1"></span>
+                      <i v-else class="bi bi-person-check me-1"></i>Approve into this team
+                    </button>
+                  </td>
+                </tr>
+                <tr v-if="!pendingSignups.length">
+                  <td colspan="5" class="text-center text-muted py-5">
+                    {{ pendingLoading ? 'Loading…' : 'Nobody is waiting right now — new signups appear here.' }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <!-- Stale-annotator alert -->
-        <div v-if="staleRaters.length" class="alert stale-alert d-flex align-items-center gap-2 shadow-sm mb-3" role="alert">
+        <div v-if="annotSubTab === 'members' && staleRaters.length" class="alert stale-alert d-flex align-items-center gap-2 shadow-sm mb-3" role="alert">
           <i class="bi bi-exclamation-triangle-fill fs-5"></i>
           <div class="flex-grow-1">
             <strong>{{ staleRaters.length }}</strong>
@@ -708,7 +766,7 @@
           </button>
         </div>
 
-        <div class="card shadow-sm border">
+        <div v-show="annotSubTab === 'members'" class="card shadow-sm border">
           <!-- ---------- Toolbar: title, search, and two grouped menus ---------- -->
           <div class="card-header bg-white py-3">
             <div class="d-flex flex-wrap align-items-center gap-3">
@@ -1696,6 +1754,8 @@
             </button>
             <button class="btn btn-outline-primary btn-sm" @click="fetchSignupPin"><i class="bi bi-arrow-clockwise"></i></button>
           </div>
+          <div class="w-100 text-muted text-xs">After signing up, new annotators wait in
+            <b>Annotators → Pending approval</b> until you let them into the team.</div>
         </div>
 
         <!-- Export task list (filter by version) -->
@@ -3161,6 +3221,7 @@ async function qcTick() {
         showQcConfirm.value = true
       } else if (j.status === 'failed') {
         qcInspecting.value = false
+        alert(j.error || 'The inspection failed — open the job history below for details.')
       }
     }
   }
@@ -3304,6 +3365,43 @@ const batchTestTypeFilter = ref('')
 const raterSearchQuery = ref('')
 const raterStatusFilter = ref('')
 const showAllRaters = ref(true)
+
+// ── annotators tab: members vs the signup approval queue ──
+const annotSubTab = ref('members')
+const pendingSignups = ref([])
+const pendingLoading = ref(false)
+const approvingId = ref(0)
+
+async function loadPending() {
+  pendingLoading.value = true
+  try {
+    const resp = await fetch(`${API_BASE_URL}/admin/team/pending`, { headers: qcAuth() })
+    if (resp.ok) pendingSignups.value = (await resp.json()).pending || []
+  } catch (e) {
+    console.error('pending fetch failed', e)
+  } finally {
+    pendingLoading.value = false
+  }
+}
+
+/** Let a pending signup into THIS team (they stay visible to other teams until someone approves them). */
+async function approveSignup(p) {
+  approvingId.value = p.rater_id
+  try {
+    const resp = await fetch(`${API_BASE_URL}/admin/team/member`, {
+      method: 'POST', headers: qcAuth(),
+      body: JSON.stringify({ rater_id: p.rater_id }),
+    })
+    const d = await resp.json().catch(() => ({}))
+    if (!resp.ok) { alert(d.message || 'Could not approve that annotator.'); return }
+    await loadPending()
+    fetchDashboardData(false, true)
+  } catch (e) {
+    console.error('approve failed', e)
+  } finally {
+    approvingId.value = 0
+  }
+}
 
 // Sorting + Needs-Attention + stale-annotator state
 const batchSort = ref({ key: 'id', dir: 'asc' })
@@ -4433,6 +4531,7 @@ const onGlobalKeydown = (e) => {
 onMounted(() => {
   window.addEventListener('keydown', onGlobalKeydown)
   fetchSignupPin()
+  loadPending()   // primes the "Pending approval" badge
   const token = localStorage.getItem('authToken')
   if (!token) {
     router.push('/login')
