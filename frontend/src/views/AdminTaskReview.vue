@@ -148,6 +148,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { API_BASE_URL } from '@/config'
 import TranslationCorrection from '@/components/TranslationCorrection.vue'
 import SentenceCorrection from '@/components/SentenceCorrection.vue'
+import TranscriptCorrection from '@/components/TranscriptCorrection.vue'
 import ConversationEvaluation from '@/components/ConversationEvaluation.vue'
 import AudioSegmentation from '@/components/AudioSegmentation.vue'
 import BenchmarkVerification from '@/components/BenchmarkVerification.vue'
@@ -167,6 +168,7 @@ const savingHandoff = ref(false)
 const COMPONENTS = {
   'translation-correction': TranslationCorrection,
   'sentence-correction': SentenceCorrection,
+  'transcript-correction': TranscriptCorrection,
   'conversation-evaluation': ConversationEvaluation,
   'conversation-editable': ConversationEvaluation,
   'audio-segmentation': AudioSegmentation,

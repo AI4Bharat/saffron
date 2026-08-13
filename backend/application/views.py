@@ -1151,6 +1151,16 @@ def export_csv(current_user, test_id):
                 'Level',
                 'Language'
             ]
+        elif test.test_type == 'transcript-correction':
+            headers += [
+                'Audio File',
+                'Clip Title',
+                'Domain',
+                'Original Transcript',
+                'Corrected Transcript',
+                'Lines Changed',
+                'Total Lines'
+            ]
         elif test.test_type == 'conversation-evaluation':
             headers += [
                 'Dialogue (Readable)',
@@ -1256,6 +1266,16 @@ def export_csv(current_user, test_id):
                     orig_item.get('subject') or res_json.get('subject') or "",
                     orig_item.get('level') or res_json.get('level') or "",
                     orig_item.get('target_language') or res_json.get('target_language') or ""
+                ]
+            elif test.test_type == 'transcript-correction':
+                row += [
+                    orig_item.get('audio_filename') or '',
+                    orig_item.get('title') or '',
+                    orig_item.get('domain') or '',
+                    res_json.get('original_text') or orig_item.get('text') or '',
+                    res_json.get('text') or '',
+                    res_json.get('lines_changed', ''),
+                    res_json.get('n_lines', orig_item.get('n_lines', '')),
                 ]
             elif test.test_type == 'conversation-evaluation':
                 # Build readable dialogue turns for context
