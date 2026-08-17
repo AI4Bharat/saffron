@@ -116,6 +116,45 @@ class PoolTask(db.Model):
         return f"<PoolTask {self.id} {self.language}/{self.class_label}>"
 
 
+class PoolAnnotation(db.Model):
+    """One annotator's answer to one prompt, covering both the claim and the submission.
+
+    A prompt may be answered by several annotators (the project's max_annotators is
+    the target). Keeping answers here rather than on PoolItem is what makes that
+    possible: the item can only hold one, so a second submission would overwrite
+    the first. The row is created when the prompt is pulled and completed when it
+    is submitted, so a claim in flight is visible without a second table.
+    """
+    __tablename__ = 'pool_annotation'
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('pool_item.id'), nullable=False, index=True)
+    rater_id = db.Column(db.Integer, db.ForeignKey('rater.id'), nullable=False, index=True)
+    team_id = db.Column(db.Integer, nullable=True)
+    task_id = db.Column(db.Integer, nullable=True)
+    pull_id = db.Column(db.String(64), nullable=True, index=True)
+    # 'claimed' -> in someone's hands; 'completed' / 'flagged' -> answered.
+    status = db.Column(db.String(16), nullable=False, default='claimed')
+    final_text = db.Column(db.Text, nullable=True)
+    final_difficulty = db.Column(db.String(32), nullable=True)
+    is_edited = db.Column(db.Boolean, nullable=False, default=False)
+    is_flagged = db.Column(db.Boolean, nullable=False, default=False)
+    flag_reason = db.Column(db.String(255), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    # Score-based work (MDFS and friends) submits a dict instead of edited text.
+    results_json = db.Column(db.JSON, nullable=True)
+    claimed_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    time_taken_ms = db.Column(db.Integer, nullable=True)
+    revision = db.Column(db.Integer, nullable=False, default=0)
+
+    # One answer per person per prompt; an edit updates the row they already have.
+    __table_args__ = (db.UniqueConstraint('item_id', 'rater_id',
+                                          name='uq_pool_annotation_item_rater'),)
+
+    def __repr__(self):
+        return f"<PoolAnnotation item={self.item_id} rater={self.rater_id} {self.status}>"
+
+
 class PoolTaskAssignment(db.Model):
     """The admin hands one task -- or one CATEGORY inside a task -- to an annotator. category NULL means the whole task. Several annotators may hold the same task (or the same category) at once and share its pool of prompts; each PROMPT still goes to exactly one annotator, because a pull claims rows atomically (see pool_pull)."""
     __tablename__ = 'pool_task_assignment'

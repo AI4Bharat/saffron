@@ -8,7 +8,7 @@ from flask import current_app as app, jsonify, request
 from sqlalchemy import func
 
 from application.models import (
-    db, Rater, TeamMember, PoolItem, PoolTask, PoolTaskAssignment, PoolPull,
+    db, Rater, TeamMember, PoolAnnotation, PoolItem, PoolTask, PoolTaskAssignment, PoolPull,
 )
 from application.views import token_required, _rater_in_scope, _serialize_team, ORG_NAME
 from application.pool_api import _admin_pool_team
@@ -764,7 +764,8 @@ def pool_admin_submission_filters(current_user):
 @app.route('/api/pool/admin/export_submissions_csv', methods=['GET'])
 @token_required
 def pool_export_submissions_csv(current_user):
-    """Exactly what the submissions screen is showing, as a CSV."""
+    """Every submission as a CSV: one row per ANNOTATION, so a prompt answered by
+    several annotators contributes one row each rather than only the first."""
     team, err = _admin_pool_team(current_user)
     if err:
         return err
@@ -773,36 +774,59 @@ def pool_export_submissions_csv(current_user):
     names = {r.id: (r.name, r.email or '') for r in Rater.query.all()}
     tasks = {t.id: t for t in PoolTask.query.filter_by(team_id=team.id).all()}
 
+    anns = {}
+    for a in PoolAnnotation.query.filter(
+            PoolAnnotation.status.in_(['completed', 'flagged'])).all():
+        anns.setdefault(a.item_id, []).append(a)
+
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(['Sr. No.', 'Task ID', 'Task type', 'Language', 'Class', 'Category',
-                'Prompt ID', 'English source', 'Original text', 'Submitted text', 'Edited',
-                'Difficulty (generated)', 'Difficulty (annotator)', 'Difficulty changed',
-                'Status', 'Flag reason', 'Notes', 'Annotator', 'Email',
-                'Claimed (IST)', 'Submitted (IST)', 'Seconds', 'Revisions'])
+                'Prompt ID', 'Annotation', 'Of', 'English source', 'Original text',
+                'Submitted text', 'Edited', 'Difficulty (generated)',
+                'Difficulty (annotator)', 'Difficulty changed', 'Status',
+                'Flag reason', 'Notes', 'Annotator', 'Email', 'Claimed (IST)',
+                'Submitted (IST)', 'Seconds', 'Revisions'])
+
     n = 0
     for it in q.order_by(PoolItem.id).yield_per(1000):
-        n += 1
-        name, email = names.get(it.completed_by, ('', ''))
         task = tasks.get(it.task_id)
         extra = it.extra_json if isinstance(it.extra_json, dict) else {}
-        w.writerow([
-            n, it.task_id or '', task_type_label(it.task_type),
-            task.language if task else it.language,
-            task.class_label if task else it.class_label, it.category, it.id,
-            # Only translation-correction items carry an English source; blank elsewhere.
-            extra.get('source_en', ''),
-            it.text, it.final_text or '', 'yes' if it.is_edited else 'no',
-            it.source_difficulty or '', it.final_difficulty or '',
-            'yes' if (it.final_difficulty and it.source_difficulty
-                      and it.final_difficulty != it.source_difficulty) else 'no',
-            it.status, it.flag_reason or '', (it.notes or '').replace('\n', ' '),
-            name, email, _ist_stamp(it.claimed_at), _ist_stamp(it.completed_at),
-            round((it.time_taken_ms or 0) / 1000.0, 1), it.revision or 0,
-        ])
+        mine = sorted(anns.get(it.id, []),
+                      key=lambda a: (a.completed_at or datetime.max, a.id))
+        # `None` covers anything answered before pool_annotation existed and never
+        # backfilled: the item's own inline copy is then the single annotation.
+        for pos, a in enumerate(mine or [None], start=1):
+            n += 1
+            if a is not None:
+                rater_id, sub_text, fin_diff = a.rater_id, a.final_text, a.final_difficulty
+                edited, status, flag = a.is_edited, a.status, a.flag_reason
+                notes, claimed, done = a.notes, a.claimed_at, a.completed_at
+                secs, rev = a.time_taken_ms, a.revision
+            else:
+                rater_id, sub_text, fin_diff = it.completed_by, it.final_text, it.final_difficulty
+                edited, status, flag = it.is_edited, it.status, it.flag_reason
+                notes, claimed, done = it.notes, it.claimed_at, it.completed_at
+                secs, rev = it.time_taken_ms, it.revision
+            name, email = names.get(rater_id, ('', ''))
+            w.writerow([
+                n, it.task_id or '', task_type_label(it.task_type),
+                task.language if task else it.language,
+                task.class_label if task else it.class_label, it.category, it.id,
+                pos, len(mine) or 1,
+                extra.get('source_en', ''),
+                it.text, sub_text or '', 'yes' if edited else 'no',
+                it.source_difficulty or '', fin_diff or '',
+                'yes' if (fin_diff and it.source_difficulty
+                          and fin_diff != it.source_difficulty) else 'no',
+                status, flag or '', (notes or '').replace('\n', ' '),
+                name, email, _ist_stamp(claimed), _ist_stamp(done),
+                round((secs or 0) / 1000.0, 1), rev or 0,
+            ])
 
     stamp = datetime.utcnow().strftime('%Y%m%d')
     return csv_response(buf, f'asr_submissions_{stamp}.csv')
+
 
 
 # Annotator: my tasks, my pulls, my tree

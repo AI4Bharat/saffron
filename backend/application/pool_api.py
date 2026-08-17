@@ -13,7 +13,7 @@ from flask import current_app as app, jsonify, request, Response, send_file
 from sqlalchemy import bindparam, func, text
 
 from application.models import (
-    db, Rater, Team, TeamMember, PoolItem, PoolUpload, PoolTask,
+    db, Rater, Team, TeamMember, PoolAnnotation, PoolItem, PoolUpload, PoolTask,
     PoolTaskAssignment, PoolPull,
 )
 from application.views import (
@@ -27,7 +27,7 @@ from application.pool_common import (  # noqa: F401  (re-exported for pool_tasks
     _with_progress, task_counts, task_category_counts, active_assignments,
     assigned_tasks_for, assigned_task_ids, primary_holder, allowed_categories,
     team_setting, open_items_cap, open_items_held, difficulty_required_for,
-    valid_mdfs_results, MDFS_DIMENSIONS,
+    valid_mdfs_results, MDFS_DIMENSIONS, annotations_target, refresh_item_state,
     csv_response, serialize_task, serialize_assignee,
     serialize_pull, pull_counts, release_pull_items, close_finished_pulls,
     _revoke_assignments, release_stale_claims, my_work_by_task_type,
@@ -185,22 +185,44 @@ def pool_pull(current_user):
     # No two annotators may ever claim the same row. SQLite gets that from its single-writer serialization; PostgreSQL needs the selected rows locked (SKIP LOCKED so concurrent pulls take disjoint rows instead of waiting).
     row_lock = ('FOR UPDATE SKIP LOCKED'
                 if db.engine.dialect.name == 'postgresql' else '')
+    # How many annotators should answer each prompt (a project-level setting).
+    # A prompt is offered while it has fewer than this many answers-or-holders, and
+    # never twice to the same person, so N annotators means N DIFFERENT annotators.
+    target = annotations_target(team)
     try:
         stmt = text(f"""
-            UPDATE pool_item
-               SET status='claimed', claimed_by=:rid, claimed_at=:now, pull_id=:pull
-             WHERE id IN (
-                   SELECT id FROM pool_item
-                    WHERE task_id=:task AND status='available'
+            INSERT INTO pool_annotation
+                   (item_id, rater_id, team_id, task_id, pull_id, status, claimed_at)
+            SELECT id, :rid, :team, :task, :pull, 'claimed', :now
+              FROM (
+                   SELECT i.id FROM pool_item i
+                    WHERE i.task_id=:task
+                          -- The annotation count is the only authority on whether a
+                          -- prompt still needs work. Testing i.status too would freeze
+                          -- out prompts already marked complete under a SMALLER target,
+                          -- so raising N would never collect the extra answers.
+                          AND (SELECT count(*) FROM pool_annotation a
+                                WHERE a.item_id = i.id
+                                  AND a.status IN ('claimed','completed','flagged'))
+                              < :target
+                          AND NOT EXISTS (SELECT 1 FROM pool_annotation mine
+                                           WHERE mine.item_id = i.id
+                                             AND mine.rater_id = :rid)
                           {extra_sql}
-                    ORDER BY id
-                    LIMIT :n {row_lock})
+                    ORDER BY i.id
+                    LIMIT :n {row_lock}) picked
         """)
         for name in expanding:
             stmt = stmt.bindparams(bindparam(name, expanding=True))
         res = db.session.execute(stmt, {'rid': rater.id, 'now': now, 'pull': pull_id,
-                                        'task': task.id, 'n': want, **params})
+                                        'task': task.id, 'n': want,
+                                        'team': team.id, 'target': target, **params})
         claimed = res.rowcount or 0
+        if claimed:
+            # The items just taken now carry one more holder, so re-derive their state.
+            for it in PoolItem.query.filter(PoolItem.id.in_(
+                    db.session.query(PoolAnnotation.item_id).filter_by(pull_id=pull_id))).all():
+                refresh_item_state(it, target)
         if claimed:
             db.session.add(PoolPull(
                 pull_id=pull_id, team_id=team.id, task_id=task.id, rater_id=rater.id,
@@ -213,7 +235,9 @@ def pool_pull(current_user):
         app.logger.error(f"pool_pull failed: {e}")
         return jsonify({'message': 'Could not fetch work right now. Please try again.'}), 500
 
-    items = PoolItem.query.filter_by(pull_id=pull_id).order_by(PoolItem.id).all()
+    items = PoolItem.query.filter(PoolItem.id.in_(
+        db.session.query(PoolAnnotation.item_id).filter_by(pull_id=pull_id)
+    )).order_by(PoolItem.id).all()
     what = task.label + (f' · {category}' if category else '') + \
            (f' · {difficulty}' if difficulty else '')
     return jsonify({
@@ -296,6 +320,9 @@ def pool_submit(current_user):
         PoolTask.query.get(item.task_id) if item.task_id else None,
         item.category)
 
+    # Both branches feed one annotation row below, so every name it reads exists
+    # on both paths.
+    reason, cleaned, results = '', '', None
     if flagged:
         reason = (data.get('flag_reason') or '').strip()
         if not reason:
@@ -326,9 +353,45 @@ def pool_submit(current_user):
         if isinstance(results, dict):
             # A NEW dict (never in-place mutation), so SQLAlchemy sees the JSON change.
             item.extra_json = {**(item.extra_json or {}), 'results': results}
+    _ann_payload = dict(
+        final_text=(None if flagged else cleaned),
+        final_difficulty=(None if flagged else (difficulty or None)),
+        is_edited=(False if flagged else cleaned != (item.text or '').strip()),
+        is_flagged=bool(flagged),
+        flag_reason=(reason[:255] if flagged else None),
+        results_json=(results if (not flagged and isinstance(results, dict)) else None),
+        status=('flagged' if flagged else 'completed'),
+    )
 
     notes = (data.get('notes') or '').strip()
     item.notes = notes[:2000] if notes else None
+
+    # This annotator's own answer. Several people may answer the same prompt, so it
+    # goes in their own row -- writing it onto the item would overwrite whoever
+    # answered before them. The row already exists from the pull.
+    ann = PoolAnnotation.query.filter_by(item_id=item.id, rater_id=rater.id).first()
+    if ann is None:
+        ann = PoolAnnotation(item_id=item.id, rater_id=rater.id, team_id=item.team_id,
+                             task_id=item.task_id, pull_id=item.pull_id,
+                             claimed_at=item.claimed_at, revision=0)
+        db.session.add(ann)
+    for k, v in _ann_payload.items():
+        setattr(ann, k, v)
+    ann.notes = notes[:2000] if notes else None
+    if not is_edit:
+        ann.completed_at = datetime.utcnow()
+    ann.revision = (ann.revision or 0) + 1
+    if 'time_taken_ms' in data:
+        try:
+            ann.time_taken_ms = max(0, min(int(data.get('time_taken_ms') or 0),
+                                           6 * 3600 * 1000))
+        except (TypeError, ValueError):
+            pass
+    db.session.flush()
+
+    # The prompt is only finished once it has as many answers as the project asks
+    # for; short of that it goes back to the pool for a DIFFERENT annotator.
+    refresh_item_state(item, annotations_target(team))
     # An EDIT of an already-submitted item keeps its original submission time, so daily output and payment reports do not shift; the revision counter records the edit.
     item.completed_by = rater.id
     if not is_edit:

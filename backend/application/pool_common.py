@@ -198,6 +198,53 @@ def max_annotators_for(team, task=None):
         return DEFAULT_MAX_ANNOTATORS
 
 
+def annotations_target(team):
+    """How many annotations each prompt should collect. Always at least 1: 0 means
+    'no ceiling on how many annotators may share a task', not 'collect nothing'."""
+    return max(max_annotators_for(team), 1)
+
+
+def refresh_item_state(item, target):
+    """Re-derive the item's own status from its annotations.
+
+    The item stays pullable while it has fewer than `target` answers, and mirrors
+    the FIRST completed answer onto its inline columns so everything still reading
+    pool_item (dashboards, counts, the older exports) keeps working unchanged.
+    """
+    from application.models import PoolAnnotation
+    rows = PoolAnnotation.query.filter_by(item_id=item.id).all()
+    done = [a for a in rows if a.status in ('completed', 'flagged')]
+    held = [a for a in rows if a.status == 'claimed']
+
+    if len(done) >= target:
+        item.status = 'flagged' if done and all(a.is_flagged for a in done) else 'completed'
+    elif held:
+        item.status = 'claimed'
+    else:
+        item.status = 'available'
+
+    first = min(done, key=lambda a: (a.completed_at or datetime.max)) if done else None
+    if first is not None:
+        item.final_text = first.final_text
+        item.final_difficulty = first.final_difficulty
+        item.is_edited = first.is_edited
+        item.is_flagged = first.is_flagged
+        item.flag_reason = first.flag_reason
+        item.notes = first.notes
+        item.completed_by = first.rater_id
+        item.completed_at = first.completed_at
+        item.time_taken_ms = first.time_taken_ms
+        item.revision = max((a.revision or 0) for a in done)
+    else:
+        item.completed_by = None
+        item.completed_at = None
+    # claimed_by / pull_id describe *a* holder; with several they describe the first.
+    item.claimed_by = held[0].rater_id if held else None
+    item.claimed_at = held[0].claimed_at if held else None
+    item.pull_id = held[0].pull_id if held else None
+    return item.status
+
+
 def task_supports_difficulty(task):
     """Whether this task's kind of work ends with a final label the admin can require."""
     return final_label_for(task) is not None
