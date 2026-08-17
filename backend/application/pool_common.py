@@ -192,6 +192,12 @@ def language_difficulty_setting(team, language):
 # 1 keeps each prompt to a single annotator; 0 means no ceiling.
 DEFAULT_MAX_ANNOTATORS = 1
 
+# How many times each prompt is answered. 1 = each prompt answered once (the
+# normal case); higher collects independent answers from that many DIFFERENT
+# annotators, for agreement or QC. Per project in
+# Team.settings['annotations_per_prompt_by_task_type'][task_type].
+DEFAULT_ANNOTATIONS_PER_PROMPT = 1
+
 
 def _as_count(value, default=None):
     try:
@@ -216,10 +222,27 @@ def max_annotators_for(team, task=None):
     return project_annotator_setting(team, task_type)[1]
 
 
+def project_annotations_setting(team, task_type):
+    """(override, effective) for how many times each prompt of this project is answered."""
+    by_type = team_setting(team, 'annotations_per_prompt_by_task_type')
+    override = _as_count(by_type.get(task_type)) if isinstance(by_type, dict) else None
+    fallback = _as_count(team_setting(team, 'annotations_per_prompt',
+                                      DEFAULT_ANNOTATIONS_PER_PROMPT),
+                         DEFAULT_ANNOTATIONS_PER_PROMPT)
+    return override, (override if override is not None else fallback)
+
+
 def annotations_target(team, task=None):
-    """How many annotations each prompt of this project should collect. Always at
-    least 1: 0 means 'no ceiling on how many may answer', not 'collect nothing'."""
-    return max(max_annotators_for(team, task), 1)
+    """How many times each prompt of this project should be answered.
+
+    Deliberately NOT max_annotators: how many annotators may share a task is about
+    dividing the work, while this is about answering the same prompt more than
+    once. Tying them together meant adding a second annotator to help would reopen
+    every finished prompt in the project. Always at least 1.
+    """
+    task_type = (getattr(task, 'task_type', None) or DEFAULT_TASK_TYPE) if task is not None \
+        else DEFAULT_TASK_TYPE
+    return max(project_annotations_setting(team, task_type)[1], 1)
 
 
 def refresh_item_state(item, target):

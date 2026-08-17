@@ -20,6 +20,7 @@ from application.pool_common import (
     primary_holder, allowed_categories, team_setting, open_items_cap,
     difficulty_required_for, max_annotators_for, task_supports_difficulty,
     final_label_for, task_type_label, project_annotator_setting,
+    project_annotations_setting,
     language_difficulty_setting, csv_response,
     serialize_task, serialize_assignee, serialize_pull, pull_counts,
     release_pull_items, close_finished_pulls, release_stale_claims,
@@ -159,6 +160,11 @@ def pool_admin_tasks(current_user):
         'annotators_by_task_type': {
             tt: dict(zip(('override', 'effective'),
                          project_annotator_setting(team, tt)))
+            for tt in sorted(task_types)
+        },
+        'annotations_by_task_type': {
+            tt: dict(zip(('override', 'effective'),
+                         project_annotations_setting(team, tt)))
             for tt in sorted(task_types)
         },
         'difficulty_team_default': bool(team_setting(team, 'difficulty_annotation', True)),
@@ -353,9 +359,11 @@ def pool_admin_tasks_assign(current_user):
             over.append(f'#{tid} would have {len(after)} of max {cap}')
     if over:
         return jsonify({
-            'message': 'That would put these task(s) over their annotator limit: '
-                       + ', '.join(over) + '. Raise the limit on the task, or use '
-                       'Replace to hand it over instead of adding.',
+            'message': 'That would put these task(s) over the annotator limit for '
+                       'this project: ' + ', '.join(over) + '. Raise "Annotators '
+                       'per task" on the project header to let more people share '
+                       'the work, or use Replace to hand the task over instead of '
+                       'adding to it.',
             'over_limit': over,
         }), 409
 
