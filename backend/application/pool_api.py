@@ -188,7 +188,7 @@ def pool_pull(current_user):
     # How many annotators should answer each prompt (a project-level setting).
     # A prompt is offered while it has fewer than this many answers-or-holders, and
     # never twice to the same person, so N annotators means N DIFFERENT annotators.
-    target = annotations_target(team)
+    target = annotations_target(team, task)
     try:
         stmt = text(f"""
             INSERT INTO pool_annotation
@@ -315,10 +315,9 @@ def pool_submit(current_user):
     text_in = data.get('text')
     difficulty = (data.get('difficulty') or '').strip().title()
     # The admin decides whether this slice (language/class/category) carries a difficulty label.
-    need_difficulty = difficulty_required_for(
-        Team.query.get(item.team_id),
-        PoolTask.query.get(item.task_id) if item.task_id else None,
-        item.category)
+    item_team = Team.query.get(item.team_id)
+    item_task = PoolTask.query.get(item.task_id) if item.task_id else None
+    need_difficulty = difficulty_required_for(item_team, item_task, item.category)
 
     # Both branches feed one annotation row below, so every name it reads exists
     # on both paths.
@@ -391,7 +390,7 @@ def pool_submit(current_user):
 
     # The prompt is only finished once it has as many answers as the project asks
     # for; short of that it goes back to the pool for a DIFFERENT annotator.
-    refresh_item_state(item, annotations_target(team))
+    refresh_item_state(item, annotations_target(item_team, item_task))
     # An EDIT of an already-submitted item keeps its original submission time, so daily output and payment reports do not shift; the revision counter records the edit.
     item.completed_by = rater.id
     if not is_edit:

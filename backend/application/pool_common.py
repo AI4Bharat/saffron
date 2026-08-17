@@ -183,25 +183,43 @@ def language_difficulty_setting(team, language):
     return None, bool(team_setting(team, 'difficulty_annotation', True))
 
 
-# How many annotators may hold one task at the same time. This is a PROJECT-level
-# rule -- one number in Team.settings['max_annotators'] governing every task in the
-# pool, not a per-task switch -- so the policy is set once at the top instead of
-# drifting task by task. 1 keeps each task to a single annotator; 0 means no limit.
+# How many annotators should answer each prompt. Set PER PROJECT -- a project being
+# a kind of work (task_type): numeracy translation correction, MDFS audio rating,
+# text review -- because how many people should answer a prompt is a property of the
+# work, not of the whole team. Stored in
+# Team.settings['max_annotators_by_task_type'][task_type], with
+# Team.settings['max_annotators'] as the fallback for projects that set nothing.
+# 1 keeps each prompt to a single annotator; 0 means no ceiling.
 DEFAULT_MAX_ANNOTATORS = 1
 
 
-def max_annotators_for(team, task=None):
-    """The ceiling on simultaneous holders of any one task in this project. 0 = unlimited. `task` is accepted and ignored: the limit is deliberately not per-task."""
+def _as_count(value, default=None):
     try:
-        return max(int(team_setting(team, 'max_annotators', DEFAULT_MAX_ANNOTATORS)), 0)
+        return max(int(value), 0)
     except (TypeError, ValueError):
-        return DEFAULT_MAX_ANNOTATORS
+        return default
 
 
-def annotations_target(team):
-    """How many annotations each prompt should collect. Always at least 1: 0 means
-    'no ceiling on how many annotators may share a task', not 'collect nothing'."""
-    return max(max_annotators_for(team), 1)
+def project_annotator_setting(team, task_type):
+    """(override, effective) for one project: the number stored against this task type (None = not set) and what it resolves to."""
+    by_type = team_setting(team, 'max_annotators_by_task_type')
+    override = _as_count(by_type.get(task_type)) if isinstance(by_type, dict) else None
+    fallback = _as_count(team_setting(team, 'max_annotators', DEFAULT_MAX_ANNOTATORS),
+                         DEFAULT_MAX_ANNOTATORS)
+    return override, (override if override is not None else fallback)
+
+
+def max_annotators_for(team, task=None):
+    """How many annotators this task's PROJECT wants on each prompt. 0 = no ceiling."""
+    task_type = (getattr(task, 'task_type', None) or DEFAULT_TASK_TYPE) if task is not None \
+        else DEFAULT_TASK_TYPE
+    return project_annotator_setting(team, task_type)[1]
+
+
+def annotations_target(team, task=None):
+    """How many annotations each prompt of this project should collect. Always at
+    least 1: 0 means 'no ceiling on how many may answer', not 'collect nothing'."""
+    return max(max_annotators_for(team, task), 1)
 
 
 def refresh_item_state(item, target):

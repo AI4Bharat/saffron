@@ -19,7 +19,7 @@ from application.pool_common import (
     task_counts, task_category_counts, active_assignments, assigned_tasks_for,
     primary_holder, allowed_categories, team_setting, open_items_cap,
     difficulty_required_for, max_annotators_for, task_supports_difficulty,
-    final_label_for, task_type_label,
+    final_label_for, task_type_label, project_annotator_setting,
     language_difficulty_setting, csv_response,
     serialize_task, serialize_assignee, serialize_pull, pull_counts,
     release_pull_items, close_finished_pulls, release_stale_claims,
@@ -131,6 +131,7 @@ def pool_admin_tasks(current_user):
         row['supports_difficulty'] = fl is not None
         row['final_label'] = fl['label'] if fl else None
         row['final_label_key'] = fl['key'] if fl else None
+        # How many annotators this task's PROJECT wants on each of its prompts.
         row['max_annotators'] = max_annotators_for(team, t)
         # Distinct people, not rows: one annotator holding two categories is one holder.
         row['holders'] = len({a.rater_id for a, _r in holder_rows})
@@ -153,6 +154,13 @@ def pool_admin_tasks(current_user):
         'states': TASK_STATES,
         'shown': len(rows),
         'difficulty_by_language': difficulty_by_language,
+        # One entry per project (task type) so the dashboard can show and set the
+        # annotations-per-prompt target for the project being viewed.
+        'annotators_by_task_type': {
+            tt: dict(zip(('override', 'effective'),
+                         project_annotator_setting(team, tt)))
+            for tt in sorted(task_types)
+        },
         'difficulty_team_default': bool(team_setting(team, 'difficulty_annotation', True)),
     }), 200
 

@@ -207,6 +207,28 @@
               <span class="subnav-badge">{{ shownTasks.length }}</span>
             </button>
           </div>
+          <div v-if="projectTab" class="d-inline-flex align-items-center gap-2 me-2 px-3 py-1 rounded-pill border bg-white">
+            <label class="mb-0 small text-secondary text-nowrap" :for="'annps-' + projectTab">
+              Annotations per prompt
+            </label>
+            <input :id="'annps-' + projectTab" type="number" min="1" max="99"
+                   class="form-control form-control-sm text-center" style="width:64px"
+                   :value="projectAnnotators.effective"
+                   :title="projectAnnotators.override === null
+                             ? 'Not set for this project — using the pool default'
+                             : 'Set for this project'"
+                   @change="setProjectAnnotators(projectTab, $event.target.value)" />
+            <span class="text-muted text-xs text-nowrap">
+              {{ projectAnnotators.effective === 1
+                   ? 'one annotator per prompt'
+                   : projectAnnotators.effective + ' different annotators per prompt' }}
+            </span>
+            <button v-if="projectAnnotators.override !== null"
+                    class="btn btn-link btn-sm p-0 text-muted" title="Use the pool default again"
+                    @click="setProjectAnnotators(projectTab, null)">
+              <i class="bi bi-x-circle-fill"></i>
+            </button>
+          </div>
           <button v-if="projectTab" type="button" class="btn btn-sm btn-outline-dark rounded-pill"
                   title="See this project's task exactly as an annotator sees it"
                   @click="openPreview(projectTab)">
@@ -1184,22 +1206,6 @@
             <div class="bg-white p-4 rounded shadow-sm border h-100">
               <h5 class="fw-bold text-dark mb-2"><i class="bi bi-download me-2 text-primary"></i>Reports</h5>
               <p class="text-muted text-xs">Every report covers the ASR team only.</p>
-              <div class="mb-3 pb-3 border-bottom">
-                <label class="form-label small fw-semibold text-dark mb-1">
-                  Annotators per task
-                </label>
-                <div class="d-flex align-items-center gap-2">
-                  <input type="number" min="0" max="99" class="form-control form-control-sm" style="width:80px"
-                         :value="teamSettings.max_annotators ?? 1"
-                         @change="setAnnotatorLimit($event.target.value)" />
-                  <span class="text-muted text-xs">
-                    {{ (teamSettings.max_annotators ?? 1) === 0
-                        ? 'No limit — any number may share a task'
-                        : 'Applies to every task in this project' }}
-                  </span>
-                </div>
-              </div>
-
               <div class="d-grid gap-2">
                 <button class="btn btn-sm btn-outline-primary" @click="exportOpen = true">
                   <i class="bi bi-file-earmark-spreadsheet me-1"></i>Full pool export (Excel / CSV)
@@ -2410,21 +2416,28 @@ async function savePullCap() {
 }
 
 /** Set the difficulty-labelling toggle for tasks (optionally one category). on = true / false / null — null clears the override so the level above decides. Each level stores its own value; nothing writes through to another level. */
-/** How many annotators may hold ANY ONE task at a time, for the whole project.
- *  Deliberately not per task: the policy is set once at the top so it cannot
- *  drift task by task. 0 means no limit. Lowering it never removes an existing
- *  holder -- it applies to the next assignment. */
-async function setAnnotatorLimit(value) {
+/** How many annotators should answer each prompt, per PROJECT (kind of work).
+ *  A project with no number of its own follows the pool default. Raising it puts
+ *  already-finished prompts back in circulation until they have that many answers;
+ *  lowering it never discards an answer already given. */
+const annotatorsByType = ref({})
+const projectAnnotators = computed(() =>
+  annotatorsByType.value[projectTab.value] || { override: null, effective: 1 })
+
+async function setProjectAnnotators(taskType, value) {
+  const n = (value === null || value === '') ? null : Math.max(Number(value) || 1, 1)
+  const next = { ...(teamSettings.value.max_annotators_by_task_type || {}) }
+  if (n === null) delete next[taskType]
+  else next[taskType] = n
   try {
     const r = await api('/pool/admin/settings', {
       method: 'POST',
-      body: JSON.stringify({
-        team: teamKey.value,
-        max_annotators: (value === null || value === '') ? null : Number(value),
-      }),
+      body: JSON.stringify({ team: teamKey.value, max_annotators_by_task_type: next }),
     })
     teamSettings.value = r.settings || teamSettings.value
-    flash(r.message || 'Annotator limit saved.')
+    flash(n === null
+      ? 'This project now follows the pool default.'
+      : `Prompts in this project will be answered by ${n} annotator(s).`)
     loadTasks()
   } catch (e) {
     flash(e.message)
@@ -3069,6 +3082,7 @@ async function loadTasks() {
     taskLanguages.value = d.languages || []
     taskClasses.value = d.classes || []
     taskTypes.value = d.task_types || []
+    annotatorsByType.value = d.annotators_by_task_type || {}
     taskStates.value = d.states || []
     if (typeof d.difficulty_team_default === 'boolean') {
       teamSettings.value = { ...teamSettings.value,
