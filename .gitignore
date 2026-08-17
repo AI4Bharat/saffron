@@ -206,3 +206,8 @@ backend/qc_jobs/
 # manifest.jsonl (the task definition) stays tracked; the audio does not.
 backend/aivanta_task/**/*.wav
 backend/aivanta_task/*.vm_original
+
+# Deploy marker written by scripts/deploy.sh; local state, not shared history.
+.last_deploy
+frontend/.dist.staging/
+frontend/.dist.prev/
