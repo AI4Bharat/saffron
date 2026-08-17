@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 
 from flask import request, Response
-from sqlalchemy import func
+from sqlalchemy import func, false as sa_false
 
 from application.models import (
     db, Rater, Team, TeamMember, PoolItem, PoolTask, PoolTaskAssignment, PoolPull,
@@ -168,10 +168,15 @@ def open_items_cap(team):
 
 
 def open_items_held(team_id, rater_id):
-    """How many claimed-but-unfinished prompts this annotator holds right now."""
-    return db.session.query(func.count(PoolItem.id)).filter(
-        PoolItem.team_id == team_id, PoolItem.claimed_by == rater_id,
-        PoolItem.status == 'claimed').scalar() or 0
+    """How many claimed-but-unfinished prompts this annotator holds right now.
+
+    Counted on their own annotation rows: with several annotators on one prompt,
+    pool_item.claimed_by names only one of them.
+    """
+    from application.models import PoolAnnotation
+    return db.session.query(func.count(PoolAnnotation.id)).filter(
+        PoolAnnotation.team_id == team_id, PoolAnnotation.rater_id == rater_id,
+        PoolAnnotation.status == 'claimed').scalar() or 0
 
 
 def language_difficulty_setting(team, language):
@@ -528,15 +533,28 @@ def _revoke_assignments(team_id, rater_id=None, task_ids=None):
 
 
 def release_pull_items(pull, rater_id=None):
-    """Hand a pull's UNFINISHED prompts back to the pool and close the pull."""
-    q = PoolItem.query.filter(PoolItem.pull_id == pull.pull_id,
-                              PoolItem.status == 'claimed')
+    """Hand a pull's UNFINISHED prompts back to the pool and close the pull.
+
+    The claim lives on the annotation row, so that is what has to go: leaving it
+    behind would hold one of the prompt's N slots for ever and the prompt could
+    never reach N answers. Deleting it also lets the same annotator pull the
+    prompt again later, since they never actually answered it.
+    """
+    from application.models import PoolAnnotation
+    q = PoolAnnotation.query.filter(PoolAnnotation.pull_id == pull.pull_id,
+                                    PoolAnnotation.status == 'claimed')
     if rater_id is not None:
-        q = q.filter(PoolItem.claimed_by == rater_id)
-    freed = 0
-    for it in q.all():
-        it.status, it.claimed_by, it.claimed_at, it.pull_id = 'available', None, None, None
-        freed += 1
+        q = q.filter(PoolAnnotation.rater_id == rater_id)
+    stale = q.all()
+    item_ids = {a.item_id for a in stale}
+    freed = len(stale)
+    for a in stale:
+        db.session.delete(a)
+    db.session.flush()
+    for it in PoolItem.query.filter(PoolItem.id.in_(item_ids)).all() if item_ids else []:
+        refresh_item_state(it, annotations_target(
+            Team.query.get(it.team_id),
+            PoolTask.query.get(it.task_id) if it.task_id else None))
     pull.status = 'released'
     pull.released_at = datetime.utcnow()
     return freed
@@ -585,12 +603,23 @@ def release_stale_claims(team_id=None, force=False):
         return 0
     _last_stale_sweep[0] = now
 
+    from application.models import PoolAnnotation
     cutoff = datetime.utcnow() - timedelta(hours=STALE_CLAIM_HOURS)
-    q = PoolItem.query.filter(PoolItem.status == 'claimed', PoolItem.claimed_at < cutoff)
+    # The claim is the annotation row, so abandoned claims are found there.
+    aq = PoolAnnotation.query.filter(PoolAnnotation.status == 'claimed',
+                                     PoolAnnotation.claimed_at < cutoff)
     if team_id is not None:
-        q = q.filter(PoolItem.team_id == team_id)
+        aq = aq.filter(PoolAnnotation.team_id == team_id)
+    stale_anns = aq.all()
+    for a in stale_anns:
+        db.session.delete(a)
+    if stale_anns:
+        db.session.flush()
+    q = PoolItem.query.filter(PoolItem.id.in_({a.item_id for a in stale_anns})) \
+        if stale_anns else PoolItem.query.filter(sa_false())
     stale = q.all()
     if not stale:
+        db.session.commit()
         return 0
 
     touched_raters, touched_pulls = set(), set()
@@ -619,12 +648,14 @@ def release_stale_claims(team_id=None, force=False):
 
 def close_finished_pulls(rater_id):
     """Mark as 'done' every open pull of this annotator that has no claimed prompts left."""
+    from application.models import PoolAnnotation
     open_pulls = PoolPull.query.filter_by(rater_id=rater_id, status='open').all()
     if not open_pulls:
         return
     ids = [p.pull_id for p in open_pulls]
-    still_open = {pid for (pid,) in db.session.query(PoolItem.pull_id).filter(
-        PoolItem.pull_id.in_(ids), PoolItem.status == 'claimed').distinct().all()}
+    still_open = {pid for (pid,) in db.session.query(PoolAnnotation.pull_id).filter(
+        PoolAnnotation.pull_id.in_(ids),
+        PoolAnnotation.status == 'claimed').distinct().all()}
     for p in open_pulls:
         if p.pull_id not in still_open:
             p.status = 'done'

@@ -344,28 +344,10 @@ def pool_admin_tasks_assign(current_user):
 
     holders = active_assignments(team.id, ids)
 
-    # A task's ceiling on simultaneous holders. Checked before anything is written
-    # so an over-limit request changes nothing at all, rather than assigning the
-    # first few tasks and then failing. 'replace' takes the scope back from
-    # everyone outside the new set first, so only the new set counts against it.
-    over = []
-    for tid in ids:
-        cap = max_annotators_for(team, tasks[tid])
-        if not cap:
-            continue
-        after = set(rater_ids) if mode == 'replace' else (
-            {a.rater_id for a, _r in holders.get(tid, [])} | set(rater_ids))
-        if len(after) > cap:
-            over.append(f'#{tid} would have {len(after)} of max {cap}')
-    if over:
-        return jsonify({
-            'message': 'That would put these task(s) over the annotator limit for '
-                       'this project: ' + ', '.join(over) + '. Raise "Annotators '
-                       'per task" on the project header to let more people share '
-                       'the work, or use Replace to hand the task over instead of '
-                       'adding to it.',
-            'over_limit': over,
-        }), 409
+    # No ceiling on how many annotators a task or a project may have: the limit is
+    # per PROMPT, not per task. However many people hold a task, each prompt is
+    # still handed out at most N times and accepts exactly N answers, so adding an
+    # annotator divides the remaining work rather than duplicating it.
 
     granted, displaced, freed = 0, [], 0
     displaced_raters = set()

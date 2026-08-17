@@ -319,6 +319,19 @@ def pool_submit(current_user):
     item_task = PoolTask.query.get(item.task_id) if item.task_id else None
     need_difficulty = difficulty_required_for(item_team, item_task, item.category)
 
+    # A prompt takes exactly N answers and no more. Anyone who already answered it
+    # may still edit their own; a newcomer arriving after it filled up is turned
+    # away rather than silently making an (N+1)th answer.
+    _target = annotations_target(item_team, item_task)
+    _mine = PoolAnnotation.query.filter_by(item_id=item.id, rater_id=rater.id).first()
+    _answered = PoolAnnotation.query.filter(
+        PoolAnnotation.item_id == item.id,
+        PoolAnnotation.status.in_(['completed', 'flagged'])).count()
+    if _answered >= _target and not (_mine and _mine.status in ('completed', 'flagged')):
+        return jsonify({'message': 'This prompt already has all the answers it '
+                                   f'needs ({_target}). It has been returned to '
+                                   'the pool for someone else.'}), 409
+
     # Both branches feed one annotation row below, so every name it reads exists
     # on both paths.
     reason, cleaned, results = '', '', None
