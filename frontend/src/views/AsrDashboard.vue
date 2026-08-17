@@ -209,7 +209,7 @@
           </div>
           <div v-if="projectTab" class="d-inline-flex align-items-center gap-2 me-2 px-3 py-1 rounded-pill border bg-white">
             <label class="mb-0 small text-secondary text-nowrap" :for="'annps-' + projectTab">
-              Annotations per prompt
+              Annotators per task
             </label>
             <input :id="'annps-' + projectTab" type="number" min="1" max="99"
                    class="form-control form-control-sm text-center" style="width:64px"
@@ -220,8 +220,9 @@
                    @change="setProjectAnnotators(projectTab, $event.target.value)" />
             <span class="text-muted text-xs text-nowrap">
               {{ projectAnnotators.effective === 1
-                   ? 'one annotator per prompt'
-                   : projectAnnotators.effective + ' different annotators per prompt' }}
+                   ? 'each prompt answered by one annotator'
+                   : 'every prompt in these tasks answered by '
+                     + projectAnnotators.effective + ' different annotators' }}
             </span>
             <button v-if="projectAnnotators.override !== null"
                     class="btn btn-link btn-sm p-0 text-muted" title="Use the pool default again"
@@ -2437,7 +2438,7 @@ async function setProjectAnnotators(taskType, value) {
     teamSettings.value = r.settings || teamSettings.value
     flash(n === null
       ? 'This project now follows the pool default.'
-      : `Prompts in this project will be answered by ${n} annotator(s).`)
+      : `Each task here will be annotated by ${n} annotator(s).`)
     loadTasks()
   } catch (e) {
     flash(e.message)
