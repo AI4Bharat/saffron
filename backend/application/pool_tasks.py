@@ -18,7 +18,8 @@ from application.pool_common import (
     _pool_team, _member, _current_rater, _serialize_item, _blank_counts, _with_progress,
     task_counts, task_category_counts, active_assignments, assigned_tasks_for,
     primary_holder, allowed_categories, team_setting, open_items_cap,
-    difficulty_required_for,
+    difficulty_required_for, max_annotators_for, task_supports_difficulty,
+    task_type_label,
     language_difficulty_setting, csv_response,
     serialize_task, serialize_assignee, serialize_pull, pull_counts,
     release_pull_items, close_finished_pulls, release_stale_claims,
@@ -123,6 +124,13 @@ def pool_admin_tasks(current_user):
         row['difficulty_annotation'] = difficulty_required_for(team, t, None)
         s = t.settings if isinstance(t.settings, dict) else {}
         row['difficulty_override'] = s.get('difficulty_annotation')
+        # Difficulty is a text-review customisation; other task types have no such
+        # step, so the dashboard hides the toggle rather than showing a dead switch.
+        row['supports_difficulty'] = task_supports_difficulty(t)
+        row['max_annotators'] = max_annotators_for(team, t)
+        row['max_annotators_override'] = s.get('max_annotators')
+        # Distinct people, not rows: one annotator holding two categories is one holder.
+        row['holders'] = len({a.rater_id for a, _r in holder_rows})
         rows.append(row)
 
     # The language level of the difficulty hierarchy, stored on its own (a class flipping its switch never moves these).
@@ -318,6 +326,28 @@ def pool_admin_tasks_assign(current_user):
                 return jsonify({'message': f"Task #{tid} has no '{category}' prompts."}), 400
 
     holders = active_assignments(team.id, ids)
+
+    # A task's ceiling on simultaneous holders. Checked before anything is written
+    # so an over-limit request changes nothing at all, rather than assigning the
+    # first few tasks and then failing. 'replace' takes the scope back from
+    # everyone outside the new set first, so only the new set counts against it.
+    over = []
+    for tid in ids:
+        cap = max_annotators_for(team, tasks[tid])
+        if not cap:
+            continue
+        after = set(rater_ids) if mode == 'replace' else (
+            {a.rater_id for a, _r in holders.get(tid, [])} | set(rater_ids))
+        if len(after) > cap:
+            over.append(f'#{tid} would have {len(after)} of max {cap}')
+    if over:
+        return jsonify({
+            'message': 'That would put these task(s) over their annotator limit: '
+                       + ', '.join(over) + '. Raise the limit on the task, or use '
+                       'Replace to hand it over instead of adding.',
+            'over_limit': over,
+        }), 409
+
     granted, displaced, freed = 0, [], 0
     displaced_raters = set()
     now = datetime.utcnow()
@@ -443,6 +473,73 @@ def pool_admin_tasks_unassign(current_user):
     return jsonify({'message': msg, 'unassigned': n, 'released': freed}), 200
 
 
+@app.route('/api/pool/admin/tasks/annotator-limit', methods=['POST'])
+@token_required
+def pool_admin_task_annotator_limit(current_user):
+    """How many annotators may hold one task at once. {'task_ids': [...], 'max_annotators': N} sets the per-task ceiling; N=null clears it so the task follows the team default, N=0 means unlimited. Lowering it never revokes anyone -- existing holders keep the task and the limit applies to the next assignment -- so the admin is told when a task is already over the new number."""
+    team, err = _admin_pool_team(current_user)
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+
+    if 'max_annotators' not in data:
+        return jsonify({'message': 'Say what to set max_annotators to.'}), 400
+    value = data['max_annotators']
+    if value is not None:
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return jsonify({'message': 'max_annotators must be a whole number.'}), 400
+        if value < 0:
+            return jsonify({'message': 'max_annotators cannot be negative.'}), 400
+
+    ids = data.get('task_ids') or ([data['task_id']] if data.get('task_id') else [])
+    try:
+        ids = [int(i) for i in ids]
+    except (TypeError, ValueError):
+        return jsonify({'message': 'Task ids must be numbers.'}), 400
+    if not ids:
+        return jsonify({'message': 'Pick at least one task.'}), 400
+
+    tasks = PoolTask.query.filter(PoolTask.id.in_(ids), PoolTask.team_id == team.id).all()
+    if len(tasks) != len(set(ids)):
+        return jsonify({'message': 'Some of those tasks are not in this team.'}), 404
+
+    holders = active_assignments(team.id, ids)
+    already_over = []
+    for task in tasks:
+        s = dict(task.settings) if isinstance(task.settings, dict) else {}
+        if value is None:
+            s.pop('max_annotators', None)
+        else:
+            s['max_annotators'] = value
+        task.settings = s
+        effective = max_annotators_for(team, task)
+        n = len({a.rater_id for a, _r in holders.get(task.id, [])})
+        if effective and n > effective:
+            already_over.append(f'#{task.id} has {n}')
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f'pool_admin_task_annotator_limit failed: {e}')
+        return jsonify({'message': 'Could not save that limit.'}), 500
+
+    if value is None:
+        what = 'follows the team default'
+    elif value == 0:
+        what = 'unlimited'
+    else:
+        what = f'{value} annotator(s)'
+    msg = f'Annotator limit for {len(tasks)} task(s): {what}.'
+    if already_over:
+        msg += (' Already above it (nobody was removed): '
+                + ', '.join(already_over) + '.')
+    return jsonify({'message': msg, 'max_annotators': value,
+                    'already_over': already_over}), 200
+
+
 @app.route('/api/pool/admin/tasks/settings', methods=['POST'])
 @token_required
 def pool_admin_task_settings(current_user):
@@ -504,6 +601,14 @@ def pool_admin_task_settings(current_user):
     tasks = PoolTask.query.filter(PoolTask.id.in_(ids), PoolTask.team_id == team.id).all()
     if len(tasks) != len(set(ids)):
         return jsonify({'message': 'Some of those tasks are not in this team.'}), 404
+
+    # Difficulty labelling only exists for text-review work; storing the switch on
+    # anything else would be a setting that silently does nothing.
+    unsupported = [t for t in tasks if not task_supports_difficulty(t)]
+    if unsupported:
+        kinds = sorted({(t.task_type or '') for t in unsupported})
+        return jsonify({'message': 'Difficulty labelling does not apply to '
+                                   + ', '.join(kinds) + ' tasks.'}), 400
 
     for task in tasks:
         s = dict(task.settings) if isinstance(task.settings, dict) else {}
@@ -734,8 +839,8 @@ def pool_export_submissions_csv(current_user):
 
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(['Sr. No.', 'Task ID', 'Language', 'Class', 'Category', 'Prompt ID',
-                'Original text', 'Submitted text', 'Edited',
+    w.writerow(['Sr. No.', 'Task ID', 'Task type', 'Language', 'Class', 'Category',
+                'Prompt ID', 'English source', 'Original text', 'Submitted text', 'Edited',
                 'Difficulty (generated)', 'Difficulty (annotator)', 'Difficulty changed',
                 'Status', 'Flag reason', 'Notes', 'Annotator', 'Email',
                 'Claimed (IST)', 'Submitted (IST)', 'Seconds', 'Revisions'])
@@ -744,9 +849,13 @@ def pool_export_submissions_csv(current_user):
         n += 1
         name, email = names.get(it.completed_by, ('', ''))
         task = tasks.get(it.task_id)
+        extra = it.extra_json if isinstance(it.extra_json, dict) else {}
         w.writerow([
-            n, it.task_id or '', task.language if task else it.language,
+            n, it.task_id or '', task_type_label(it.task_type),
+            task.language if task else it.language,
             task.class_label if task else it.class_label, it.category, it.id,
+            # Only translation-correction items carry an English source; blank elsewhere.
+            extra.get('source_en', ''),
             it.text, it.final_text or '', 'yes' if it.is_edited else 'no',
             it.source_difficulty or '', it.final_difficulty or '',
             'yes' if (it.final_difficulty and it.source_difficulty
@@ -1005,7 +1114,7 @@ def pool_my_export_submissions(current_user):
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(['Sr. No.', 'Task ID', 'Task', 'Language', 'Class', 'Category', 'Prompt ID',
-                'Original text', 'My submission', 'Edited',
+                'English source', 'Original text', 'My submission', 'Edited',
                 'Difficulty (suggested)', 'Difficulty (mine)', 'Status', 'Flag reason',
                 'Notes', 'Submitted (IST)', 'Seconds'])
     n = 0
@@ -1015,8 +1124,10 @@ def pool_my_export_submissions(current_user):
     ).order_by(PoolItem.completed_at.desc()).yield_per(500):
         n += 1
         t = tasks.get(it.task_id)
+        extra = it.extra_json if isinstance(it.extra_json, dict) else {}
         w.writerow([n, it.task_id or '', t.label if t else '', it.language, it.class_label,
-                    it.category, it.id, it.text, it.final_text or '',
+                    it.category, it.id, extra.get('source_en', ''),
+                    it.text, it.final_text or '',
                     'yes' if it.is_edited else 'no',
                     it.source_difficulty or '', it.final_difficulty or '', it.status,
                     it.flag_reason or '', (it.notes or '').replace('\n', ' '),

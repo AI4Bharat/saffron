@@ -22,11 +22,12 @@ from application.views import (
 )
 from application.pool_common import (  # noqa: F401  (re-exported for pool_tasks)
     BATCH_SIZES, DIFFICULTIES, FLAG_REASONS, STALE_CLAIM_HOURS, TASK_TYPE_LABELS, ITEM_STATUSES,
-    task_type_label, _ist_day, _today_ist, _ist_stamp, _pool_team, _member,
+    task_type_label, _ist_day, _today_ist, _ist_stamp, _IST, _pool_team, _member,
     _current_rater, _allowed_languages, _serialize_item, _blank_counts,
     _with_progress, task_counts, task_category_counts, active_assignments,
     assigned_tasks_for, assigned_task_ids, primary_holder, allowed_categories,
     team_setting, open_items_cap, open_items_held, difficulty_required_for,
+    valid_mdfs_results, MDFS_DIMENSIONS,
     csv_response, serialize_task, serialize_assignee,
     serialize_pull, pull_counts, release_pull_items, close_finished_pulls,
     _revoke_assignments, release_stale_claims, my_work_by_task_type,
@@ -307,6 +308,12 @@ def pool_submit(current_user):
             return jsonify({'message': f'Difficulty must be one of {", ".join(DIFFICULTIES)}.'}), 400
         if difficulty and difficulty not in DIFFICULTIES:
             return jsonify({'message': f'Difficulty must be one of {", ".join(DIFFICULTIES)}.'}), 400
+        # Score-based task types rate the item instead of editing its text.
+        results = data.get('results')
+        if (item.task_type or '') == 'audio-mdfs':
+            results = valid_mdfs_results(results)
+            if results is None:
+                return jsonify({'message': 'Please rate all four dimensions (1–4).'}), 400
         cleaned = (text_in if text_in is not None else item.text).strip()
         if not cleaned:
             return jsonify({'message': 'The text cannot be empty.'}), 400
@@ -316,6 +323,9 @@ def pool_submit(current_user):
         item.is_flagged = False
         item.flag_reason = None
         item.status = 'completed'
+        if isinstance(results, dict):
+            # A NEW dict (never in-place mutation), so SQLAlchemy sees the JSON change.
+            item.extra_json = {**(item.extra_json or {}), 'results': results}
 
     notes = (data.get('notes') or '').strip()
     item.notes = notes[:2000] if notes else None
@@ -765,6 +775,8 @@ def pool_admin_items(current_user):
         q = q.filter(PoolItem.class_label == args['class'])
     if args.get('category'):
         q = q.filter(PoolItem.category == args['category'])
+    if args.get('task_type'):
+        q = q.filter(PoolItem.task_type == args['task_type'])
     if args.get('status'):
         q = q.filter(PoolItem.status == args['status'])
     if args.get('difficulty'):
@@ -976,6 +988,7 @@ EXPORT_COLUMNS = [
     'Status', 'Flagged', 'Flag Reason', 'Notes',
     'Annotator', 'Annotator Email', 'Pull ID',
     'Claimed At (IST)', 'Completed At (IST)', 'Seconds Spent', 'Revisions',
+    'MDFS Expression', 'MDFS Phrasing', 'MDFS Smoothness', 'MDFS Pacing',
     'Extra Metadata (JSON)',
 ]
 
@@ -985,6 +998,9 @@ def _export_row(it, who, team_name='', upload_name='', task=None, holder=''):
     final = it.final_text if it.final_text is not None else ''
     name, email = (who or ('', ''))
     extra = it.extra_json
+    # The MDFS scores get their own columns; everything else stays in the JSON blob.
+    scores = (extra or {}).get('results') if isinstance(extra, dict) else None
+    scores = scores if isinstance(scores, dict) else {}
     if isinstance(extra, (dict, list)):
         try:
             extra = json.dumps(extra, ensure_ascii=False)
@@ -1003,6 +1019,7 @@ def _export_row(it, who, team_name='', upload_name='', task=None, holder=''):
         name, email, it.pull_id or '',
         _ist_stamp(it.claimed_at), _ist_stamp(it.completed_at),
         round((it.time_taken_ms or 0) / 1000.0, 1), it.revision or 0,
+        *[scores.get(dim, '') for dim in MDFS_DIMENSIONS],
         extra or '',
     ]
 
@@ -1312,6 +1329,8 @@ def pool_admin_item_reset(current_user, item_id):
     it.is_edited = it.is_flagged = False
     it.flag_reason = it.notes = None
     it.completed_by = it.completed_at = it.time_taken_ms = None
+    if isinstance(it.extra_json, dict) and 'results' in it.extra_json:
+        it.extra_json = {k: v for k, v in it.extra_json.items() if k != 'results'}
     if was_held_by:
         close_finished_pulls(was_held_by)
     db.session.commit()

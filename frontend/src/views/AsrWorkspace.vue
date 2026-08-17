@@ -182,9 +182,12 @@
               <div class="col-12 col-lg-5">
                 <label class="form-label small fw-semibold text-uppercase text-secondary">Task</label>
                 <select v-model.number="pick.task_id" class="form-select" @change="onTaskChange">
-                  <option v-for="t in tasks" :key="t.task_id" :value="t.task_id">
-                    #{{ t.task_id }} — {{ t.language }} · Class {{ t.class }} ({{ t.available_total.toLocaleString() }} free)
-                  </option>
+                  <optgroup v-for="g in pullTaskGroups" :key="g.key" :label="g.label">
+                    <option v-for="t in g.tasks" :key="t.task_id" :value="t.task_id">
+                      #{{ t.task_id }} — {{ t.label || `${t.language} · Class ${t.class}` }}
+                      ({{ t.available_total.toLocaleString() }} free)
+                    </option>
+                  </optgroup>
                 </select>
               </div>
               <div class="col-6 col-lg-3">
@@ -333,9 +336,16 @@
           <button v-else @click="resetFilters" class="btn btn-dark rounded-pill px-4">Clear All Filters</button>
         </div>
 
-        <!-- Task Cards Grid -->
-        <div v-else class="row g-4">
-          <div v-for="task in filteredTasks" :key="task.task_id" class="col-md-6 col-xl-4">
+        <!-- Task Cards Grid, one section per project (kind of work) -->
+        <div v-else>
+         <div v-for="group in groupedTasks" :key="group.key" class="mb-4">
+          <div v-if="groupedTasks.length > 1" class="d-flex align-items-center gap-2 mb-3">
+            <span class="project-chip"><i :class="group.icon + ' me-1'"></i>{{ group.label }}</span>
+            <span class="text-muted small">{{ group.tasks.length }} task(s)</span>
+            <hr class="flex-grow-1 my-0">
+          </div>
+          <div class="row g-4">
+          <div v-for="task in group.tasks" :key="task.task_id" class="col-md-6 col-xl-4">
             <div class="task-card card h-100 border-0 shadow-sm rounded-4 overflow-hidden position-relative">
               <div :class="['status-bar', getStatusClass(task.myStatus)]"></div>
 
@@ -403,6 +413,8 @@
               </div>
             </div>
           </div>
+          </div>
+         </div>
         </div>
 
         <!-- ══ Work you have done: every prompt you submitted ══ -->
@@ -719,6 +731,27 @@ const filteredTasks = computed(() => decorated.value.filter(t => {
 }))
 
 const workByType = computed(() => stats.value.by_task_type || [])
+
+// ── project grouping: each kind of work under its own heading ──
+const PROJECT_ICONS = { 'text-review': 'bi bi-pencil-square', 'audio-mdfs': 'bi bi-headphones',
+                        'translation-correction': 'bi bi-translate' }
+function projectGroups(list) {
+  const groups = {}
+  for (const t of list) {
+    const key = t.task_type || 'text-review'
+    const g = groups[key] || (groups[key] = {
+      key, label: t.task_type_label || 'Text review',
+      icon: PROJECT_ICONS[key] || 'bi bi-tools', tasks: [] })
+    g.tasks.push(t)
+  }
+  // The original text-review project first, then the rest alphabetically.
+  return Object.values(groups).sort((a, b) =>
+    (a.key === 'text-review' ? -1 : b.key === 'text-review' ? 1 : a.label.localeCompare(b.label)))
+}
+/** The filtered task cards, sectioned per project. */
+const groupedTasks = computed(() => projectGroups(filteredTasks.value))
+/** The pull panel's task dropdown, grouped the same way. */
+const pullTaskGroups = computed(() => projectGroups(tasks.value))
 
 const statsCards = computed(() => {
   const d = decorated.value
@@ -1075,6 +1108,8 @@ onUnmounted(() => {
 .search-bar input::placeholder { color: #94a3b8; font-size: .9rem; }
 
 /** Task cards */
+.project-chip { display: inline-flex; align-items: center; background: #212529; color: #fff;
+                border-radius: 2rem; padding: .35rem .95rem; font-weight: 700; font-size: .85rem; }
 .task-card { transition: transform .2s ease, box-shadow .2s ease; }
 .task-card:hover { transform: translateY(-4px); box-shadow: 0 .75rem 1.5rem rgba(0,0,0,.08) !important; }
 .status-bar { height: 5px; width: 100%; }

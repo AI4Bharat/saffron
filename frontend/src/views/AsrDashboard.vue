@@ -181,6 +181,20 @@
 
       <!-- ══════════════════ TASKS ══════════════════ -->
       <div v-else-if="tab === 'tasks'" class="tab-pane-active">
+        <!-- ── project heads: each kind of work is its own project; everything below is scoped to the selected one ── -->
+        <div v-if="projectOptions.length > 1" class="d-flex justify-content-center mb-3">
+          <div class="d-inline-flex flex-wrap justify-content-center gap-2">
+            <button v-for="p in projectOptions" :key="p.key" type="button"
+                    class="project-head-btn" :class="{ active: projectTab === p.key }"
+                    @click="projectTab = p.key">
+              <i :class="projectIcon(p.key)"></i>
+              <span class="ph-label">{{ p.label }}</span>
+              <span class="ph-count">{{ p.count }} task{{ p.count === 1 ? '' : 's' }} ·
+                {{ p.items.toLocaleString() }} prompt{{ p.items === 1 ? '' : 's' }}</span>
+            </button>
+          </div>
+        </div>
+
         <div class="d-flex justify-content-center align-items-center gap-3 flex-wrap mb-4">
           <div class="tasks-subnav d-inline-flex align-items-center">
             <button type="button" @click="tasksSubTab = 'overview'"
@@ -193,6 +207,11 @@
               <span class="subnav-badge">{{ shownTasks.length }}</span>
             </button>
           </div>
+          <button v-if="projectTab" type="button" class="btn btn-sm btn-outline-dark rounded-pill"
+                  title="See this project's task exactly as an annotator sees it"
+                  @click="openPreview(projectTab)">
+            <i class="bi bi-eye me-1"></i>Preview annotator view
+          </button>
         </div>
 
         <div v-if="tasksLoading" class="text-center py-5"><span class="spinner-border text-secondary"></span></div>
@@ -283,7 +302,7 @@
                           <th>Assigned to</th><th>State</th>
                           <th class="text-end">Prompts</th><th class="text-end">Completed</th>
                           <th class="text-end">In progress</th><th class="text-end">Available</th>
-                          <th style="width:160px">Progress</th><th style="width:120px">Difficulty</th>
+                          <th style="width:160px">Progress</th><th style="width:120px">Difficulty</th><th style="width:120px" title="How many annotators may hold this task at once">Annotators</th>
                           <th style="width:150px"></th>
                         </tr>
                       </thead>
@@ -311,11 +330,27 @@
                             <small class="text-muted">{{ showPct(t.progress, t.done) }}%</small>
                           </td>
                           <td @click.stop>
-                            <DiffToggle :on="t.difficulty_annotation !== false"
+                            <DiffToggle v-if="t.supports_difficulty !== false"
+                                        :on="t.difficulty_annotation !== false"
                                         :overridden="t.difficulty_override !== null && t.difficulty_override !== undefined"
                                         inherit="team default"
                                         @toggle="setDifficulty([t.task_id], '', $event)"
                                         @clear="setDifficulty([t.task_id], '', null)" />
+                            <span v-else class="text-muted text-xs">—</span>
+                          </td>
+                          <td @click.stop>
+                            <div class="d-flex align-items-center gap-1">
+                              <input type="number" min="0" max="99" class="form-control form-control-sm annot-cap"
+                                     :value="t.max_annotators"
+                                     :title="t.max_annotators === 0 ? 'No limit' : 'At most ' + t.max_annotators + ' annotator(s) at a time'"
+                                     @change="setAnnotatorLimit([t.task_id], $event.target.value)" />
+                              <span class="text-muted text-xs text-nowrap">/ {{ t.holders || 0 }}</span>
+                              <button v-if="t.max_annotators_override !== null && t.max_annotators_override !== undefined"
+                                      class="btn btn-link btn-sm p-0 text-muted" title="Follow the team default again"
+                                      @click="setAnnotatorLimit([t.task_id], null)">
+                                <i class="bi bi-x-circle-fill"></i>
+                              </button>
+                            </div>
                           </td>
                           <td class="text-end text-nowrap" @click.stop>
                             <button class="btn btn-sm btn-outline-primary me-1" title="Assign annotators"
@@ -388,11 +423,6 @@
                   <option value="">All classes</option>
                   <option v-for="c in taskClasses" :key="c" :value="c">Class {{ c }}</option>
                 </select>
-                <select v-if="taskTypes.length > 1" v-model="taskFilters.type"
-                        class="form-select form-select-sm w-auto">
-                  <option value="">All work types</option>
-                  <option v-for="tt in taskTypes" :key="tt" :value="tt">{{ humanizeType(tt) }}</option>
-                </select>
                 <select v-model="taskFilters.state" class="form-select form-select-sm w-auto">
                   <option value="">Any state</option>
                   <option v-for="s in taskStates" :key="s" :value="s">{{ s }}</option>
@@ -420,7 +450,7 @@
                       <th>Assigned to</th><th>State</th>
                       <th class="text-end">Prompts</th><th class="text-end">Done</th>
                       <th class="text-end">In progress</th><th class="text-end">Available</th>
-                      <th style="width:170px">Progress</th><th style="width:120px">Difficulty</th>
+                      <th style="width:170px">Progress</th><th style="width:120px">Difficulty</th><th style="width:120px" title="How many annotators may hold this task at once">Annotators</th>
                       <th style="width:110px"></th>
                     </tr>
                   </thead>
@@ -453,13 +483,30 @@
                         <small class="text-muted">{{ showPct(t.progress, t.done) }}%</small>
                       </td>
                       <td @click.stop>
-                        <DiffToggle :on="t.difficulty_annotation !== false"
+                        <DiffToggle v-if="t.supports_difficulty !== false" :on="t.difficulty_annotation !== false"
                                     :overridden="t.difficulty_override !== null && t.difficulty_override !== undefined"
                                     inherit="team default"
                                     @toggle="setDifficulty([t.task_id], '', $event)"
                                     @clear="setDifficulty([t.task_id], '', null)" />
+                        <span v-else class="text-muted text-xs">—</span>
+                      </td>
+                      <td @click.stop>
+                        <div class="d-flex align-items-center gap-1">
+                          <input type="number" min="0" max="99" class="form-control form-control-sm annot-cap"
+                             :value="t.max_annotators"
+                             :title="t.max_annotators === 0 ? 'No limit' : 'At most ' + t.max_annotators + ' annotator(s) at a time'"
+                             @change="setAnnotatorLimit([t.task_id], $event.target.value)" />
+                          <span class="text-muted text-xs text-nowrap">/ {{ t.holders || 0 }}</span>
+                          <button v-if="t.max_annotators_override !== null && t.max_annotators_override !== undefined"
+                          class="btn btn-link btn-sm p-0 text-muted" title="Follow the team default again"
+                          @click="setAnnotatorLimit([t.task_id], null)">
+                        <i class="bi bi-x-circle-fill"></i>
+                          </button>
+                        </div>
                       </td>
                       <td class="text-end text-nowrap" @click.stop>
+                        <button class="btn btn-sm btn-outline-dark me-1" title="Preview the annotator view of this task"
+                                @click="openPreview(t)"><i class="bi bi-eye"></i></button>
                         <button class="btn btn-sm btn-outline-primary me-1" title="Assign annotators"
                                 @click="openAssign([t.task_id])"><i class="bi bi-person-plus"></i></button>
                         <button v-if="holdersOf(t).length"
@@ -1829,6 +1876,61 @@
     </div>
 
     <!-- ══ item detail ══ -->
+    <!-- ══ admin preview: the task template exactly as an annotator sees it ══ -->
+    <div v-if="preview" class="asr-modal-backdrop" @click.self="preview = null">
+      <div class="asr-modal preview-modal">
+        <div class="asr-modal-head">
+          <div>
+            <h5 class="fw-bold mb-0"><i class="bi bi-eye me-2"></i>{{ preview.title }}</h5>
+            <div class="text-xs text-muted">Admin preview — exactly what the annotator gets. Nothing you do here is saved.</div>
+          </div>
+          <button class="btn-close" @click="preview = null"></button>
+        </div>
+        <div class="asr-modal-body">
+          <div v-if="preview.loading" class="text-center py-5"><span class="spinner-border text-secondary"></span></div>
+          <div v-else-if="!preview.item" class="text-center text-muted py-5">
+            This task has no items to preview yet.
+          </div>
+          <template v-else>
+            <div class="d-flex flex-wrap gap-1 mb-3">
+              <span class="badge bg-light text-secondary border">{{ preview.item.task_type_label }}</span>
+              <span class="badge bg-light text-secondary border">{{ preview.item.language }}</span>
+              <span v-if="preview.item.category" class="badge bg-light text-secondary border">{{ preview.item.category }}</span>
+              <span class="badge bg-light text-secondary border">sample prompt #{{ preview.item.id }}</span>
+            </div>
+
+            <!-- MDFS template -->
+            <MdfsEvaluation v-if="preview.item.task_type === 'audio-mdfs'"
+                            :item="preview.item" v-model="preview.scores" />
+
+            <!-- text-review template -->
+            <template v-else>
+              <span class="badge bg-secondary-subtle text-secondary mb-2 fs-8 text-uppercase">Original prompt</span>
+              <div class="p-3 bg-light rounded-3 border-start border-3 border-secondary mb-3">
+                <p class="mb-0 text-dark fs-5" :dir="rtl(preview.item.language) ? 'rtl' : 'ltr'">{{ preview.item.original_text }}</p>
+              </div>
+              <label class="form-label small text-uppercase fw-bold text-primary">
+                Prompt text ({{ preview.item.language }}) — the annotator edits only if it is wrong
+              </label>
+              <textarea v-model="preview.draft" rows="3" class="form-control mb-3"
+                        :dir="rtl(preview.item.language) ? 'rtl' : 'ltr'"></textarea>
+              <label class="form-label small text-uppercase fw-bold text-primary mb-2">
+                How hard is this to read aloud?
+              </label>
+              <div class="d-flex flex-wrap gap-2">
+                <button v-for="d in difficulties" :key="d" type="button"
+                        class="btn rounded-pill px-4"
+                        :class="preview.difficulty === d
+                          ? { Easy: 'btn-success', Medium: 'btn-warning', Hard: 'btn-danger' }[d]
+                          : 'btn-outline-secondary'"
+                        @click="preview.difficulty = d">{{ d }}</button>
+              </div>
+            </template>
+          </template>
+        </div>
+      </div>
+    </div>
+
     <div v-if="itemModal" class="asr-modal-backdrop" @click.self="itemModal = null">
       <div class="asr-modal">
         <div class="asr-modal-head">
@@ -2252,9 +2354,10 @@
 </template>
 
 <script setup>
-import { ref, computed, reactive, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, authToken, session } from '@/session'
+import MdfsEvaluation from '@/components/MdfsEvaluation.vue'
 import { API_BASE_URL } from '@/config'
 import DiffToggle from '@/components/DiffToggle.vue'
 
@@ -2319,6 +2422,25 @@ async function savePullCap() {
 }
 
 /** Set the difficulty-labelling toggle for tasks (optionally one category). on = true / false / null — null clears the override so the level above decides. Each level stores its own value; nothing writes through to another level. */
+/** How many annotators may hold a task at once. null clears the override so the
+ *  task follows the team default; 0 means no limit. Lowering it never removes
+ *  anyone who already holds the task -- the API reports which are over. */
+async function setAnnotatorLimit(taskIds, value) {
+  try {
+    const r = await api('/pool/admin/tasks/annotator-limit', {
+      method: 'POST',
+      body: JSON.stringify({
+        team: teamKey.value, task_ids: taskIds,
+        max_annotators: (value === null || value === '') ? null : Number(value),
+      }),
+    })
+    flash(r.message)
+    loadTasks()
+  } catch (e) {
+    flash(e.message)
+  }
+}
+
 async function setDifficulty(taskIds, category, on) {
   try {
     const r = await api('/pool/admin/tasks/settings', {
@@ -2969,13 +3091,72 @@ async function loadTasks() {
   }
 }
 
+// ── project heads: each kind of work (task_type) is its own project; the whole tasks tab is scoped to one at a time ──
+const projectTab = ref('')
+const projectOptions = computed(() => {
+  const seen = {}
+  for (const t of tasks.value) {
+    const key = t.task_type || 'text-review'
+    const slot = seen[key] || (seen[key] = {
+      key, label: t.task_type_label || humanizeType(key), count: 0, items: 0 })
+    slot.count += 1
+    slot.items += t.item_count || t.total || 0
+  }
+  // The original text-review project first, then the rest alphabetically.
+  return Object.values(seen).sort((a, b) =>
+    (a.key === 'text-review' ? -1 : b.key === 'text-review' ? 1 : a.label.localeCompare(b.label)))
+})
+watch(projectOptions, (opts) => {
+  if (opts.length && !opts.some(o => o.key === projectTab.value)) projectTab.value = opts[0].key
+}, { immediate: true })
+// Switching project drops the ticked rows: bulk actions must never straddle two projects.
+watch(projectTab, () => { selectedTasks.value = [] })
+const projectTasks = computed(() =>
+  tasks.value.filter(t => (t.task_type || 'text-review') === projectTab.value))
+function projectIcon(key) {
+  return { 'text-review': 'bi bi-pencil-square', 'audio-mdfs': 'bi bi-headphones' }[key]
+    || 'bi bi-tools'
+}
+
+// ── admin preview: fetch one sample item and render the real annotator template ──
+const preview = ref(null)
+async function openPreview(taskOrType) {
+  const isTask = typeof taskOrType === 'object'
+  preview.value = {
+    loading: true, item: null, draft: '', difficulty: '',
+    scores: { expression: null, phrasing: null, smoothness: null, pacing: null, comments: '' },
+    title: isTask
+      ? `Task #${taskOrType.task_id} — ${taskOrType.label || taskOrType.language}`
+      : (projectOptions.value.find(p => p.key === taskOrType)?.label || 'Task template'),
+  }
+  try {
+    const qs = new URLSearchParams({ team: teamKey.value, per_page: '1', status: 'available' })
+    if (isTask) qs.set('task_id', taskOrType.task_id)
+    else qs.set('task_type', taskOrType)
+    let d = await api(`/pool/admin/items?${qs}`)
+    if (!(d.items || []).length) {          // nothing free right now: preview any item
+      qs.delete('status')
+      d = await api(`/pool/admin/items?${qs}`)
+    }
+    const it = (d.items || [])[0] || null
+    if (preview.value) {
+      preview.value.item = it
+      preview.value.draft = it?.original_text || it?.text || ''
+    }
+  } catch (e) {
+    flash(e.message)
+    preview.value = null
+  } finally {
+    if (preview.value) preview.value.loading = false
+  }
+}
+
 /** The task table filters in the browser: the whole list is one small payload, so every filter is i. */
 const shownTasks = computed(() => {
   const q = taskFilters.q.trim().toLowerCase()
-  return tasks.value.filter(t => {
+  return projectTasks.value.filter(t => {
     if (taskFilters.language && t.language !== taskFilters.language) return false
     if (taskFilters.class && String(t.class) !== taskFilters.class) return false
-    if (taskFilters.type && (t.task_type || 'text-review') !== taskFilters.type) return false
     if (taskFilters.state && t.state !== taskFilters.state) return false
     if (taskFilters.annotator === 'none' && holdersOf(t).length) return false
     if (taskFilters.annotator && taskFilters.annotator !== 'none'
@@ -2991,7 +3172,7 @@ const shownTasks = computed(() => {
 
 const tasksByLanguage = computed(() => {
   const out = {}
-  for (const t of tasks.value) {
+  for (const t of projectTasks.value) {
     const L = out[t.language] || (out[t.language] = {
       language: t.language, tasks: [], assigned: 0,
       total: 0, completed: 0, flagged: 0, claimed: 0, available: 0, done: 0,
@@ -3600,6 +3781,7 @@ onBeforeUnmount(() => {
 .type-chip { display: inline-flex; align-items: center; gap: .35rem; background: #f1f3f5; color: #495057;
              border-radius: 2rem; padding: .1rem .6rem; font-size: .72rem; font-weight: 600; }
 .type-chip b { color: #212529; }
+.annot-cap { width: 56px; text-align: center; }
 .act-chip { display: inline-flex; align-items: center; gap: .4rem; background: #fff; color: #495057;
             border: 1px solid #dee2e6; border-radius: 2rem; padding: .25rem .75rem;
             font-size: .78rem; font-weight: 600; transition: all .15s ease; }
@@ -3635,6 +3817,20 @@ onBeforeUnmount(() => {
 .rater-action-btn.is-open { background: #212529; color: #fff; border-color: #212529; }
 
 /** Task screens: the same segmented sub-nav, tiles and id badge the TTS dashboard uses, so the two. */
+.preview-modal { max-width: 1100px; width: 96vw; }
+
+.project-head-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  min-width: 220px; padding: .65rem 1.25rem; border-radius: .9rem;
+  border: 2px solid #dee2e6; background: #fff; color: #495057;
+  transition: all .15s ease;
+}
+.project-head-btn:hover { border-color: #adb5bd; transform: translateY(-1px); }
+.project-head-btn.active { border-color: #212529; background: #212529; color: #fff; box-shadow: 0 .4rem .9rem rgba(0,0,0,.18); }
+.project-head-btn i { font-size: 1.15rem; }
+.ph-label { font-weight: 700; font-size: .92rem; }
+.ph-count { font-size: .72rem; opacity: .75; }
+
 .tasks-subnav { background: #fff; border: 1px solid #dee2e6; border-radius: 2rem; padding: .25rem; gap: .25rem; }
 .subnav-btn { border: none; background: transparent; color: #6c757d; font-weight: 600; font-size: .86rem;
               border-radius: 2rem; padding: .45rem 1.15rem; display: inline-flex; align-items: center;

@@ -3403,8 +3403,8 @@ async function approveSignup(p) {
   }
 }
 
-// Sorting + Needs-Attention + stale-annotator state
-const batchSort = ref({ key: 'id', dir: 'asc' })
+// Sorting + Needs-Attention + stale-annotator state. Newest batches first, so a fresh upload is on page 1 instead of page 42.
+const batchSort = ref({ key: 'id', dir: 'desc' })
 const raterSort = ref({ key: 'default', dir: 'asc' })
 const batchAttentionFilter = ref('')   // '' | 'unassigned' | 'stalled' | 'almostdone'
 const showStaleOnly = ref(false)

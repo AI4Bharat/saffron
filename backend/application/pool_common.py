@@ -22,8 +22,31 @@ FLAG_REASONS = [
     'Duplicate of another item',
     'Too long to read aloud',
     'Encoding / rendering broken',
+    'Audio missing or will not play',
+    'Audio unclear or corrupted',
     'Other',
 ]
+
+# The four dimensions of the Multidimensional Fluency Scale (MDFS); each is scored 1..4. Audio-rating items (task_type 'audio-mdfs') submit one score per dimension in a 'results' dict, stored on the item's extra_json bag.
+MDFS_DIMENSIONS = ('expression', 'phrasing', 'smoothness', 'pacing')
+
+
+def valid_mdfs_results(results):
+    """The submitted MDFS scores normalised to {dimension: int 1..4} (+ optional comments), or None when anything is missing or out of range."""
+    if not isinstance(results, dict):
+        return None
+    out = {}
+    for dim in MDFS_DIMENSIONS:
+        try:
+            v = int(results.get(dim))
+        except (TypeError, ValueError):
+            return None
+        if not 1 <= v <= 4:
+            return None
+        out[dim] = v
+    if isinstance(results.get('comments'), str) and results['comments'].strip():
+        out['comments'] = results['comments'].strip()[:2000]
+    return out
 
 # Claimed-but-unfinished items return to the pool automatically after this long (annotators cannot hand pulls back by hand -- this sweep is the only way out).
 STALE_CLAIM_HOURS = int(os.environ.get('POOL_STALE_CLAIM_HOURS', '24'))
@@ -38,7 +61,15 @@ DEFAULT_TASK_TYPE = os.environ.get('POOL_DEFAULT_TASK_TYPE', 'text-review')
 # Human labels for the kinds of work a pool can hold. Extendable through the environment (POOL_TASK_TYPE_LABELS='{"key": "Label", ...}') without a code change; unknown keys fall back to a humanised form of the key itself.
 TASK_TYPE_LABELS = {
     'text-review': 'Text review (edit + difficulty)',
+    'audio-mdfs': 'Audio fluency rating (MDFS)',
+    'translation-correction': 'Translation correction (English -> target)',
 }
+
+# Difficulty labelling is a text-review customisation, not a pool-wide step: it was
+# built for that task and asking for it anywhere else just adds a field nobody uses.
+# Every other task type resolves to "no difficulty" regardless of any stored
+# setting, and the dashboard hides the toggle for them.
+DIFFICULTY_TASK_TYPES = {'text-review'}
 try:
     import json as _json
     TASK_TYPE_LABELS.update(_json.loads(os.environ.get('POOL_TASK_TYPE_LABELS', '{}')))
@@ -139,8 +170,36 @@ def language_difficulty_setting(team, language):
     return None, bool(team_setting(team, 'difficulty_annotation', True))
 
 
+# How many annotators may hold one task at the same time. 1 (the default) keeps a
+# task to a single annotator; raise it when several should share the same prompts.
+# 0 means no ceiling. Per-task in PoolTask.settings['max_annotators'], with a team
+# default in Team.settings['max_annotators'].
+DEFAULT_MAX_ANNOTATORS = 1
+
+
+def max_annotators_for(team, task):
+    """The ceiling on simultaneous holders of one task: the task's own override, else the team default, else 1. 0 = unlimited."""
+    s = getattr(task, 'settings', None) if task is not None else None
+    if isinstance(s, dict) and s.get('max_annotators') is not None:
+        try:
+            return max(int(s['max_annotators']), 0)
+        except (TypeError, ValueError):
+            pass
+    try:
+        return max(int(team_setting(team, 'max_annotators', DEFAULT_MAX_ANNOTATORS)), 0)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_ANNOTATORS
+
+
+def task_supports_difficulty(task):
+    """Whether this task's kind of work has a difficulty step at all."""
+    return (getattr(task, 'task_type', None) or DEFAULT_TASK_TYPE) in DIFFICULTY_TASK_TYPES
+
+
 def difficulty_required_for(team, task, category):
     """Whether a prompt in this (language, class, category) slice must carry a difficulty label. Most specific wins: the category override on the task, then the task (= language + class) override, then the language override on the team, then the team default (on)."""
+    if task is not None and not task_supports_difficulty(task):
+        return False
     s = getattr(task, 'settings', None) if task is not None else None
     if isinstance(s, dict):
         byc = s.get('difficulty_annotation_by_category')
@@ -192,6 +251,8 @@ def _serialize_item(it, include_original=True):
         'pull_id': it.pull_id,
         'task_type': it.task_type or DEFAULT_TASK_TYPE,
         'task_type_label': task_type_label(it.task_type),
+        # Source metadata (audio path, intended scores, ...) plus, after submission, the annotator's 'results' dict for score-based task types.
+        'extra_json': it.extra_json,
         'claimed_at': it.claimed_at.isoformat() if it.claimed_at else None,
         'claimed_at_ist': _ist_stamp(it.claimed_at),
         'completed_at': it.completed_at.isoformat() if it.completed_at else None,

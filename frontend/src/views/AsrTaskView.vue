@@ -132,9 +132,9 @@
               <i class="bi bi-list-task me-1"></i>Task #{{ current.task_id }}</span>
             <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle rounded-pill px-3 py-2">
               <i class="bi bi-translate me-1"></i>{{ current.language }}</span>
-            <span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill px-3 py-2">
+            <span v-if="current.class" class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill px-3 py-2">
               <i class="bi bi-mortarboard me-1"></i>Class {{ current.class }}</span>
-            <span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-3 py-2">
+            <span v-if="current.category" class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-3 py-2">
               <i class="bi bi-journal-bookmark me-1"></i>{{ current.category }}</span>
             <span v-if="current.n_words" class="badge bg-secondary-subtle text-secondary border rounded-pill px-3 py-2">
               <i class="bi bi-123 me-1"></i>{{ current.n_words }} words</span>
@@ -146,8 +146,28 @@
               <i class="bi bi-tools me-1"></i>{{ current.task_type_label || current.task_type }}</span>
           </div>
 
+          <!-- MDFS audio fluency rating -->
+          <div v-if="isMdfs" class="card border-0 shadow-sm rounded-4 bg-white p-3 p-md-4 mb-4">
+            <MdfsEvaluation :item="current" v-model="mdfsScores" />
+            <!-- flag -->
+            <div class="mt-3 d-flex flex-wrap align-items-center gap-2">
+              <button class="btn btn-sm btn-outline-warning rounded-pill" @click="flagOpen = !flagOpen">
+                <i class="bi bi-flag me-1"></i>This clip can't be rated
+              </button>
+              <template v-if="flagOpen">
+                <select v-model="flagReason" class="form-select form-select-sm w-auto">
+                  <option value="">Pick a reason…</option>
+                  <option v-for="r in flagReasons" :key="r" :value="r">{{ r }}</option>
+                </select>
+                <button class="btn btn-sm btn-warning rounded-pill" :disabled="!flagReason || saving" @click="submit(true)">
+                  Flag &amp; next
+                </button>
+              </template>
+            </div>
+          </div>
+
           <!-- an item whose kind of work this page does not know how to render yet -->
-          <div v-if="!isTextReview" class="card border-0 shadow-sm rounded-4 bg-white p-4 mb-4 text-center">
+          <div v-else-if="!isTextReview && !isTranslation" class="card border-0 shadow-sm rounded-4 bg-white p-4 mb-4 text-center">
             <i class="bi bi-puzzle d-block fs-1 text-muted mb-3"></i>
             <h5 class="fw-bold text-dark">This item needs a different tool</h5>
             <p class="text-muted mb-1">
@@ -166,8 +186,19 @@
 
           <!-- text card -->
           <div v-else class="card border-0 shadow-sm rounded-4 bg-white p-3 p-md-4 mb-4">
+            <!-- Translation correction: the English is what the annotator judges
+                 against, so it sits above the text and is never editable. -->
+            <div v-if="isTranslation && sourceEnglish" class="mb-4">
+              <span class="badge bg-primary-subtle text-primary mb-2 fs-8 text-uppercase tracking-wide">
+                <i class="bi bi-translate me-1"></i>English source (reference)
+              </span>
+              <div class="p-3 rounded-3 border-start border-3 border-primary source-en">
+                <p class="mb-0 text-dark fs-5 leading-relaxed" dir="ltr">{{ sourceEnglish }}</p>
+              </div>
+            </div>
+
             <div class="mb-4">
-              <span class="badge bg-secondary-subtle text-secondary mb-2 fs-8 text-uppercase tracking-wide">Original prompt</span>
+              <span class="badge bg-secondary-subtle text-secondary mb-2 fs-8 text-uppercase tracking-wide">{{ originalLabel }}</span>
               <div class="p-3 bg-light rounded-3 border-start border-3 border-secondary">
                 <p class="mb-0 text-dark fs-5 leading-relaxed" :dir="isRtl ? 'rtl' : 'ltr'">{{ current.original_text }}</p>
               </div>
@@ -176,7 +207,7 @@
             <div class="translation-edit-wrapper rounded-4 p-3 border">
               <div class="d-flex justify-content-between align-items-center mb-2">
                 <label class="form-label mb-0 small text-uppercase font-bold tracking-wide text-primary">
-                  Prompt text ({{ current.language }}) — edit only if it is wrong
+                  {{ editorLabel }}
                 </label>
                 <button type="button" class="btn btn-sm btn-outline-secondary" title="Reset to the original text"
                         :disabled="!isModified" @click="draftText = current.original_text">
@@ -227,7 +258,7 @@
           </div>
 
           <!-- submit bar (mirrors the TTS one) -->
-          <div v-if="isTextReview" class="card border-0 shadow-sm rounded-4 bg-white p-4 mb-5">
+          <div v-if="isTextReview || isMdfs || isTranslation" class="card border-0 shadow-sm rounded-4 bg-white p-4 mb-5">
             <div class="d-flex flex-column flex-sm-row justify-content-between align-items-center gap-3">
               <button class="btn btn-outline-secondary px-4 py-2 rounded-pill d-flex align-items-center gap-2"
                       :disabled="currentIndex === 0" @click="go(-1)">
@@ -246,7 +277,10 @@
                 </button>
               </div>
             </div>
-            <div v-if="needDifficulty && !draftDifficulty" class="text-danger text-center small mt-3">
+            <div v-if="isMdfs && !mdfsComplete" class="text-danger text-center small mt-3">
+              <i class="bi bi-exclamation-triangle-fill me-1"></i> Rate all four dimensions before submitting.
+            </div>
+            <div v-else-if="needDifficulty && !draftDifficulty" class="text-danger text-center small mt-3">
               <i class="bi bi-exclamation-triangle-fill me-1"></i> Pick a difficulty before submitting.
             </div>
             <div class="text-center text-muted mt-3" style="font-size: 0.78rem;">
@@ -265,6 +299,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '@/session'
+import MdfsEvaluation from '@/components/MdfsEvaluation.vue'
 
 const vAutoGrow = {
   mounted(el) {
@@ -300,9 +335,25 @@ const doneCount = ref(0)
 let shownAt = Date.now()
 
 const current = computed(() => items.value[currentIndex.value] || null)
-// This page renders the text-review tool; an item of any other kind of work gets a graceful notice instead of the wrong editor.
+// This page renders the text-review and MDFS tools; an item of any other kind of work gets a graceful notice instead of the wrong editor.
 const isTextReview = computed(() =>
   !current.value || (current.value.task_type || 'text-review') === 'text-review')
+const isMdfs = computed(() => current.value?.task_type === 'audio-mdfs')
+// Translation correction reuses the text editor: the same edit-and-submit path,
+// with the English source shown above it as read-only reference.
+const isTranslation = computed(() => current.value?.task_type === 'translation-correction')
+const sourceEnglish = computed(() => current.value?.extra_json?.source_en || '')
+const originalLabel = computed(() =>
+  isTranslation.value ? 'Translation as received' : 'Original prompt')
+const editorLabel = computed(() => isTranslation.value
+  ? 'Corrected ' + (current.value?.language || '') + ' translation — fix anything that misreads the English'
+  : 'Prompt text (' + (current.value?.language || '') + ') — edit only if it is wrong')
+// One score (1..4) per MDFS dimension, plus an optional comment.
+const blankScores = () => ({ expression: null, phrasing: null, smoothness: null,
+                             pacing: null, comments: '' })
+const mdfsScores = ref(blankScores())
+const mdfsComplete = computed(() =>
+  ['expression', 'phrasing', 'smoothness', 'pacing'].every(k => mdfsScores.value[k] >= 1))
 const isRtl = computed(() => rtl(current.value?.language))
 const isModified = computed(() =>
   !!current.value && draftText.value.trim() !== (current.value.original_text || '').trim())
@@ -310,8 +361,9 @@ const needDifficulty = computed(() =>
   current.value && current.value.need_difficulty !== undefined
     ? current.value.need_difficulty !== false
     : teamNeedDifficulty.value)
-const canSubmit = computed(() =>
-  !!draftText.value.trim() && (!needDifficulty.value || !!draftDifficulty.value))
+const canSubmit = computed(() => isMdfs.value
+  ? mdfsComplete.value
+  : !!draftText.value.trim() && (!needDifficulty.value || !!draftDifficulty.value))
 const progressPct = computed(() =>
   batchTotal.value ? Math.round(100 * doneCount.value / batchTotal.value) : 0)
 
@@ -336,10 +388,14 @@ function loadDraft() {
   const it = current.value
   draftText.value = it ? (it.text || '') : ''
   draftDifficulty.value = it?.final_difficulty || ''
+  // Prefill from an earlier submission when re-opening a done item; blank otherwise.
+  mdfsScores.value = { ...blankScores(), ...((it?.extra_json || {}).results || {}) }
   flagOpen.value = false
   flagReason.value = ''
   shownAt = Date.now()
-  nextTick(() => textBox.value?.focus())
+  if (!it || (it.task_type || 'text-review') === 'text-review') {
+    nextTick(() => textBox.value?.focus())
+  }
 }
 watch(currentIndex, loadDraft)
 
@@ -388,11 +444,21 @@ async function submit(flagged) {
     if (flagged) {
       body.is_flagged = true
       body.flag_reason = flagReason.value
+    } else if (isMdfs.value) {
+      const { expression, phrasing, smoothness, pacing, comments } = mdfsScores.value
+      body.results = { expression, phrasing, smoothness, pacing,
+                       ...(comments && comments.trim() ? { comments: comments.trim() } : {}) }
     } else {
       body.text = draftText.value
       if (draftDifficulty.value) body.difficulty = draftDifficulty.value
     }
-    await api('/pool/submit', { method: 'POST', body: JSON.stringify(body) })
+    const resp = await api('/pool/submit', { method: 'POST', body: JSON.stringify(body) })
+    // Belt and braces during rollout: the server must echo the stored scores back.
+    if (!flagged && isMdfs.value && !(resp?.item?.extra_json?.results)) {
+      alert('The server did not store the scores (it may still be running the old version). '
+            + 'Please tell the admin before rating more clips.')
+      return
+    }
     items.value.splice(currentIndex.value, 1)
     doneCount.value += 1
     if (currentIndex.value >= items.value.length) currentIndex.value = Math.max(0, items.value.length - 1)
@@ -460,6 +526,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKey))
 .keys kbd { margin: 0 1px; }
 .plus { margin: 0 2px; color: #adb5bd; }
 
+.source-en { background: rgba(13, 110, 253, .04); }
 .translation-edit-wrapper { background: #fcfcfd; border-color: #e9ecef !important; }
 .correction-textarea { font-size: 1.15rem; line-height: 1.9; border-radius: .75rem; }
 .correction-textarea:focus { border-color: #0d6efd; box-shadow: 0 0 0 .2rem rgba(13,110,253,.15); }

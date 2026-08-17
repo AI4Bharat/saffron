@@ -215,7 +215,20 @@ def fetch_docx_from_drive(language, persona, set_no, dest_dir):
 
     print(f"Listing conversation-docs Drive folder for "
           f"{language.title()} / {persona.replace('_', ' ').title()} / Set{set_no} ...")
-    files = gdown.download_folder(url=DOCS_DRIVE_URL, skip_download=True, quiet=True)
+    try:
+        files = gdown.download_folder(url=DOCS_DRIVE_URL, skip_download=True, quiet=True)
+    except Exception as e:
+        # Drive listings fail transiently (rate limits, one unshared subfolder). The local export copies are the same docs -- use them rather than dying.
+        print(f"[WARN] Could not list the docs Drive folder ({str(e).splitlines()[0][:120]})")
+        local = find_docx_locally(language, persona, set_no)
+        if local:
+            print(f"Using the local copy instead:\n  {local}")
+            return local
+        raise SystemExit(
+            f"Drive listing failed AND no local copy of "
+            f"{language.title()}_{persona.title()}_Set{set_no}.docx exists in exports/. "
+            "Retry in a few minutes, or check the docs folder is shared as "
+            "'Anyone with the link'.")
 
     target, candidates = None, []
     for f in files or []:

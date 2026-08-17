@@ -226,7 +226,7 @@ def serve_audio(filename):
     # (paths like 'aivanta_task/Hindi_E_Commerce/x.wav'). A path whose first segment
     # names an allowed root resolves against backend/; anything else keeps the old
     # meaning and resolves inside audio_segmentation/.
-    AUDIO_ROOTS = ('audio_segmentation', 'aivanta_task')
+    AUDIO_ROOTS = ('audio_segmentation', 'aivanta_task', 'tasks')
     head = filename.split('/', 1)[0]
     root = base_dir if head in AUDIO_ROOTS else os.path.join(base_dir, 'audio_segmentation')
     filepath = os.path.normpath(os.path.join(root, filename))

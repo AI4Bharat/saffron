@@ -426,6 +426,7 @@ def audio_clips_rows(tests, ratings_by_test, only_rejected=True, language=None,
                 "evaluation": ev,
                 "rejection_reasons": "; ".join(reasons),
                 "custom_reason": rj.get("custom_rejection_reason") or "",
+                "comments": (rj.get("comments") or "").strip(),
                 "annotator": rj.get("rater_email") or "",
                 "transcript": (item.get("transcript") or "")[:400],
                 "link": task_link(test.id, task_id),
@@ -463,12 +464,13 @@ def audio_clips_csv(tests, ratings_by_test, only_rejected=True, language=None,
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["Artist", "Language", "Persona", "Set", "Test ID", "Task ID", "Speaker",
-                "Evaluation", "Rejection Reasons", "Custom Reason", "Annotator",
-                "Transcript", "Listen (Saffron link)"])
+                "Evaluation", "Rejection Reasons", "Custom Reason", "Annotator Comments",
+                "Annotator", "Transcript", "Listen (Saffron link)"])
     for r in rows:
         w.writerow([r["artist"], r["language"], r["persona"], r["set"], r["test_id"],
                     r["task_id"], r["speaker"], r["evaluation"], r["rejection_reasons"],
-                    r["custom_reason"], r["annotator"], r["transcript"], r["link"]])
+                    r["custom_reason"], r.get("comments", ""), r["annotator"],
+                    r["transcript"], r["link"]])
     return buf.getvalue()
 
 
