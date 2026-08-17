@@ -33,7 +33,7 @@ LOCAL_COPY = os.path.join(BACKEND_DIR, 'tasks', 'asr', 'pool_source',
                           'translation_correction.xlsx')
 
 TASK_TYPE = 'translation-correction'
-UPLOAD_NAME = 'Translation correction (class-wise, English -> target)'
+UPLOAD_NAME = 'Numeracy translation correction (class-wise)'
 TEAM_KEY = os.environ.get('POOL_TEAM_KEY', 'asr')
 
 # Columns that describe the row rather than being a translation target.

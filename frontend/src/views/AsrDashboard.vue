@@ -302,7 +302,7 @@
                           <th>Assigned to</th><th>State</th>
                           <th class="text-end">Prompts</th><th class="text-end">Completed</th>
                           <th class="text-end">In progress</th><th class="text-end">Available</th>
-                          <th style="width:160px">Progress</th><th style="width:120px">Difficulty</th><th style="width:120px" title="How many annotators may hold this task at once">Annotators</th>
+                          <th style="width:160px">Progress</th><th style="width:120px" title="Whether this kind of work requires its final label">Final label</th>
                           <th style="width:150px"></th>
                         </tr>
                       </thead>
@@ -337,20 +337,6 @@
                                         @toggle="setDifficulty([t.task_id], '', $event)"
                                         @clear="setDifficulty([t.task_id], '', null)" />
                             <span v-else class="text-muted text-xs">—</span>
-                          </td>
-                          <td @click.stop>
-                            <div class="d-flex align-items-center gap-1">
-                              <input type="number" min="0" max="99" class="form-control form-control-sm annot-cap"
-                                     :value="t.max_annotators"
-                                     :title="t.max_annotators === 0 ? 'No limit' : 'At most ' + t.max_annotators + ' annotator(s) at a time'"
-                                     @change="setAnnotatorLimit([t.task_id], $event.target.value)" />
-                              <span class="text-muted text-xs text-nowrap">/ {{ t.holders || 0 }}</span>
-                              <button v-if="t.max_annotators_override !== null && t.max_annotators_override !== undefined"
-                                      class="btn btn-link btn-sm p-0 text-muted" title="Follow the team default again"
-                                      @click="setAnnotatorLimit([t.task_id], null)">
-                                <i class="bi bi-x-circle-fill"></i>
-                              </button>
-                            </div>
                           </td>
                           <td class="text-end text-nowrap" @click.stop>
                             <button class="btn btn-sm btn-outline-primary me-1" title="Assign annotators"
@@ -450,7 +436,7 @@
                       <th>Assigned to</th><th>State</th>
                       <th class="text-end">Prompts</th><th class="text-end">Done</th>
                       <th class="text-end">In progress</th><th class="text-end">Available</th>
-                      <th style="width:170px">Progress</th><th style="width:120px">Difficulty</th><th style="width:120px" title="How many annotators may hold this task at once">Annotators</th>
+                      <th style="width:170px">Progress</th><th style="width:120px" title="Whether this kind of work requires its final label">Final label</th>
                       <th style="width:110px"></th>
                     </tr>
                   </thead>
@@ -489,20 +475,6 @@
                                     @toggle="setDifficulty([t.task_id], '', $event)"
                                     @clear="setDifficulty([t.task_id], '', null)" />
                         <span v-else class="text-muted text-xs">—</span>
-                      </td>
-                      <td @click.stop>
-                        <div class="d-flex align-items-center gap-1">
-                          <input type="number" min="0" max="99" class="form-control form-control-sm annot-cap"
-                             :value="t.max_annotators"
-                             :title="t.max_annotators === 0 ? 'No limit' : 'At most ' + t.max_annotators + ' annotator(s) at a time'"
-                             @change="setAnnotatorLimit([t.task_id], $event.target.value)" />
-                          <span class="text-muted text-xs text-nowrap">/ {{ t.holders || 0 }}</span>
-                          <button v-if="t.max_annotators_override !== null && t.max_annotators_override !== undefined"
-                          class="btn btn-link btn-sm p-0 text-muted" title="Follow the team default again"
-                          @click="setAnnotatorLimit([t.task_id], null)">
-                        <i class="bi bi-x-circle-fill"></i>
-                          </button>
-                        </div>
                       </td>
                       <td class="text-end text-nowrap" @click.stop>
                         <button class="btn btn-sm btn-outline-dark me-1" title="Preview the annotator view of this task"
@@ -1212,6 +1184,22 @@
             <div class="bg-white p-4 rounded shadow-sm border h-100">
               <h5 class="fw-bold text-dark mb-2"><i class="bi bi-download me-2 text-primary"></i>Reports</h5>
               <p class="text-muted text-xs">Every report covers the ASR team only.</p>
+              <div class="mb-3 pb-3 border-bottom">
+                <label class="form-label small fw-semibold text-dark mb-1">
+                  Annotators per task
+                </label>
+                <div class="d-flex align-items-center gap-2">
+                  <input type="number" min="0" max="99" class="form-control form-control-sm" style="width:80px"
+                         :value="teamSettings.max_annotators ?? 1"
+                         @change="setAnnotatorLimit($event.target.value)" />
+                  <span class="text-muted text-xs">
+                    {{ (teamSettings.max_annotators ?? 1) === 0
+                        ? 'No limit — any number may share a task'
+                        : 'Applies to every task in this project' }}
+                  </span>
+                </div>
+              </div>
+
               <div class="d-grid gap-2">
                 <button class="btn btn-sm btn-outline-primary" @click="exportOpen = true">
                   <i class="bi bi-file-earmark-spreadsheet me-1"></i>Full pool export (Excel / CSV)
@@ -2422,19 +2410,21 @@ async function savePullCap() {
 }
 
 /** Set the difficulty-labelling toggle for tasks (optionally one category). on = true / false / null — null clears the override so the level above decides. Each level stores its own value; nothing writes through to another level. */
-/** How many annotators may hold a task at once. null clears the override so the
- *  task follows the team default; 0 means no limit. Lowering it never removes
- *  anyone who already holds the task -- the API reports which are over. */
-async function setAnnotatorLimit(taskIds, value) {
+/** How many annotators may hold ANY ONE task at a time, for the whole project.
+ *  Deliberately not per task: the policy is set once at the top so it cannot
+ *  drift task by task. 0 means no limit. Lowering it never removes an existing
+ *  holder -- it applies to the next assignment. */
+async function setAnnotatorLimit(value) {
   try {
-    const r = await api('/pool/admin/tasks/annotator-limit', {
+    const r = await api('/pool/admin/settings', {
       method: 'POST',
       body: JSON.stringify({
-        team: teamKey.value, task_ids: taskIds,
+        team: teamKey.value,
         max_annotators: (value === null || value === '') ? null : Number(value),
       }),
     })
-    flash(r.message)
+    teamSettings.value = r.settings || teamSettings.value
+    flash(r.message || 'Annotator limit saved.')
     loadTasks()
   } catch (e) {
     flash(e.message)

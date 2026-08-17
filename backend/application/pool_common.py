@@ -62,14 +62,27 @@ DEFAULT_TASK_TYPE = os.environ.get('POOL_DEFAULT_TASK_TYPE', 'text-review')
 TASK_TYPE_LABELS = {
     'text-review': 'Text review (edit + difficulty)',
     'audio-mdfs': 'Audio fluency rating (MDFS)',
-    'translation-correction': 'Translation correction (English -> target)',
+    'translation-correction': 'Numeracy translation correction',
 }
 
-# Difficulty labelling is a text-review customisation, not a pool-wide step: it was
-# built for that task and asking for it anywhere else just adds a field nobody uses.
-# Every other task type resolves to "no difficulty" regardless of any stored
-# setting, and the dashboard hides the toggle for them.
-DIFFICULTY_TASK_TYPES = {'text-review'}
+# Some kinds of work end with a FINAL LABEL on top of the main edit: a difficulty
+# band, an accept/reject verdict, and so on. Which label a task type carries is
+# declared here; a type absent from this map has no final labelling step, so the
+# admin toggle is hidden for it and no label is ever demanded. Adding a new one is
+# a line here, not a code change at every call site.
+FINAL_LABELS = {
+    'text-review': {'key': 'difficulty', 'label': 'Difficulty',
+                    'question': 'How hard is this to read aloud?'},
+}
+
+# Backwards-compatible view of the same fact.
+DIFFICULTY_TASK_TYPES = {k for k, v in FINAL_LABELS.items() if v['key'] == 'difficulty'}
+
+
+def final_label_for(task):
+    """The final labelling step this kind of work ends with, or None."""
+    tt = (getattr(task, 'task_type', None) or DEFAULT_TASK_TYPE) if task is not None else None
+    return FINAL_LABELS.get(tt)
 try:
     import json as _json
     TASK_TYPE_LABELS.update(_json.loads(os.environ.get('POOL_TASK_TYPE_LABELS', '{}')))
@@ -170,21 +183,15 @@ def language_difficulty_setting(team, language):
     return None, bool(team_setting(team, 'difficulty_annotation', True))
 
 
-# How many annotators may hold one task at the same time. 1 (the default) keeps a
-# task to a single annotator; raise it when several should share the same prompts.
-# 0 means no ceiling. Per-task in PoolTask.settings['max_annotators'], with a team
-# default in Team.settings['max_annotators'].
+# How many annotators may hold one task at the same time. This is a PROJECT-level
+# rule -- one number in Team.settings['max_annotators'] governing every task in the
+# pool, not a per-task switch -- so the policy is set once at the top instead of
+# drifting task by task. 1 keeps each task to a single annotator; 0 means no limit.
 DEFAULT_MAX_ANNOTATORS = 1
 
 
-def max_annotators_for(team, task):
-    """The ceiling on simultaneous holders of one task: the task's own override, else the team default, else 1. 0 = unlimited."""
-    s = getattr(task, 'settings', None) if task is not None else None
-    if isinstance(s, dict) and s.get('max_annotators') is not None:
-        try:
-            return max(int(s['max_annotators']), 0)
-        except (TypeError, ValueError):
-            pass
+def max_annotators_for(team, task=None):
+    """The ceiling on simultaneous holders of any one task in this project. 0 = unlimited. `task` is accepted and ignored: the limit is deliberately not per-task."""
     try:
         return max(int(team_setting(team, 'max_annotators', DEFAULT_MAX_ANNOTATORS)), 0)
     except (TypeError, ValueError):
@@ -192,8 +199,8 @@ def max_annotators_for(team, task):
 
 
 def task_supports_difficulty(task):
-    """Whether this task's kind of work has a difficulty step at all."""
-    return (getattr(task, 'task_type', None) or DEFAULT_TASK_TYPE) in DIFFICULTY_TASK_TYPES
+    """Whether this task's kind of work ends with a final label the admin can require."""
+    return final_label_for(task) is not None
 
 
 def difficulty_required_for(team, task, category):

@@ -1479,7 +1479,8 @@ onUnmounted(() => {
 }
 
 .accept-list li::before {
-  content: "✓";
+  font-family: "bootstrap-icons";
+  content: "\\F26E";           /* bi-check-lg */
   color: #10b981;
   font-weight: bold;
   position: absolute;
@@ -1488,7 +1489,8 @@ onUnmounted(() => {
 }
 
 .reject-list li::before {
-  content: "✗";
+  font-family: "bootstrap-icons";
+  content: "\\F62A";           /* bi-x-lg */
   color: #ef4444;
   font-weight: bold;
   position: absolute;
@@ -1497,7 +1499,8 @@ onUnmounted(() => {
 }
 
 .correction-list li::before {
-  content: "✎";
+  font-family: "bootstrap-icons";
+  content: "\\F4CB";           /* bi-pencil */
   color: #d97706;
   font-weight: bold;
   position: absolute;
