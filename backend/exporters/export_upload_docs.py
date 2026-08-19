@@ -15,6 +15,7 @@ sys.path.append(BACKEND_DIR)
 
 from main import app
 from application.models import Test
+from application.database import db
 from export_conversations import export_conversation_ratings, slugify
 from generate_docs import build_persona_documents, PERSONA_ORDER
 
@@ -68,14 +69,26 @@ def find_tests(language, version, personas_filter=None):
     label, pred = version_predicate(version)
     prefix = f"conversation editable - {language.strip().lower()} - "
     with app.app_context():
-        tests = Test.query.filter(Test.test_type == "conversation-editable").all()
-        matches = [
-            (t.id, t.description, len(t.json_entry) if isinstance(t.json_entry, list) else 0)
-            for t in tests
-            if (t.description or "").lower().startswith(prefix)
-            and pred(t.description or "")
-            and (personas_filter is None or desc_persona(t.description) in personas_filter)
-        ]
+        # Only id/description/item_count are needed here. Selecting whole Test rows
+        # pulls every json_entry across the wire (the test table is ~240 MB of JSON),
+        # which cost ~5.6s per call on PostgreSQL; this costs ~2ms. item_count is the
+        # stored length of json_entry -- json_entry is read only for rows missing it.
+        rows = (db.session.query(Test.id, Test.description, Test.item_count)
+                .filter(Test.test_type == "conversation-editable")
+                .filter(Test.description.ilike(prefix + "%"))
+                .all())
+        rows = [(tid, desc, cnt) for tid, desc, cnt in rows
+                if pred(desc or "")
+                and (personas_filter is None or desc_persona(desc) in personas_filter)]
+        stale = [tid for tid, _, cnt in rows if cnt is None]
+        if stale:
+            entries = dict(
+                (t.id, len(t.json_entry) if isinstance(t.json_entry, list) else 0)
+                for t in Test.query.filter(Test.id.in_(stale)).all()
+            )
+        else:
+            entries = {}
+        matches = [(tid, desc, entries.get(tid, cnt) or 0) for tid, desc, cnt in rows]
     matches.sort(key=lambda x: x[0])
     return label, matches
 

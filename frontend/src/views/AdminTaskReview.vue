@@ -75,13 +75,39 @@
         </button>
       </div>
 
-      <!-- Annotator summary strip -->
+      <!-- Annotator summary strip. Every pill is also a filter for the item
+           list on the left — click "Rejected" to walk only the rejected items,
+           click it again (or "All") to go back to the whole batch. -->
       <div v-if="currentAnnotator" class="d-flex flex-wrap align-items-center gap-2 mb-3">
         <span class="text-muted small me-2"><i class="bi bi-envelope me-1"></i>{{ currentAnnotator.email || '—' }}</span>
-        <span class="stat-pill"><span class="lbl">Completed</span><span class="val text-success">{{ currentAnnotator.counts.completed }}</span></span>
-        <span v-if="currentAnnotator.counts.skipped" class="stat-pill"><span class="lbl">Skipped</span><span class="val text-purple">{{ currentAnnotator.counts.skipped }}</span></span>
-        <span v-if="hasVerdict" class="stat-pill"><span class="lbl">Accepted</span><span class="val text-success">{{ currentAnnotator.counts.accepted }}</span></span>
-        <span v-if="hasVerdict" class="stat-pill"><span class="lbl">Rejected</span><span class="val text-danger">{{ currentAnnotator.counts.rejected }}</span></span>
+        <button type="button" class="stat-pill" :class="{ 'pill-active': !itemFilter }"
+                title="Show every item in this batch" @click="setItemFilter('')">
+          <span class="lbl">All</span><span class="val text-dark">{{ testData.length }}</span>
+        </button>
+        <button type="button" class="stat-pill" :class="{ 'pill-active': itemFilter === 'completed' }"
+                title="Only the items this annotator completed" @click="setItemFilter('completed')">
+          <span class="lbl">Completed</span><span class="val text-success">{{ currentAnnotator.counts.completed }}</span>
+        </button>
+        <button v-if="currentAnnotator.counts.skipped" type="button" class="stat-pill"
+                :class="{ 'pill-active': itemFilter === 'skipped' }"
+                title="Only the items this annotator skipped" @click="setItemFilter('skipped')">
+          <span class="lbl">Skipped</span><span class="val text-purple">{{ currentAnnotator.counts.skipped }}</span>
+        </button>
+        <button v-if="hasVerdict" type="button" class="stat-pill"
+                :class="{ 'pill-active': itemFilter === 'accept' }"
+                title="Only the items this annotator ACCEPTED" @click="setItemFilter('accept')">
+          <span class="lbl">Accepted</span><span class="val text-success">{{ currentAnnotator.counts.accepted }}</span>
+        </button>
+        <button v-if="hasVerdict" type="button" class="stat-pill"
+                :class="{ 'pill-active': itemFilter === 'reject' }"
+                title="Only the items this annotator REJECTED" @click="setItemFilter('reject')">
+          <span class="lbl">Rejected</span><span class="val text-danger">{{ currentAnnotator.counts.rejected }}</span>
+        </button>
+        <button v-if="pendingCount" type="button" class="stat-pill"
+                :class="{ 'pill-active': itemFilter === 'pending' }"
+                title="Items this annotator has not opened yet" @click="setItemFilter('pending')">
+          <span class="lbl">Pending</span><span class="val text-muted">{{ pendingCount }}</span>
+        </button>
       </div>
 
       <!-- Task workspace: sidebar (item list) + the real task UI in read-only mode -->
@@ -94,6 +120,13 @@
             </div>
             <div class="card-body p-2">
               <input v-model="search" type="text" class="form-control form-control-sm bg-light border-0 mb-2" placeholder="Search item id…" />
+              <div v-if="itemFilter" class="d-flex align-items-center justify-content-between mb-2">
+                <span class="badge rounded-pill bg-warning-subtle text-dark border">
+                  {{ itemFilterLabel }} · {{ filteredTasks.length }}
+                </span>
+                <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none"
+                        @click="setItemFilter('')">Show all</button>
+              </div>
               <div class="task-list-wrapper">
                 <div
                   v-for="task in filteredTasks"
@@ -105,11 +138,15 @@
                   <div class="text-truncate pe-2">
                     <div class="fw-semibold text-truncate small">{{ task.originalIndex + 1 }}. {{ task.id }}</div>
                   </div>
-                  <span v-if="task.completion_status === 'completed'" class="badge bg-success-subtle text-success border rounded-pill">Done</span>
+                  <span v-if="taskVerdict(task) === 'accept'" class="badge bg-success-subtle text-success border rounded-pill">Accept</span>
+                  <span v-else-if="taskVerdict(task) === 'reject'" class="badge bg-danger-subtle text-danger border rounded-pill">Reject</span>
+                  <span v-else-if="task.completion_status === 'completed'" class="badge bg-success-subtle text-success border rounded-pill">Done</span>
                   <span v-else-if="task.completion_status === 'skipped'" class="badge bg-purple-subtle text-purple border rounded-pill">Skip</span>
                   <span v-else class="badge bg-light text-muted border rounded-pill">—</span>
                 </div>
-                <div v-if="!filteredTasks.length" class="text-center text-muted small py-4">No items.</div>
+                <div v-if="!filteredTasks.length" class="text-center text-muted small py-4">
+                  {{ itemFilter ? 'No ' + itemFilterLabel.toLowerCase() + ' items for this annotator.' : 'No items.' }}
+                </div>
               </div>
             </div>
           </div>
@@ -162,6 +199,8 @@ const error = ref(null)
 const activeTab = ref(-1)   // -1 = blank task; 0..n-1 = annotator index
 const currentIndex = ref(0)
 const search = ref('')
+// '' | 'completed' | 'skipped' | 'accept' | 'reject' | 'pending'
+const itemFilter = ref('')
 const handoffMode = ref(false)
 const savingHandoff = ref(false)
 
@@ -196,26 +235,79 @@ const testData = computed(() => {
     }
     if (!ann) return { ...base, completion_status: 'uncompleted' }
     const rec = ann.ratings[String(item.id)]
-    if (!rec) return { ...base, completion_status: 'uncompleted' }
-    return { ...base, ...(rec.results || {}), completion_status: rec.status || 'completed' }
+    if (!rec) return { ...base, completion_status: 'uncompleted', verdict: '' }
+    // The verdict is normalised server-side ('decision' vs 'evaluation'), so use
+    // that rather than re-deriving it from the results blob.
+    return {
+      ...base,
+      ...(rec.results || {}),
+      completion_status: rec.status || 'completed',
+      verdict: rec.verdict || '',
+    }
   })
 })
 
 const currentTest = computed(() => testData.value[currentIndex.value] || null)
 const doneCount = computed(() => testData.value.filter(t => t.completion_status === 'completed').length)
 
+const pendingCount = computed(() =>
+  testData.value.filter(t => t.completion_status !== 'completed' && t.completion_status !== 'skipped').length)
+
+const ITEM_FILTER_LABELS = {
+  completed: 'Completed', skipped: 'Skipped',
+  accept: 'Accepted', reject: 'Rejected', pending: 'Pending',
+}
+const itemFilterLabel = computed(() => ITEM_FILTER_LABELS[itemFilter.value] || '')
+
+function taskVerdict(task) {
+  return String(task.verdict || '').trim().toLowerCase()
+}
+
+function matchesItemFilter(task) {
+  switch (itemFilter.value) {
+    case 'accept':
+    case 'reject':
+      return taskVerdict(task) === itemFilter.value
+    case 'completed':
+      return task.completion_status === 'completed'
+    case 'skipped':
+      return task.completion_status === 'skipped'
+    case 'pending':
+      return task.completion_status !== 'completed' && task.completion_status !== 'skipped'
+    default:
+      return true
+  }
+}
+
 const filteredTasks = computed(() => {
   const term = search.value.trim().toLowerCase()
   return testData.value
     .map((task, originalIndex) => ({ ...task, originalIndex }))
     .filter(task => !term || String(task.id || '').toLowerCase().includes(term))
+    .filter(matchesItemFilter)
 })
+
+// Clicking the pill that is already on clears it, so one control both filters
+// and un-filters. Jump to the first surviving item so the pane matches the list.
+function setItemFilter(value) {
+  itemFilter.value = itemFilter.value === value ? '' : value
+  const first = filteredTasks.value[0]
+  if (first) currentIndex.value = first.originalIndex
+}
 
 function isDone(task) { return task.completion_status === 'completed' || task.completion_status === 'skipped' }
 
 function selectTab(i) {
   activeTab.value = i
-  // Jump to the first item this annotator actually worked on.
+  // With a filter on, land on the first item that survives it.
+  if (itemFilter.value) {
+    const first = filteredTasks.value[0]
+    if (first) {
+      currentIndex.value = first.originalIndex
+      return
+    }
+  }
+  // Otherwise: the first item this annotator actually worked on.
   const firstDone = testData.value.findIndex(t => t.completion_status === 'completed' || t.completion_status === 'skipped')
   currentIndex.value = firstDone !== -1 ? firstDone : 0
 }
@@ -291,6 +383,9 @@ onMounted(async () => {
 .stat-pill { display: inline-flex; flex-direction: column; align-items: center; background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 3px 12px; min-width: 78px; }
 .stat-pill .lbl { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; font-weight: 700; }
 .stat-pill .val { font-size: 1.05rem; font-weight: 800; }
+button.stat-pill { font: inherit; cursor: pointer; transition: all 0.15s ease; }
+button.stat-pill:hover { border-color: #cbd5e1; background: #f8fafc; }
+.pill-active { border-color: #d8661b !important; background: #fceee3 !important; box-shadow: 0 0 0 2px rgba(216, 102, 27, 0.12); }
 .text-purple { color: #7e22ce !important; }
 .bg-purple-subtle { background-color: #faf5ff !important; }
 .cursor-pointer { cursor: pointer; }

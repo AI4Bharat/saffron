@@ -53,9 +53,12 @@ def update_status():
         # 2. Scanning database for conversation-editable tests
         db_tests = []
         with app.app_context():
-            tests = Test.query.filter(Test.test_type == "conversation-editable").all()
-            for test in tests:
-                desc = test.description or ""
+            # id/description/item_count only -- selecting whole Test rows drags every
+            # json_entry (~240 MB of JSON) across the wire just to count list items.
+            tests = (db.session.query(Test.id, Test.description, Test.item_count)
+                     .filter(Test.test_type == "conversation-editable").all())
+            for test_id, test_desc, test_items in tests:
+                desc = test_desc or ""
                 parts = [p.strip() for p in desc.split(" - ")]
                 lang = parts[1].lower() if len(parts) > 1 else ""
                 persona = parts[2].lower().replace(" ", "_") if len(parts) > 2 else ""
@@ -73,14 +76,14 @@ def update_status():
                     version = "version_1"
                     
                 db_tests.append({
-                    "id": test.id,
+                    "id": test_id,
                     "description": desc,
                     "language": lang,
                     "persona": persona,
                     "grade": grade,
                     "version": version,
                     "batch_info": batch_info,
-                    "total_tasks": len(test.json_entry) if test.json_entry else 0
+                    "total_tasks": test_items or 0
                 })
 
         # 3. Scanning exports directory

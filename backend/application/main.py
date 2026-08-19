@@ -60,7 +60,14 @@ def create_app():
             'pool_recycle': 1800,
             'pool_size': 2,
             'max_overflow': 3,
-            'connect_args': {'connect_timeout': 10},
+            # During the migration step only, cap how long an ALTER will sit in the
+            # lock queue. A blocked ALTER makes every later query on that table
+            # queue behind it, so failing fast is far cheaper than waiting.
+            'connect_args': (
+                {'connect_timeout': 10, 'options': '-c lock_timeout=5s'}
+                if os.getenv('SAFFRON_RUN_BOOT_MIGRATIONS') == '1'
+                else {'connect_timeout': 10}
+            ),
         }
     app.app_context().push()
 
@@ -75,7 +82,13 @@ app = create_app()
 # Workers must NOT repeat it: on PostgreSQL every ALTER TABLE takes an ACCESS
 # EXCLUSIVE lock, and a recycling worker re-running these would stall the whole
 # app behind that lock queue every few hundred requests.
-_RUN_BOOT_MIGRATIONS = os.getenv('SAFFRON_SKIP_BOOT_MIGRATIONS') != '1'
+# Opt-in, not opt-out: start_saffron.sh sets SAFFRON_RUN_BOOT_MIGRATIONS=1 for its
+# one-shot migration step, and nothing else does. Any other importer -- gunicorn
+# workers, exporters, loaders, an ad-hoc `python -c "import main"` -- gets the app
+# without touching the schema. (SAFFRON_SKIP_BOOT_MIGRATIONS=1 still forces off,
+# so existing callers that set it keep working.)
+_RUN_BOOT_MIGRATIONS = (os.getenv('SAFFRON_RUN_BOOT_MIGRATIONS') == '1'
+                        and os.getenv('SAFFRON_SKIP_BOOT_MIGRATIONS') != '1')
 
 with app.app_context():
   if _RUN_BOOT_MIGRATIONS:

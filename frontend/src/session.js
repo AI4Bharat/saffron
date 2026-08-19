@@ -38,6 +38,18 @@ export async function api(path, options = {}) {
   let data = null
   try { data = await res.json() } catch { /* empty body */ }
   if (!res.ok) {
+    // An expired or missing token is not a page failure. Without this, every
+    // caller renders its own red "failed to load" box and the only offered action
+    // (Try Again) reuses the same dead token. /login is exempt: a 401 there means
+    // wrong credentials, and that form shows the message itself.
+    if (res.status === 401 && !path.startsWith('/login')) {
+      localStorage.removeItem('authToken')
+      sessionStorage.removeItem('authToken')
+      session.loaded = false
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.assign('/login')
+      }
+    }
     const err = new Error((data && (data.message || data.error)) || `Request failed (${res.status})`)
     err.status = res.status
     err.data = data

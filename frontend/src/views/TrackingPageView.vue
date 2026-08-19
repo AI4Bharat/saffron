@@ -824,9 +824,28 @@
 
               <!-- Full picture: what gets paid, what does not, and what is still open. -->
               <div v-if="raterActivity" class="ms-auto d-flex align-items-center gap-3 stat-strip">
-                <div class="stat" title="Unique items with status 'completed' — this is the number payment is based on">
-                  <div class="stat-val text-success">{{ formatNum(raterActivity.totals.completed_tasks) }}</div>
-                  <div class="stat-lbl">payable</div>
+                <!-- QC verdict filter: narrows every count in this tab to the
+                     clips the annotator accepted / rejected. -->
+                <div class="btn-group btn-group-sm" role="group" aria-label="Filter by QC verdict">
+                  <button v-for="v in verdictOptions" :key="v.key" type="button" class="btn"
+                          :class="activityVerdict === v.key ? 'btn-primary' : 'btn-outline-secondary'"
+                          :title="v.hint" @click="activityVerdict = v.key">{{ v.label }}</button>
+                </div>
+                <div class="stat" :title="activityCountHint">
+                  <div class="stat-val text-success">{{ formatNum(activityTotalCount) }}</div>
+                  <div class="stat-lbl">{{ activityCountLabel }}</div>
+                </div>
+                <div class="stat" title="Items marked ACCEPT. Only task types with an accept/reject step count here (audio-segmentation, conversation-editable, benchmark, conversation-evaluation) — correction tasks carry no verdict.">
+                  <div class="stat-val" :class="raterActivity.totals.accepted_tasks ? 'text-success' : 'text-muted'">
+                    {{ formatNum(raterActivity.totals.accepted_tasks || 0) }}
+                  </div>
+                  <div class="stat-lbl">accepted</div>
+                </div>
+                <div class="stat" title="Items marked REJECT. Only task types with an accept/reject step count here — correction tasks carry no verdict, so accepted + rejected is less than payable.">
+                  <div class="stat-val" :class="raterActivity.totals.rejected_tasks ? 'text-danger' : 'text-muted'">
+                    {{ formatNum(raterActivity.totals.rejected_tasks || 0) }}
+                  </div>
+                  <div class="stat-lbl">rejected</div>
                 </div>
                 <div class="stat" title="Items the annotator opened and skipped — not paid">
                   <div class="stat-val" :class="raterActivity.totals.skipped_tasks ? 'text-warning' : 'text-muted'">
@@ -863,8 +882,8 @@
               <span v-for="t in activityTaskTypes" :key="t.key" class="type-chip"
                     :title="t.label + ': ' + t.completed_tasks + ' payable · ' + t.skipped_tasks
                             + ' skipped · ' + t.draft_tasks + ' drafts · ' + t.submissions + ' submissions'">
-                {{ t.label }}<b>{{ formatNum(t.completed_tasks) }}</b><span
-                  v-if="t.skipped_tasks || t.draft_tasks" class="chip-extra">
+                {{ t.label }}<b>{{ formatNum(typeCount(t)) }}</b><span
+                  v-if="!activityVerdict && (t.skipped_tasks || t.draft_tasks)" class="chip-extra">
                   +{{ formatNum(t.skipped_tasks + t.draft_tasks) }}</span>
               </span>
               <button class="btn btn-sm btn-link text-decoration-none p-0 ms-auto text-xs"
@@ -883,7 +902,8 @@
                   <th class="sortable-th" style="width: 210px;" @click="sortRaters('assigned')">Assigned <i :class="['bi', sortIcon(raterSort, 'assigned')]"></i></th>
                   <th class="sortable-th" style="width: 175px;" @click="sortRaters('lastactive')">Status <i :class="['bi', sortIcon(raterSort, 'lastactive')]"></i></th>
                   <th class="sortable-th text-end" style="width: 240px;" @click="sortRaters('completed')">
-                    <span v-if="raterActivity && hasPeriod">In period / All</span><span v-else>Tasks done</span>
+                    <span v-if="activityVerdict">{{ activityCountLabel }}<span v-if="hasPeriod"> in period</span></span>
+                    <span v-else-if="raterActivity && hasPeriod">In period / All</span><span v-else>Tasks done</span>
                     <i :class="['bi', sortIcon(raterSort, 'completed')]"></i>
                   </th>
                   <th class="text-end pe-3" style="width: 130px;">Actions</th>
@@ -942,11 +962,24 @@
                   <td class="text-end tasks-cell">
                     <template v-if="raterActivity">
                       <div class="d-flex align-items-baseline justify-content-end gap-1">
-                        <span class="tasks-num" :title="hasPeriod ? 'Payable tasks completed in the selected period' : 'All-time payable tasks completed'">
-                          {{ formatNum(periodFor(rater.id) ? periodFor(rater.id).completed_tasks : 0) }}
+                        <span class="tasks-num" :title="activityCountHint">
+                          {{ formatNum(periodCount(rater.id)) }}
                         </span>
-                        <span v-if="hasPeriod" class="text-muted text-xs" title="All-time tasks completed">
+                        <span v-if="hasPeriod && !activityVerdict" class="text-muted text-xs" title="All-time tasks completed">
                           / {{ formatNum(rater.completed_tasks_count) }}
+                        </span>
+                      </div>
+                      <!-- The QC split, so the verdict numbers are visible without
+                           switching the filter. -->
+                      <div v-if="!activityVerdict && periodFor(rater.id) && (periodFor(rater.id).accepted_tasks || periodFor(rater.id).rejected_tasks)"
+                           class="d-flex gap-1 justify-content-end mt-1">
+                        <span v-if="periodFor(rater.id).accepted_tasks" class="stat-pill ok"
+                              :title="periodFor(rater.id).accepted_tasks + ' items accepted'">
+                          {{ formatNum(periodFor(rater.id).accepted_tasks) }} acc
+                        </span>
+                        <span v-if="periodFor(rater.id).rejected_tasks" class="stat-pill bad"
+                              :title="periodFor(rater.id).rejected_tasks + ' items rejected'">
+                          {{ formatNum(periodFor(rater.id).rejected_tasks) }} rej
                         </span>
                       </div>
                       <!-- Non-payable work, shown only when there is any, so the row -->
@@ -1046,6 +1079,8 @@
                             <th style="width: 100px;">Language</th>
                             <th>Description</th>
                             <th class="text-end" style="width: 150px;">Payable</th>
+                            <th class="text-end" style="width: 70px;" title="Items accepted in this batch">Acc</th>
+                            <th class="text-end" style="width: 70px;" title="Items rejected in this batch">Rej</th>
                             <th class="text-end" style="width: 70px;" title="Skipped — not paid">Skip</th>
                             <th class="text-end" style="width: 70px;" title="Saved drafts — not yet payable">Draft</th>
                             <th class="text-end" style="width: 70px;" title="All rating rows = payable + skipped + drafts">Subs</th>
@@ -1069,6 +1104,8 @@
                                 </div>
                               </div>
                             </td>
+                            <td class="text-end" :class="b.accepted ? 'text-success fw-semibold' : 'text-muted'">{{ b.accepted || 0 }}</td>
+                            <td class="text-end" :class="b.rejected ? 'text-danger fw-semibold' : 'text-muted'">{{ b.rejected || 0 }}</td>
                             <td class="text-end" :class="b.skipped ? 'text-warning fw-semibold' : 'text-muted'">{{ b.skipped }}</td>
                             <td class="text-end" :class="b.drafts ? 'text-primary fw-semibold' : 'text-muted'">{{ b.drafts }}</td>
                             <td class="text-end text-muted">{{ b.submissions }}</td>
@@ -1094,22 +1131,47 @@
 
       <!-- QUALITY TAB -->
       <div v-if="activeTab === 'quality'">
+        <!-- Tab-wide filters: QC, hours, retired clips and every export below
+             are all computed from whatever is selected here. Nothing selected =
+             the holistic view across every language and artist. -->
+        <div class="bg-white p-3 rounded shadow-sm border mb-3 quality-filter-bar">
+          <div class="d-flex flex-wrap align-items-center gap-2">
+            <span class="fw-bold text-secondary text-xs text-uppercase">
+              <i class="bi bi-funnel-fill me-1"></i>Filters
+            </span>
+            <div class="d-flex align-items-center gap-1">
+              <i class="bi bi-translate text-muted"></i>
+              <select v-model="qualityLanguage" class="form-select form-select-sm w-auto">
+                <option value="">All languages</option>
+                <option v-for="l in qualityLanguageOptions" :key="l" :value="l">{{ l }}</option>
+              </select>
+            </div>
+            <div class="d-flex align-items-center gap-1">
+              <i class="bi bi-mic text-muted"></i>
+              <select v-model="qualityArtist" class="form-select form-select-sm w-auto">
+                <option value="">All voice artists</option>
+                <option v-for="a in qualityArtistOptions" :key="a" :value="a">{{ a }}</option>
+              </select>
+            </div>
+            <button v-if="qualityFiltered" class="btn btn-outline-secondary btn-sm"
+                    @click="clearQualityFilters">
+              <i class="bi bi-x-lg me-1"></i>Clear
+            </button>
+            <span class="text-muted text-xs ms-auto text-end">
+              Every number on this tab &mdash; QC, hours and exports &mdash; covers
+              <strong class="text-dark">{{ qualityScopeLabel }}</strong>.
+            </span>
+          </div>
+        </div>
+
         <!-- Voice-artist QC: rejection rate per artist + reason breakdown (vendor-shareable) -->
         <div class="bg-white p-4 rounded shadow-sm border mb-4">
           <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
             <div>
               <h3 class="fw-bold text-dark m-0 fs-5"><i class="bi bi-mic text-primary me-2"></i>Voice Artist QC</h3>
-              <div class="text-muted text-xs">Audio-segmentation rejection rate per artist, what is still pending review, and why clips were rejected.</div>
+              <div class="text-muted text-xs">Audio-segmentation rejection rate per artist, how many hours of their audio is done, what is still pending review, and why clips were rejected.</div>
             </div>
             <div class="d-flex flex-wrap gap-2 align-items-center">
-              <!-- Language filter: narrows every number and every export below. -->
-              <div class="d-flex align-items-center gap-1">
-                <i class="bi bi-translate text-muted"></i>
-                <select v-model="qualityLanguage" class="form-select form-select-sm w-auto">
-                  <option value="">All languages</option>
-                  <option v-for="l in qualityLanguageOptions" :key="l" :value="l">{{ l }}</option>
-                </select>
-              </div>
               <button class="btn btn-outline-success btn-sm" @click="downloadArtistReport">
                 <i class="bi bi-file-earmark-spreadsheet me-1"></i>Export for vendor (CSV)
               </button>
@@ -1154,19 +1216,23 @@
           </div>
 
           <div v-if="!artistStats.artists || !artistStats.artists.length" class="text-muted text-center py-3">
-            {{ qualityLanguage ? 'No audio-segmentation batches for ' + qualityLanguage + '.' : 'No audio-segmentation submissions yet.' }}
+            {{ qualityFiltered ? 'No audio-segmentation batches for ' + qualityScopeLabel + '.' : 'No audio-segmentation submissions yet.' }}
           </div>
 
           <div v-else class="row g-4">
             <!-- per artist -->
-            <div class="col-12 col-lg-6">
-              <h6 class="fw-bold text-secondary text-xs text-uppercase mb-2">Rejection rate per artist</h6>
+            <div class="col-12 col-xl-7">
+              <h6 class="fw-bold text-secondary text-xs text-uppercase mb-2">
+                Rejection rate per artist
+                <span class="text-muted fw-normal text-lowercase">&mdash; hours = audio QC&rsquo;d of what they recorded, split by verdict under each count</span>
+              </h6>
               <div class="table-responsive">
                 <table class="table table-sm align-middle mb-0">
                   <thead class="table-light">
                     <tr>
                       <th class="text-xs">Artist</th>
                       <th class="text-xs text-end">Clips</th>
+                      <th class="text-xs text-end">Hours</th>
                       <th class="text-xs text-end">Reviewed</th>
                       <th class="text-xs text-end">Accepted</th>
                       <th class="text-xs text-end">Rejected</th>
@@ -1182,9 +1248,24 @@
                         <span class="text-muted">({{ a.batch_count }} batch{{ a.batch_count === 1 ? '' : 'es' }})</span>
                       </td>
                       <td class="text-end text-xs text-muted">{{ a.clips }}</td>
+                      <td class="text-end text-xs"
+                          :title="artistHours(a.artist).pending_seconds
+                            ? artistHours(a.artist).pending_label + ' of audio still to review'
+                            : 'Every clip this artist recorded has been reviewed'">
+                        <span class="fw-semibold text-dark">{{ artistHours(a.artist).label }}</span>
+                        <div class="text-muted" style="font-size:0.7rem">of {{ artistHours(a.artist).total_label }}</div>
+                      </td>
                       <td class="text-end text-xs">{{ a.total }}</td>
-                      <td class="text-end text-xs text-success">{{ a.accepted }}</td>
-                      <td class="text-end text-xs text-danger">{{ a.rejected }}</td>
+                      <td class="text-end text-xs text-success">
+                        {{ a.accepted }}
+                        <div class="text-muted" style="font-size:0.7rem"
+                             :title="'Audio accepted: ' + artistHours(a.artist).accepted_label">{{ artistHours(a.artist).accepted_label }}</div>
+                      </td>
+                      <td class="text-end text-xs text-danger">
+                        {{ a.rejected }}
+                        <div class="text-muted" style="font-size:0.7rem"
+                             :title="'Audio rejected: ' + artistHours(a.artist).rejected_label">{{ artistHours(a.artist).rejected_label }}</div>
+                      </td>
                       <td class="text-end text-xs" :class="a.pending ? 'text-warning-emphasis fw-semibold' : 'text-muted'"
                           :title="a.pending + ' of ' + a.clips + ' clips still awaiting review'">
                         {{ a.pending }}
@@ -1194,9 +1275,19 @@
                     <tr class="border-top">
                       <td class="fw-bold text-xs">OVERALL</td>
                       <td class="text-end fw-bold text-xs text-muted">{{ artistStats.overall.clips }}</td>
+                      <td class="text-end fw-bold text-xs" :title="overallHours.pending_label + ' of audio still to review'">
+                        <span class="text-dark">{{ overallHours.label }}</span>
+                        <div class="text-muted fw-normal" style="font-size:0.7rem">of {{ overallHours.total_label }}</div>
+                      </td>
                       <td class="text-end fw-bold text-xs">{{ artistStats.overall.total }}</td>
-                      <td class="text-end fw-bold text-xs text-success">{{ artistStats.overall.accepted }}</td>
-                      <td class="text-end fw-bold text-xs text-danger">{{ artistStats.overall.rejected }}</td>
+                      <td class="text-end fw-bold text-xs text-success">
+                        {{ artistStats.overall.accepted }}
+                        <div class="text-muted fw-normal" style="font-size:0.7rem">{{ overallHours.accepted_label }}</div>
+                      </td>
+                      <td class="text-end fw-bold text-xs text-danger">
+                        {{ artistStats.overall.rejected }}
+                        <div class="text-muted fw-normal" style="font-size:0.7rem">{{ overallHours.rejected_label }}</div>
+                      </td>
                       <td class="text-end fw-bold text-xs text-warning-emphasis">{{ artistStats.overall.pending }}</td>
                       <td class="text-end fw-bold text-xs">{{ artistStats.overall.rejection_rate }}%</td>
                     </tr>
@@ -1206,13 +1297,10 @@
             </div>
 
             <!-- reason breakdown -->
-            <div class="col-12 col-lg-6">
+            <div class="col-12 col-xl-5">
               <div class="d-flex align-items-center gap-2 mb-2">
                 <h6 class="fw-bold text-secondary text-xs text-uppercase mb-0">Rejection reasons</h6>
-                <select v-model="artistReasonFilter" class="form-select form-select-sm w-auto ms-auto">
-                  <option value="">All artists</option>
-                  <option v-for="a in artistStats.artists" :key="a.artist" :value="a.artist">{{ a.artist }}</option>
-                </select>
+                <span class="text-muted text-xs ms-auto">{{ qualityScopeLabel }}</span>
               </div>
               <div v-if="!activeReasons.length" class="text-muted text-xs py-2">No rejections recorded.</div>
               <div v-for="r in activeReasons" :key="r.reason" class="mb-2">
@@ -1274,7 +1362,8 @@
                 <span class="badge rounded-pill bg-warning text-dark ms-1">{{ retiredClips.total }}</span>
               </h3>
               <div class="text-muted text-xs">
-                These clips were rejected with a reason that is no longer offered
+                <template v-if="qualityFiltered">For {{ qualityScopeLabel }}. </template>These
+                clips were rejected with a reason that is no longer offered
                 ({{ retiredClips.by_reason.map(r => r.label + ' × ' + r.count).join(', ') }}).
                 Open each one, uncheck the retired reason and pick a current one — the
                 row disappears once it is re-submitted.
@@ -1336,7 +1425,8 @@
             <div>
               <h3 class="fw-bold text-dark m-0 fs-5"><i class="bi bi-hourglass-split text-primary me-2"></i>Annotation Hours</h3>
               <div class="text-muted text-xs">
-                Audio reviewed per annotator on audio-segmentation batches — cumulative to date and day by day.
+                Audio reviewed per annotator on audio-segmentation batches — cumulative to date and day by day,
+                for <strong class="text-dark">{{ qualityScopeLabel }}</strong>.
                 Days are counted in {{ audioHours.timezone }}; skipped clips are excluded.
               </div>
             </div>
@@ -1359,7 +1449,7 @@
 
           <div v-if="!audioHours.annotators.length && !audioHours.by_artist.length"
                class="text-muted text-center py-3">
-            No audio-segmentation work recorded yet.
+            {{ qualityFiltered ? 'No audio-segmentation work recorded for ' + qualityScopeLabel + '.' : 'No audio-segmentation work recorded yet.' }}
           </div>
 
           <template v-else>
@@ -1434,6 +1524,8 @@
                         <th class="text-xs">Persona</th>
                         <th class="text-xs text-end">Total audio</th>
                         <th class="text-xs text-end">Hours completed</th>
+                        <th class="text-xs text-end" title="Audio the annotators accepted">Accepted</th>
+                        <th class="text-xs text-end" title="Audio the annotators rejected">Rejected</th>
                         <th class="text-xs text-end">Pending</th>
                         <th class="text-xs text-end">Today</th>
                         <th class="text-xs" style="width:18%">Progress</th>
@@ -1450,6 +1542,14 @@
                         <td class="text-xs text-secondary">{{ a.personas.join(', ') || '—' }}</td>
                         <td class="text-end text-xs text-muted">{{ a.total_label }}</td>
                         <td class="text-end text-xs fw-bold text-dark">{{ a.label }}</td>
+                        <td class="text-end text-xs text-success">
+                          {{ a.accepted_label }}
+                          <div class="text-muted" style="font-size:0.7rem">{{ a.accepted }} clips</div>
+                        </td>
+                        <td class="text-end text-xs text-danger">
+                          {{ a.rejected_label }}
+                          <div class="text-muted" style="font-size:0.7rem">{{ a.rejected }} clips</div>
+                        </td>
                         <td class="text-end text-xs" :class="a.pending_seconds ? 'text-warning-emphasis fw-semibold' : 'text-muted'">
                           {{ a.pending_seconds ? a.pending_label : '—' }}
                         </td>
@@ -1479,6 +1579,7 @@
                         <th class="text-xs">Persona</th>
                         <th class="text-xs text-end">Total</th>
                         <th class="text-xs text-end">Completed</th>
+                        <th class="text-xs text-end" title="Audio accepted / rejected">Acc / Rej</th>
                         <th class="text-xs" style="width:26%">Progress</th>
                       </tr>
                     </thead>
@@ -1492,6 +1593,11 @@
                         </td>
                         <td class="text-end text-xs text-muted">{{ p.total_label }}</td>
                         <td class="text-end text-xs fw-bold text-dark">{{ p.label }}</td>
+                        <td class="text-end text-xs text-nowrap">
+                          <span class="text-success">{{ p.accepted_label }}</span>
+                          <span class="text-muted"> / </span>
+                          <span class="text-danger">{{ p.rejected_label }}</span>
+                        </td>
                         <td>
                           <div class="progress" style="height:6px">
                             <div class="progress-bar bg-success" :style="{ width: p.progress + '%' }"></div>
@@ -1519,6 +1625,7 @@
                     <th class="text-xs">Annotator</th>
                     <th class="text-xs text-end">Clips</th>
                     <th class="text-xs text-end">Total audio</th>
+                    <th class="text-xs text-end" title="Audio they accepted / rejected">Acc / Rej</th>
                     <th class="text-xs text-end">Today</th>
                     <th class="text-xs text-end">Last 7 days</th>
                     <th class="text-xs text-end">Avg / active day</th>
@@ -1539,6 +1646,12 @@
                       </td>
                       <td class="text-end text-xs text-muted">{{ a.clips }}</td>
                       <td class="text-end text-xs fw-bold text-dark">{{ a.label }}</td>
+                      <td class="text-end text-xs text-nowrap"
+                          :title="a.accepted + ' clips accepted · ' + a.rejected + ' rejected'">
+                        <span class="text-success">{{ a.accepted_label }}</span>
+                        <span class="text-muted"> / </span>
+                        <span class="text-danger">{{ a.rejected_label }}</span>
+                      </td>
                       <td class="text-end text-xs" :class="a.today.seconds ? 'text-success fw-semibold' : 'text-muted'">
                         {{ a.today.seconds ? a.today.label : '—' }}
                       </td>
@@ -1564,7 +1677,7 @@
 
                     <!-- Per-day detail for one annotator -->
                     <tr v-if="expandedHours === a.rater_id">
-                      <td colspan="9" class="bg-light-subtle">
+                      <td colspan="10" class="bg-light-subtle">
                         <div class="p-2">
                           <div class="fw-bold text-secondary text-xs text-uppercase mb-2">
                             {{ a.name }} · daily audio ({{ hoursRange }} days)
@@ -1609,6 +1722,11 @@
                     <td class="fw-bold text-xs">OVERALL</td>
                     <td class="text-end fw-bold text-xs text-muted">{{ audioHours.totals.clips }}</td>
                     <td class="text-end fw-bold text-xs">{{ audioHours.totals.label }}</td>
+                    <td class="text-end fw-bold text-xs text-nowrap">
+                      <span class="text-success">{{ audioHours.totals.accepted_label }}</span>
+                      <span class="text-muted fw-normal"> / </span>
+                      <span class="text-danger">{{ audioHours.totals.rejected_label }}</span>
+                    </td>
                     <td class="text-end fw-bold text-xs">{{ audioHours.today.label }}</td>
                     <td class="text-end fw-bold text-xs">{{ audioHours.last_7_days.label }}</td>
                     <td colspan="4"></td>
@@ -2592,6 +2710,51 @@ function periodFor(raterId) {
 // Task types worked on in the period, busiest first — drives the summary chips.
 const activityTaskTypes = computed(() => raterActivity.value?.task_types || [])
 
+// ---- QC verdict filter. Audio-segmentation submissions carry an accept /
+// reject verdict; picking one narrows every count on this tab (strip, type
+// chips, per-annotator counts and which annotators are listed at all).
+const activityVerdict = ref('')          // '' | 'accepted' | 'rejected'
+const verdictOptions = [
+  { key: '', label: 'All', hint: 'Every completed task, whatever the verdict' },
+  { key: 'accepted', label: 'Accepted', hint: 'Only items this annotator accepted (task types with a verdict)' },
+  { key: 'rejected', label: 'Rejected', hint: 'Only items this annotator rejected (task types with a verdict)' },
+]
+
+const activityCountLabel = computed(() =>
+  activityVerdict.value === 'accepted' ? 'accepted'
+    : activityVerdict.value === 'rejected' ? 'rejected' : 'payable'
+)
+
+const activityCountHint = computed(() => {
+  const when = hasPeriod.value ? ' in the selected period' : ' (all time)'
+  if (activityVerdict.value === 'accepted') return 'Items marked ACCEPT' + when
+  if (activityVerdict.value === 'rejected') return 'Items marked REJECT' + when
+  return "Unique items with status 'completed'" + when + ' — what payment is based on'
+})
+
+const activityTotalCount = computed(() => {
+  const t = raterActivity.value?.totals || {}
+  if (activityVerdict.value === 'accepted') return t.accepted_tasks || 0
+  if (activityVerdict.value === 'rejected') return t.rejected_tasks || 0
+  return t.completed_tasks || 0
+})
+
+// One annotator's count under the current verdict filter.
+function periodCount(raterId) {
+  const p = periodFor(raterId)
+  if (!p) return 0
+  if (activityVerdict.value === 'accepted') return p.accepted_tasks || 0
+  if (activityVerdict.value === 'rejected') return p.rejected_tasks || 0
+  return p.completed_tasks || 0
+}
+
+// Same, for a task-type chip.
+function typeCount(t) {
+  if (activityVerdict.value === 'accepted') return t.accepted_tasks || 0
+  if (activityVerdict.value === 'rejected') return t.rejected_tasks || 0
+  return t.completed_tasks || 0
+}
+
 // 'Benchmark Evaluation V2' -> 'Bench. Eval. V2' so the per-row chips stay narrow.
 function shortTypeLabel(label) {
   return (label || '')
@@ -2600,13 +2763,17 @@ function shortTypeLabel(label) {
     .join(' ')
 }
 
-// One chip per task type this annotator actually touched in the period.
+// One chip per task type this annotator actually touched in the period,
+// counted under whichever verdict filter is on.
 function periodTypesFor(raterId) {
   const p = periodFor(raterId)
   if (!p || !p.by_type) return []
+  const source = activityVerdict.value === 'accepted' ? (p.accepted_by_type || {})
+    : activityVerdict.value === 'rejected' ? (p.rejected_by_type || {})
+      : p.by_type
   return activityTaskTypes.value
-    .filter(t => (p.by_type[t.key] || 0) > 0)
-    .map(t => ({ key: t.key, label: t.label, short: shortTypeLabel(t.label), count: p.by_type[t.key] }))
+    .filter(t => (source[t.key] || 0) > 0)
+    .map(t => ({ key: t.key, label: t.label, short: shortTypeLabel(t.label), count: source[t.key] }))
 }
 
 // ---- Date-window presets. `activePreset` highlights whichever one is in effect,
@@ -2739,9 +2906,22 @@ async function fetchRaterActivity() {
     activityLoading.value = false
   }
 }
-const artistReasonFilter = ref('')
-// Quality tab language filter — drives the tables, the stats and the CSV exports.
+// Quality tab filters — between them they drive every table, stat and CSV
+// export on the tab. Both empty = the holistic view.
 const qualityLanguage = ref('')
+const qualityArtist = ref('')
+
+const qualityFiltered = computed(() => !!(qualityLanguage.value || qualityArtist.value))
+
+const qualityScopeLabel = computed(() => {
+  const bits = [qualityLanguage.value, qualityArtist.value].filter(Boolean)
+  return bits.length ? bits.join(' · ') : 'all languages & artists'
+})
+
+function clearQualityFilters() {
+  qualityLanguage.value = ''
+  qualityArtist.value = ''
+}
 const exportTestType = ref('')   // '' = every task type (was: conversation-editable only)
 const exportVersion = ref('')
 const exportVersionOptions = ['2', '3', '4', '5', '6', 'new', 'base']
@@ -2754,6 +2934,7 @@ const rawArtistStats = computed(() => {
     overall: d.overall || {},
     languages: d.languages || [],
     all_languages: d.all_languages || [],
+    all_artists: d.all_artists || [],
   }
 })
 
@@ -2763,9 +2944,25 @@ const qualityLanguageOptions = computed(() => {
   return d.languages.map(l => l.language)
 })
 
-const languageStats = computed(() =>
-  [...rawArtistStats.value.languages].sort((a, b) => b.pending - a.pending || b.clips - a.clips)
-)
+const qualityArtistOptions = computed(() => {
+  const d = rawArtistStats.value
+  const names = qualityLanguage.value
+    ? d.artists.filter(a => (a.by_language || {})[qualityLanguage.value]).map(a => a.artist)
+    : (d.all_artists.length ? d.all_artists : d.artists.map(a => a.artist))
+  return [...new Set(names)].sort((a, b) => a.localeCompare(b))
+})
+
+// Languages of the whole project, or just the picked artist's.
+const languageStats = computed(() => {
+  const d = rawArtistStats.value
+  if (!qualityArtist.value) {
+    return [...d.languages].sort((a, b) => b.pending - a.pending || b.clips - a.clips)
+  }
+  const a = d.artists.find(x => x.artist === qualityArtist.value)
+  return Object.entries((a && a.by_language) || {})
+    .map(([language, b]) => ({ ...b, language }))
+    .sort((x, y) => y.pending - x.pending || y.clips - x.clips)
+})
 
 const EMPTY_BUCKET = {
   clips: 0, total: 0, accepted: 0, rejected: 0, pending: 0, batch_count: 0,
@@ -2797,19 +2994,28 @@ function rollUp(buckets) {
   return out
 }
 
-// Artist rollups narrowed to the selected language (all languages when unset).
+// Artist rollups narrowed to the selected language and/or artist (everything
+// when neither is set).
 const artistStats = computed(() => {
   const d = rawArtistStats.value
-  if (!qualityLanguage.value) return { artists: d.artists, overall: d.overall }
-  const artists = []
-  for (const a of d.artists) {
-    const b = (a.by_language || {})[qualityLanguage.value]
-    if (!b) continue
-    artists.push({ ...rollUp([b]), artist: a.artist })
+  let artists = d.artists
+  if (qualityLanguage.value) {
+    artists = []
+    for (const a of d.artists) {
+      const b = (a.by_language || {})[qualityLanguage.value]
+      if (!b) continue
+      artists.push({ ...rollUp([b]), artist: a.artist, by_language: { [qualityLanguage.value]: b } })
+    }
   }
-  artists.sort((x, y) => y.rejection_rate - x.rejection_rate)
-  const lang = d.languages.find(l => l.language === qualityLanguage.value)
-  return { artists, overall: lang || rollUp(artists) }
+  if (qualityArtist.value) artists = artists.filter(a => a.artist === qualityArtist.value)
+  artists = [...artists].sort((x, y) => y.rejection_rate - x.rejection_rate)
+
+  if (!qualityLanguage.value && !qualityArtist.value) return { artists, overall: d.overall }
+  if (qualityLanguage.value && !qualityArtist.value) {
+    const lang = d.languages.find(l => l.language === qualityLanguage.value)
+    return { artists, overall: lang || rollUp(artists) }
+  }
+  return { artists, overall: rollUp(artists) }
 })
 
 // ---------------------------------------------------------------------------
@@ -2818,7 +3024,7 @@ const EMPTY_AUDIO_HOURS = {
   timezone: 'IST (UTC+5:30)', today_date: '', annotators: [], daily_series: [],
   totals: EMPTY_HOURS_BUCKET, today: EMPTY_HOURS_BUCKET,
   last_7_days: EMPTY_HOURS_BUCKET, active_today: 0,
-  by_artist: [], by_persona: [],
+  by_artist: [], by_persona: [], by_batch: [], facts: [],
 }
 
 const hoursRanges = [{ days: 7, label: '7d' }, { days: 14, label: '14d' }, { days: 30, label: '30d' }]
@@ -2830,7 +3036,23 @@ const retiredCopied = ref(false)
 const retiredClips = computed(() => {
   const d = dashboardData.value?.retired_reason_clips
   if (!d || !Array.isArray(d.clips)) return { clips: [], total: 0, by_reason: [] }
-  return d
+  if (!qualityFiltered.value) return d
+  const clips = d.clips.filter(
+    c => (!qualityLanguage.value || c.language === qualityLanguage.value) &&
+         (!qualityArtist.value || c.artist === qualityArtist.value)
+  )
+  const counts = {}
+  for (const c of clips) {
+    for (const slug of c.retired_reasons || []) counts[slug] = (counts[slug] || 0) + 1
+  }
+  const by_reason = Object.entries(counts)
+    .map(([reason, count]) => ({
+      reason,
+      label: reason.replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase()),
+      count,
+    }))
+    .sort((a, b) => b.count - a.count)
+  return { clips, total: clips.length, by_reason }
 })
 
 // Plain-text list the admin can paste into a message to the annotator.
@@ -2850,10 +3072,279 @@ async function copyRetiredList() {
   setTimeout(() => { retiredCopied.value = false }, 2000)
 }
 
-const audioHours = computed(() => {
+// Raw payload: `by_batch` carries the denominators (all audio an artist
+// recorded) and `facts` one row per annotator × batch × IST day. Every hours
+// number on the tab is rolled up from those two, so the filters move them all.
+const audioHoursAll = computed(() => {
   const d = dashboardData.value?.audio_hours
   if (!d || !Array.isArray(d.annotators)) return EMPTY_AUDIO_HOURS
   return { ...EMPTY_AUDIO_HOURS, ...d }
+})
+
+function hms(seconds) {
+  const s = Math.round(seconds || 0)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  if (h) return `${h}h ${m}m`
+  if (m) return `${m}m ${s % 60}s`
+  return `${s}s`
+}
+
+function hoursBucket(clips, seconds, skipped) {
+  return {
+    clips: clips || 0,
+    skipped: skipped || 0,
+    seconds: Math.round((seconds || 0) * 10) / 10,
+    hours: Math.round((seconds || 0) / 36) / 100,
+    label: hms(seconds),
+  }
+}
+
+// Audio behind the accept / reject verdicts, counted per submission exactly like
+// the verdict counts themselves.
+function verdictHours(acceptedSeconds, rejectedSeconds) {
+  return {
+    accepted_seconds: Math.round((acceptedSeconds || 0) * 10) / 10,
+    accepted_hours: Math.round((acceptedSeconds || 0) / 36) / 100,
+    accepted_label: hms(acceptedSeconds),
+    rejected_seconds: Math.round((rejectedSeconds || 0) * 10) / 10,
+    rejected_hours: Math.round((rejectedSeconds || 0) / 36) / 100,
+    rejected_label: hms(rejectedSeconds),
+  }
+}
+
+// 'YYYY-MM-DD' minus n days. The dates are already IST calendar days, so this
+// is plain string arithmetic — no timezone conversion allowed to creep in.
+function shiftDay(iso, back) {
+  const [y, m, d] = (iso || '').split('-').map(Number)
+  if (!y) return iso
+  return new Date(Date.UTC(y, m - 1, d - back)).toISOString().slice(0, 10)
+}
+
+function denseSeries(daily, days, endDate) {
+  const out = []
+  for (let i = 0; i < days; i++) {
+    const date = shiftDay(endDate, i)
+    const b = daily[date] || {}
+    out.push({ ...hoursBucket(b.clips, b.seconds), date })
+  }
+  return out
+}
+
+// Batches that survive the filters, and the facts recorded against them.
+const hoursBatches = computed(() =>
+  (audioHoursAll.value.by_batch || []).filter(
+    b => (!qualityLanguage.value || b.language === qualityLanguage.value) &&
+         (!qualityArtist.value || b.artist === qualityArtist.value)
+  )
+)
+
+const hoursFacts = computed(() => {
+  const keep = new Set(hoursBatches.value.map(b => b.test_id))
+  return (audioHoursAll.value.facts || []).filter(f => keep.has(f.test_id))
+})
+
+// "Of the audio this artist (or persona) recorded, how much is QC'd" — same
+// shape the backend used to send, rebuilt for the current filter.
+function coverageRows(key, otherKey) {
+  const store = new Map()
+  for (const b of hoursBatches.value) {
+    const name = b[key] || 'Unknown'
+    let e = store.get(name)
+    if (!e) {
+      e = { batches: 0, total_clips: 0, total_seconds: 0, clips: 0, seconds: 0,
+            today_clips: 0, today_seconds: 0, accepted: 0, rejected: 0,
+            accepted_seconds: 0, rejected_seconds: 0,
+            others: new Set(), languages: new Set(), test_ids: [] }
+      store.set(name, e)
+    }
+    e.batches += 1
+    e.total_clips += b.total_clips
+    e.total_seconds += b.total_seconds
+    e.clips += b.clips
+    e.seconds += b.seconds
+    e.today_clips += b.today_clips
+    e.today_seconds += b.today_seconds
+    e.accepted += b.accepted
+    e.rejected += b.rejected
+    e.accepted_seconds += b.accepted_seconds || 0
+    e.rejected_seconds += b.rejected_seconds || 0
+    e.others.add(b[otherKey])
+    e.languages.add(b.language)
+    e.test_ids.push(b.test_id)
+  }
+  const rows = []
+  for (const [name, e] of store) {
+    const pending = Math.max(0, e.total_seconds - e.seconds)
+    const reviewed = e.accepted + e.rejected
+    rows.push({
+      [key]: name,
+      [otherKey === 'persona' ? 'personas' : 'artists']: [...e.others].filter(Boolean).sort(),
+      languages: [...e.languages].filter(Boolean).sort(),
+      batches: e.batches,
+      total_clips: e.total_clips,
+      total_seconds: Math.round(e.total_seconds * 10) / 10,
+      total_label: hms(e.total_seconds),
+      clips: e.clips,
+      seconds: Math.round(e.seconds * 10) / 10,
+      hours: Math.round(e.seconds / 36) / 100,
+      label: hms(e.seconds),
+      pending_clips: Math.max(0, e.total_clips - e.clips),
+      pending_seconds: Math.round(pending * 10) / 10,
+      pending_label: hms(pending),
+      today_clips: e.today_clips,
+      today_seconds: Math.round(e.today_seconds * 10) / 10,
+      today_label: hms(e.today_seconds),
+      accepted: e.accepted,
+      rejected: e.rejected,
+      ...verdictHours(e.accepted_seconds, e.rejected_seconds),
+      rejection_rate: reviewed ? Math.round((1000 * e.rejected) / reviewed) / 10 : 0,
+      progress: e.total_seconds ? Math.round((1000 * e.seconds) / e.total_seconds) / 10 : 0,
+      test_ids: [...e.test_ids].sort((x, y) => x - y),
+    })
+  }
+  rows.sort((a, b) => b.total_seconds - a.total_seconds)
+  return rows
+}
+
+const audioHours = computed(() => {
+  const base = audioHoursAll.value
+  // Payload from before the facts existed: show it as-is rather than nothing.
+  if (!base.facts.length && !base.by_batch.length) return base
+
+  const today = base.today_date
+  const meta = new Map((base.annotators || []).map(a => [a.rater_id, a]))
+  const rows = new Map()
+  const allDaily = {}
+  const grand = { clips: 0, seconds: 0, skipped: 0, accepted_seconds: 0, rejected_seconds: 0 }
+
+  for (const f of hoursFacts.value) {
+    let r = rows.get(f.rater_id)
+    if (!r) {
+      r = { clips: 0, seconds: 0, skipped: 0, accepted: 0, rejected: 0,
+            accepted_seconds: 0, rejected_seconds: 0,
+            daily: {}, batches: new Set(), last: null }
+      rows.set(f.rater_id, r)
+    }
+    r.clips += f.clips
+    r.seconds += f.seconds
+    r.skipped += f.skipped
+    r.accepted += f.accepted
+    r.rejected += f.rejected
+    r.accepted_seconds += f.accepted_seconds || 0
+    r.rejected_seconds += f.rejected_seconds || 0
+    grand.accepted_seconds += f.accepted_seconds || 0
+    grand.rejected_seconds += f.rejected_seconds || 0
+    if (f.last && (!r.last || f.last > r.last)) r.last = f.last
+    if (f.clips) r.batches.add(f.test_id)
+    grand.clips += f.clips
+    grand.seconds += f.seconds
+    grand.skipped += f.skipped
+    if (!f.date || !f.clips) continue      // skips carry no hours
+    for (const map of [r.daily, allDaily]) {
+      const d = map[f.date] || (map[f.date] = { clips: 0, seconds: 0 })
+      d.clips += f.clips
+      d.seconds += f.seconds
+    }
+  }
+
+  const annotators = []
+  for (const [raterId, r] of rows) {
+    if (!r.clips && !r.skipped) continue
+    const info = meta.get(raterId) || {}
+    const series = denseSeries(r.daily, 30, today)
+    let weekClips = 0
+    let weekSecs = 0
+    for (const d of series.slice(0, 7)) { weekClips += d.clips; weekSecs += d.seconds }
+    const activeDays = Object.values(r.daily).filter(d => d.clips).length
+    const todayBucket = r.daily[today] || {}
+    annotators.push({
+      ...hoursBucket(r.clips, r.seconds, r.skipped),
+      rater_id: raterId,
+      name: info.name || `Rater ${raterId}`,
+      email: info.email || '',
+      is_active: info.is_active !== false,
+      batches: r.batches.size,
+      accepted: r.accepted,
+      rejected: r.rejected,
+      ...verdictHours(r.accepted_seconds, r.rejected_seconds),
+      today: hoursBucket(todayBucket.clips, todayBucket.seconds),
+      last_7_days: hoursBucket(weekClips, weekSecs),
+      active_days: activeDays,
+      avg_per_active_day: hoursBucket(
+        activeDays ? Math.round(r.clips / activeDays) : 0,
+        activeDays ? r.seconds / activeDays : 0
+      ),
+      daily_series: series,
+      last_activity: r.last,
+    })
+  }
+  annotators.sort((a, b) => b.seconds - a.seconds)
+
+  const allSeries = denseSeries(allDaily, 30, today)
+  let allWeekClips = 0
+  let allWeekSecs = 0
+  for (const d of allSeries.slice(0, 7)) { allWeekClips += d.clips; allWeekSecs += d.seconds }
+  const todayAll = allDaily[today] || {}
+
+  return {
+    ...base,
+    totals: {
+      ...hoursBucket(grand.clips, grand.seconds, grand.skipped),
+      ...verdictHours(grand.accepted_seconds, grand.rejected_seconds),
+    },
+    today: hoursBucket(todayAll.clips, todayAll.seconds),
+    last_7_days: hoursBucket(allWeekClips, allWeekSecs),
+    active_today: annotators.filter(a => a.today.clips).length,
+    annotators,
+    daily_series: allSeries,
+    by_artist: coverageRows('artist', 'persona'),
+    by_persona: coverageRows('persona', 'artist'),
+  }
+})
+
+// Hours per voice artist for the QC table: audio QC'd out of what they recorded.
+const artistHoursMap = computed(() => {
+  const m = {}
+  for (const b of hoursBatches.value) {
+    const e = m[b.artist] || (m[b.artist] = { total_seconds: 0, seconds: 0, pending_seconds: 0,
+                                             accepted_seconds: 0, rejected_seconds: 0 })
+    e.total_seconds += b.total_seconds
+    e.seconds += b.seconds
+    e.accepted_seconds += b.accepted_seconds || 0
+    e.rejected_seconds += b.rejected_seconds || 0
+  }
+  for (const e of Object.values(m)) e.pending_seconds = Math.max(0, e.total_seconds - e.seconds)
+  return m
+})
+
+function hoursCell(e) {
+  const t = e || { total_seconds: 0, seconds: 0, pending_seconds: 0,
+                   accepted_seconds: 0, rejected_seconds: 0 }
+  return {
+    ...t,
+    hours: Math.round(t.seconds / 36) / 100,
+    label: hms(t.seconds),
+    total_label: hms(t.total_seconds),
+    pending_label: hms(t.pending_seconds),
+    ...verdictHours(t.accepted_seconds, t.rejected_seconds),
+  }
+}
+
+function artistHours(name) {
+  return hoursCell(artistHoursMap.value[name])
+}
+
+const overallHours = computed(() => {
+  const t = { total_seconds: 0, seconds: 0, accepted_seconds: 0, rejected_seconds: 0 }
+  for (const b of hoursBatches.value) {
+    t.total_seconds += b.total_seconds
+    t.seconds += b.seconds
+    t.accepted_seconds += b.accepted_seconds || 0
+    t.rejected_seconds += b.rejected_seconds || 0
+  }
+  t.pending_seconds = Math.max(0, t.total_seconds - t.seconds)
+  return hoursCell(t)
 })
 
 // The backend sends 30 dense days newest-first; slice to the picked range and flip
@@ -2911,22 +3402,19 @@ function longDay(iso) {
 }
 
 function downloadAudioHours() {
-  downloadCsv('/admin/export_audio_hours_csv?days=' + hoursRange.value,
-              'audio_hours_last_' + hoursRange.value + 'd.csv')
+  const qs = qualityParams({ days: String(hoursRange.value) }).toString()
+  downloadCsv('/admin/export_audio_hours_csv?' + qs,
+              'audio_hours_last_' + hoursRange.value + 'd' + qualitySuffix() + '.csv')
 }
 
-// Reasons for the selected artist, or the overall breakdown when none is picked.
-const activeReasons = computed(() => {
-  if (!artistReasonFilter.value) return artistStats.value.overall.reasons || []
-  const a = artistStats.value.artists.find(x => x.artist === artistReasonFilter.value)
-  return a ? a.reasons : []
-})
+// Reasons for whatever the filters currently select — `overall` is already the
+// rollup of exactly those clips.
+const activeReasons = computed(() => artistStats.value.overall.reasons || [])
 
-// A filtered-out artist must not leave a stale reason breakdown on screen.
+// Switching language must not leave an artist selected who has nothing in it.
 watch(qualityLanguage, () => {
-  if (artistReasonFilter.value &&
-      !artistStats.value.artists.some(a => a.artist === artistReasonFilter.value)) {
-    artistReasonFilter.value = ''
+  if (qualityArtist.value && !qualityArtistOptions.value.includes(qualityArtist.value)) {
+    qualityArtist.value = ''
   }
 })
 
@@ -3008,13 +3496,23 @@ function downloadTasksExport() {
 
 // Suffix the downloaded filename with the language so the vendor can tell the
 function qualitySuffix() {
-  return qualityLanguage.value ? '_' + qualityLanguage.value.replace(/[^A-Za-z0-9_-]/g, '') : ''
+  return [qualityLanguage.value, qualityArtist.value]
+    .filter(Boolean)
+    .map(v => '_' + v.replace(/[^A-Za-z0-9_-]/g, ''))
+    .join('')
+}
+
+// The tab's filters, as query params every Quality export understands.
+function qualityParams(extra) {
+  const params = new URLSearchParams(extra || {})
+  if (qualityLanguage.value) params.set('language', qualityLanguage.value)
+  if (qualityArtist.value) params.set('artist', qualityArtist.value)
+  return params
 }
 
 function downloadAudioClips(onlyRejected) {
-  const params = new URLSearchParams()
+  const params = qualityParams()
   if (onlyRejected) params.set('rejected_only', '1')
-  if (qualityLanguage.value) params.set('language', qualityLanguage.value)
   const qs = params.toString()
   // "All clips" also carries the not-yet-reviewed clips (evaluation = pending).
   const name = (onlyRejected ? 'audio_clips_rejected' : 'audio_clips_all') + qualitySuffix() + '.csv'
@@ -3022,8 +3520,9 @@ function downloadAudioClips(onlyRejected) {
 }
 
 function downloadArtistReport() {
-  const qs = qualityLanguage.value ? '?language=' + encodeURIComponent(qualityLanguage.value) : ''
-  downloadCsv('/admin/export_artist_report_csv' + qs, 'artist_rejection_report' + qualitySuffix() + '.csv')
+  const qs = qualityParams().toString()
+  downloadCsv('/admin/export_artist_report_csv' + (qs ? '?' + qs : ''),
+              'artist_rejection_report' + qualitySuffix() + '.csv')
 }
 
 function downloadAnnotatorsReport() {
@@ -4118,6 +4617,12 @@ const filteredRaters = computed(() => {
     list = list.filter(isStale)
   }
 
+  // A verdict filter is only a filter if it also drops annotators with none of
+  // that verdict in the window.
+  if (activityVerdict.value && raterActivity.value) {
+    list = list.filter(r => periodCount(r.id) > 0)
+  }
+
   if (raterSearchQuery.value) {
     const q = raterSearchQuery.value.toLowerCase()
     list = list.filter(r => r.name.toLowerCase().includes(q) || r.email.toLowerCase().includes(q))
@@ -5141,6 +5646,8 @@ onUnmounted(() => {
 }
 .stat-pill.warn { background: #fef3c7; color: #92400e; border-color: #fde68a; }
 .stat-pill.info { background: #dbeafe; color: #1e40af; border-color: #bfdbfe; }
+.stat-pill.ok   { background: #dcfce7; color: #166534; border-color: #bbf7d0; }
+.stat-pill.bad  { background: #fee2e2; color: #991b1b; border-color: #fecaca; }
 
 /** ---- Upload QC ---- */
 .qc-facts {

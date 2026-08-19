@@ -492,12 +492,27 @@ def pool_release(current_user):
     if ids:
         q = q.filter(PoolItem.id.in_([int(i) for i in ids]))
     n = 0
+    freed_items = []
     for it in q.all():
         it.status = 'available'
         it.claimed_by = None
         it.claimed_at = None
         it.pull_id = None
+        freed_items.append(it)
         n += 1
+
+    # The claim lives on the annotation row too. Freeing only pool_item left the
+    # row at 'claimed' for ever, so the annotator stayed at their open-items cap
+    # and could never pull again -- with nothing showing as held.
+    if freed_items:
+        PoolAnnotation.query.filter(
+            PoolAnnotation.item_id.in_([it.id for it in freed_items]),
+            PoolAnnotation.rater_id == rater.id,
+            PoolAnnotation.status == 'claimed').delete(synchronize_session=False)
+        db.session.flush()
+        for it in freed_items:
+            refresh_item_state(it, annotations_target(
+                team, PoolTask.query.get(it.task_id) if it.task_id else None))
     close_finished_pulls(rater.id)
     try:
         db.session.commit()

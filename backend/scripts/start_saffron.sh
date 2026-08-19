@@ -29,7 +29,7 @@ if [[ "${1:-}" == "run" ]]; then
     # SAFFRON_SKIP_BOOT_MIGRATIONS=1: on PostgreSQL the boot-time ALTER TABLEs
     # take ACCESS EXCLUSIVE locks, and recycling workers re-running them would
     # repeatedly stall every request behind that lock queue.
-    venv/bin/python3 -c "import main" >> "$LOG" 2>&1
+    SAFFRON_RUN_BOOT_MIGRATIONS=1 venv/bin/python3 -c "import main" >> "$LOG" 2>&1
     export SAFFRON_SKIP_BOOT_MIGRATIONS=1
     exec venv/bin/gunicorn \
         --workers "$WORKERS" --worker-class sync \

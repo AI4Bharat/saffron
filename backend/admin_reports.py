@@ -114,22 +114,28 @@ def _reasons_of(results_json):
     return []
 
 
-def artist_rejection_stats(tests, ratings_by_test, language=None):
-    """Per-artist QC rollup for audio-segmentation."""
+def artist_rejection_stats(tests, ratings_by_test, language=None, artist=None):
+    """Per-artist QC rollup for audio-segmentation, optionally narrowed to one
+    language and/or one voice artist (the Quality tab's two filters)."""
     want_lang = (language or "").strip().lower() or None
+    want_artist = (artist or "").strip().lower() or None
     per_artist = {}
     lang_seen = {}          # every language present, even when filtered out
+    artist_seen = {}        # every artist present, even when filtered out
 
     for test in tests:
         if test.test_type != "audio-segmentation":
             continue
         entries = test.json_entry if isinstance(test.json_entry, list) else []
         set_dir = _set_dir_of(entries)
-        artist = _recorder_for(set_dir)
+        artist_name = _recorder_for(set_dir)
         language_name = _batch_language(entries)
         persona = (entries[0].get("persona") if entries else None) or "Unknown"
         lang_seen[language_name.lower()] = language_name
+        artist_seen[artist_name.lower()] = artist_name
         if want_lang and language_name.lower() != want_lang:
+            continue
+        if want_artist and artist_name.lower() != want_artist:
             continue
 
         clips = len(entries)
@@ -157,7 +163,7 @@ def artist_rejection_stats(tests, ratings_by_test, language=None):
         if not clips and not b_total:
             continue
 
-        a = per_artist.setdefault(artist, {"artist": artist, "batches": [], "langs": {}})
+        a = per_artist.setdefault(artist_name, {"artist": artist_name, "batches": [], "langs": {}})
         bucket = a["langs"].setdefault(language_name, _empty_bucket())
         bucket["clips"] += clips
         bucket["total"] += b_total
@@ -213,9 +219,11 @@ def artist_rejection_stats(tests, ratings_by_test, language=None):
         "artists": artists,
         "overall": _finish_bucket(overall),
         "languages": languages,
-        # Every language on record, so a UI filter can offer them all.
+        # Every language / artist on record, so a UI filter can offer them all.
         "all_languages": sorted(lang_seen.values()),
+        "all_artists": sorted(artist_seen.values()),
         "language_filter": language or None,
+        "artist_filter": artist or None,
     }
 
 
@@ -334,8 +342,11 @@ def artist_report_csv(stats):
     """Vendor-shareable CSV: per-artist rates (incl."""
     buf = io.StringIO()
     w = csv.writer(buf)
-    if stats.get("language_filter"):
-        w.writerow([f"Language filter: {stats['language_filter']}"])
+    if stats.get("language_filter") or stats.get("artist_filter"):
+        if stats.get("language_filter"):
+            w.writerow([f"Language filter: {stats['language_filter']}"])
+        if stats.get("artist_filter"):
+            w.writerow([f"Voice artist filter: {stats['artist_filter']}"])
         w.writerow([])
     w.writerow(_ARTIST_HEADERS)
     for a in stats["artists"]:
@@ -381,9 +392,10 @@ def task_link(test_id, task_id):
 
 
 def audio_clips_rows(tests, ratings_by_test, only_rejected=True, language=None,
-                     include_pending=True):
+                     include_pending=True, artist=None):
     """One row per audio clip: who recorded it, the verdict, why, and a link that opens the clip in Saffron so the vendor can listen to it."""
     want_lang = (language or "").strip().lower() or None
+    want_artist = (artist or "").strip().lower() or None
     rows = []
     for test in tests:
         if test.test_type != "audio-segmentation":
@@ -391,9 +403,11 @@ def audio_clips_rows(tests, ratings_by_test, only_rejected=True, language=None,
         entries = test.json_entry if isinstance(test.json_entry, list) else []
         by_id = {str(it.get("id")): it for it in entries}
         set_dir = _set_dir_of(entries)
-        artist = _recorder_for(set_dir)
+        artist_name = _recorder_for(set_dir)
         language_name = _batch_language(entries)
         if want_lang and language_name.lower() != want_lang:
+            continue
+        if want_artist and artist_name.lower() != want_artist:
             continue
         persona = (entries[0].get("persona") if entries else None) or ""
         # excel set label, e.g. 'Set2' -- from the description tail
@@ -416,7 +430,7 @@ def audio_clips_rows(tests, ratings_by_test, only_rejected=True, language=None,
             item = by_id.get(task_id, {})
             reasons = [reason_label(x) for x in _reasons_of(rj)]
             rows.append({
-                "artist": artist,
+                "artist": artist_name,
                 "language": language_name,
                 "persona": persona,
                 "set": set_label,
@@ -439,7 +453,7 @@ def audio_clips_rows(tests, ratings_by_test, only_rejected=True, language=None,
             if task_id in reviewed_ids:
                 continue
             rows.append({
-                "artist": artist,
+                "artist": artist_name,
                 "language": language_name,
                 "persona": persona,
                 "set": set_label,
@@ -458,9 +472,9 @@ def audio_clips_rows(tests, ratings_by_test, only_rejected=True, language=None,
 
 
 def audio_clips_csv(tests, ratings_by_test, only_rejected=True, language=None,
-                    include_pending=True):
+                    include_pending=True, artist=None):
     rows = audio_clips_rows(tests, ratings_by_test, only_rejected, language=language,
-                            include_pending=include_pending)
+                            include_pending=include_pending, artist=artist)
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["Artist", "Language", "Persona", "Set", "Test ID", "Task ID", "Speaker",

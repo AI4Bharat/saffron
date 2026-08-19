@@ -812,13 +812,37 @@ def get_test(current_user, test_id):
 
 
 @app.teardown_request
-def _rollback_failed_session(exc=None):
-    # main.py keeps one app context pushed forever, so Flask-SQLAlchemy never removes the scoped session between requests.
+def _release_session(exc=None):
+    # main.py keeps one app context pushed forever, so Flask-SQLAlchemy never
+    # removes the scoped session between requests: without this, one Session and
+    # one connection stay bound to the worker for its entire life. Ending the
+    # session here does three things a bare rollback() did not:
+    #
+    #   1. Returns the connection to the pool instead of parking it "idle in
+    #      transaction". Those parked transactions are what let a single
+    #      ALTER TABLE queue behind them and stall every request (2026-08-18),
+    #      and what made an idle-transaction timeout unsafe to enable.
+    #   2. Discards a session whose connection died underneath it. A rollback()
+    #      on a dead connection raises, leaving the session wedged, and the
+    #      worker then answered PendingRollbackError for its next few hundred
+    #      requests until --max-requests recycled it.
+    #   3. Guarantees a failed view's half-written objects cannot survive into
+    #      the NEXT request on this worker and be flushed by its commit().
+    #
+    # This cannot lose a submission: every route commits what it means to keep
+    # before it returns (audited across views.py/pool_api.py/pool_common.py --
+    # the only writer without its own commit is release_pull_items(), whose
+    # caller commits immediately after). Anything still uncommitted at teardown
+    # is by definition work a failed request abandoned.
     try:
-        if exc is not None or not db.session.is_active:
-            db.session.rollback()
+        db.session.remove()
     except Exception:
-        pass
+        # Closing a dead connection can raise. Drop the thread's session anyway,
+        # so the next request builds a fresh one instead of inheriting the damage.
+        try:
+            db.session.registry.clear()
+        except Exception:
+            pass
 
 
 @app.route('/api/ratings', methods=['POST'])
@@ -1479,12 +1503,16 @@ def rater_activity(current_user):
         p = per.setdefault(r.rater_id, {'tasks': set(), 'skipped': set(), 'drafts': 0,
                                         'by_type': {}, 'type_subs': {}, 'type_skipped': {},
                                         'type_drafts': {}, 'by_test': {}, 'submissions': 0,
-                                        'secs': 0.0, 'last': None})
+                                        'secs': 0.0, 'last': None,
+                                        # QC verdicts (audio-segmentation), unique per item
+                                        'accepted': set(), 'rejected': set(),
+                                        'type_accepted': {}, 'type_rejected': {}})
         ttype = (meta_of_test.get(r.test_id) or (None, None))[0] or 'unknown'
         p['submissions'] += 1
         p['type_subs'][ttype] = p['type_subs'].get(ttype, 0) + 1
         bt = p['by_test'].setdefault(r.test_id, {'tasks': set(), 'skipped': set(), 'drafts': 0,
-                                                 'subs': 0, 'secs': 0.0, 'last': None})
+                                                 'subs': 0, 'secs': 0.0, 'last': None,
+                                                 'accepted': set(), 'rejected': set()})
         bt['subs'] += 1
         # Key on (test_id, item) — item ids restart at 1 in every batch, so a bare item id collapses genuinely different tasks into one.
         key = (r.test_id, str(r.page_no_progress)) if r.page_no_progress else None
@@ -1492,6 +1520,12 @@ def rater_activity(current_user):
             p['tasks'].add(key)
             p['by_type'].setdefault(ttype, set()).add(key)
             bt['tasks'].add(key)
+            _v = (r.verdict or '').strip().lower()
+            if _v in ('accept', 'reject'):
+                _bucket = 'accepted' if _v == 'accept' else 'rejected'
+                p[_bucket].add(key)
+                p['type_' + _bucket].setdefault(ttype, set()).add(key)
+                bt[_bucket].add(key)
         elif key and r.completion_status == 'skipped':
             p['skipped'].add(key)
             p['type_skipped'].setdefault(ttype, set()).add(key)
@@ -1534,7 +1568,11 @@ def rater_activity(current_user):
             # An item completed on one row and skipped on another is paid, not skipped.
             'skipped_tasks': len(p['skipped'] - p['tasks']),
             'draft_tasks': p['drafts'],
+            'accepted_tasks': len(p['accepted']),
+            'rejected_tasks': len(p['rejected']),
             'by_type': {k: len(v) for k, v in p['by_type'].items()},
+            'accepted_by_type': {k: len(v) for k, v in p['type_accepted'].items()},
+            'rejected_by_type': {k: len(v) for k, v in p['type_rejected'].items()},
             'submissions_by_type': dict(p['type_subs']),
             'skipped_by_type': {k: len(v - p['tasks']) for k, v in p['type_skipped'].items()},
             'drafts_by_type': dict(p['type_drafts']),
@@ -1548,6 +1586,8 @@ def rater_activity(current_user):
                     'description': (meta_of_test.get(tid) or (None, ''))[1] or '',
                     'language': admin_reports.test_language((meta_of_test.get(tid) or (None, ''))[1] or ''),
                     'tasks': len(bt['tasks']),
+                    'accepted': len(bt['accepted']),
+                    'rejected': len(bt['rejected']),
                     'skipped': len(bt['skipped'] - bt['tasks']),
                     'drafts': bt['drafts'],
                     'submissions': bt['subs'],
@@ -1566,7 +1606,12 @@ def rater_activity(current_user):
 
     totals_by_type, totals_subs_by_type = {}, {}
     totals_skipped_by_type, totals_drafts_by_type = {}, {}
+    totals_acc_by_type, totals_rej_by_type = {}, {}
     for r in rows:
+        for k, v in r['accepted_by_type'].items():
+            totals_acc_by_type[k] = totals_acc_by_type.get(k, 0) + v
+        for k, v in r['rejected_by_type'].items():
+            totals_rej_by_type[k] = totals_rej_by_type.get(k, 0) + v
         for k, v in r['by_type'].items():
             totals_by_type[k] = totals_by_type.get(k, 0) + v
         for k, v in r['submissions_by_type'].items():
@@ -1587,6 +1632,8 @@ def rater_activity(current_user):
         'task_types': [
             {'key': k, 'label': admin_reports.pretty_test_type(k),
              'completed_tasks': totals_by_type.get(k, 0),
+             'accepted_tasks': totals_acc_by_type.get(k, 0),
+             'rejected_tasks': totals_rej_by_type.get(k, 0),
              'skipped_tasks': totals_skipped_by_type.get(k, 0),
              'draft_tasks': totals_drafts_by_type.get(k, 0),
              'submissions': totals_subs_by_type.get(k, 0)}
@@ -1594,6 +1641,8 @@ def rater_activity(current_user):
         ],
         'totals': {
             'completed_tasks': sum(r['completed_tasks'] for r in rows),
+            'accepted_tasks': sum(r['accepted_tasks'] for r in rows),
+            'rejected_tasks': sum(r['rejected_tasks'] for r in rows),
             'skipped_tasks': sum(r['skipped_tasks'] for r in rows),
             'draft_tasks': sum(r['draft_tasks'] for r in rows),
             'submissions': sum(r['submissions'] for r in rows),
@@ -1788,6 +1837,7 @@ def export_audio_clips_csv(current_user):
     only_rejected = request.args.get('rejected_only') in ('1', 'true', 'yes')
     include_pending = request.args.get('include_pending', '1') not in ('0', 'false', 'no')
     language = request.args.get('language') or None
+    artist = request.args.get('artist') or None
     tests = Test.query.filter_by(test_type='audio-segmentation').all()
     seg_ids = [t.id for t in tests]
     ratings_by_test = {}
@@ -1795,11 +1845,13 @@ def export_audio_clips_csv(current_user):
         ratings_by_test.setdefault(r.test_id, []).append(r)
     csv_text = admin_reports.audio_clips_csv(
         tests, ratings_by_test, only_rejected=only_rejected,
-        language=language, include_pending=include_pending
+        language=language, include_pending=include_pending, artist=artist
     )
     name = 'audio_clips_rejected' if only_rejected else 'audio_clips_all'
     if language:
         name += '_' + re.sub(r'[^A-Za-z0-9_-]', '', language)
+    if artist:
+        name += '_' + re.sub(r'[^A-Za-z0-9_-]', '', artist)
     return Response('\ufeff' + csv_text, mimetype='text/csv; charset=utf-8',
                     headers={'Content-Disposition': f'attachment; filename={name}.csv'})
 
@@ -1815,15 +1867,19 @@ def export_artist_report_csv(current_user):
     from flask import Response
 
     language = request.args.get('language') or None
+    artist = request.args.get('artist') or None
     tests = Test.query.filter_by(test_type='audio-segmentation').all()
     seg_ids = [t.id for t in tests]
     ratings_by_test = {}
     for r in Rating.query.filter(Rating.test_id.in_(seg_ids)).all():
         ratings_by_test.setdefault(r.test_id, []).append(r)
-    stats = admin_reports.artist_rejection_stats(tests, ratings_by_test, language=language)
+    stats = admin_reports.artist_rejection_stats(tests, ratings_by_test,
+                                                 language=language, artist=artist)
     name = 'artist_rejection_report'
     if language:
         name += '_' + re.sub(r'[^A-Za-z0-9_-]', '', language)
+    if artist:
+        name += '_' + re.sub(r'[^A-Za-z0-9_-]', '', artist)
     return Response(
         '\ufeff' + admin_reports.artist_report_csv(stats), mimetype='text/csv; charset=utf-8',
         headers={'Content-Disposition': f'attachment; filename={name}.csv'}
@@ -1838,12 +1894,19 @@ def export_audio_hours_csv(current_user):
         return jsonify({'message': 'Unauthorized'}), 401
     import io
     import csv
+    import re
     from flask import Response
 
     try:
         days = max(1, min(int(request.args.get('days', 30)), 365))
     except (TypeError, ValueError):
         days = 30
+
+    # Same two filters the Quality tab applies, so an export matches the screen.
+    language = request.args.get('language') or None
+    artist_filter = request.args.get('artist') or None
+    want_lang = language.strip().lower() if language else None
+    want_artist = artist_filter.strip().lower() if artist_filter else None
 
     try:
         import admin_reports as _ar
@@ -1868,7 +1931,14 @@ def export_audio_hours_csv(current_user):
             set_dir = str(entries[0].get('audio_filename', '')).split('/')[0] if entries else ''
             artist = _ar._recorder_for(set_dir) if (_ar and set_dir) else 'Unknown'
             persona = (entries[0].get('persona') if entries else None) or 'Unknown'
+            batch_language = _ar._batch_language(entries) if _ar else 'Unknown'
+            if want_lang and batch_language.lower() != want_lang:
+                continue
+            if want_artist and artist.lower() != want_artist:
+                continue
             reviewed_ids = set()
+            acc_clips = rej_clips = 0
+            acc_secs = rej_secs = 0.0
             for r in ratings_by_test.get(test.id, []):
                 if not r.page_no_progress:
                     continue
@@ -1885,22 +1955,42 @@ def export_audio_hours_csv(current_user):
                 day['clips'] += 1
                 day['seconds'] += secs
                 reviewed_ids.add(str(r.page_no_progress))
+                # The verdict column is denormalised out of results_json on write.
+                if (r.verdict or '') == 'accept':
+                    acc_clips += 1
+                    acc_secs += secs
+                elif (r.verdict or '') == 'reject':
+                    rej_clips += 1
+                    rej_secs += secs
 
             rev_secs = sum(dur_by_task.get(t, 0.0) for t in reviewed_ids)
             tot_secs = sum(dur_by_task.values())
             for key, store in ((artist, per_artist), (persona, per_persona)):
                 b = store.setdefault(key, {'batches': 0, 'total_clips': 0,
                                            'total_seconds': 0.0, 'clips': 0,
-                                           'seconds': 0.0, 'tags': set()})
+                                           'seconds': 0.0, 'tags': set(),
+                                           'accepted': 0, 'rejected': 0,
+                                           'accepted_seconds': 0.0, 'rejected_seconds': 0.0})
                 b['batches'] += 1
                 b['total_clips'] += len(dur_by_task)
                 b['total_seconds'] += tot_secs
                 b['clips'] += len(reviewed_ids)
                 b['seconds'] += rev_secs
+                b['accepted'] += acc_clips
+                b['rejected'] += rej_clips
+                b['accepted_seconds'] += acc_secs
+                b['rejected_seconds'] += rej_secs
                 b['tags'].add(persona if store is per_artist else artist)
 
     out = io.StringIO()
     w = csv.writer(out)
+
+    if language or artist_filter:
+        if language:
+            w.writerow([f'Language filter: {language}'])
+        if artist_filter:
+            w.writerow([f'Voice artist filter: {artist_filter}'])
+        w.writerow([])
 
     # Sheet 1 — who did the reviewing, per day.
     w.writerow(['ANNOTATOR HOURS (who reviewed the audio)'])
@@ -1928,19 +2018,28 @@ def export_audio_hours_csv(current_user):
         w.writerow([title])
         w.writerow([label, tag_label, 'Batches', 'Total clips', 'Total audio',
                     'Clips reviewed', 'Audio reviewed', 'Hours reviewed',
+                    'Accepted clips', 'Accepted audio', 'Accepted hours',
+                    'Rejected clips', 'Rejected audio', 'Rejected hours',
                     'Audio pending', 'Progress %'])
         for name, b in sorted(store.items(), key=lambda kv: -kv[1]['total_seconds']):
             pending = max(0.0, b['total_seconds'] - b['seconds'])
             w.writerow([
                 name, ', '.join(sorted(x for x in b['tags'] if x)), b['batches'],
                 b['total_clips'], _hms(b['total_seconds']), b['clips'],
-                _hms(b['seconds']), round(b['seconds'] / 3600.0, 2), _hms(pending),
+                _hms(b['seconds']), round(b['seconds'] / 3600.0, 2),
+                b['accepted'], _hms(b['accepted_seconds']), round(b['accepted_seconds'] / 3600.0, 2),
+                b['rejected'], _hms(b['rejected_seconds']), round(b['rejected_seconds'] / 3600.0, 2),
+                _hms(pending),
                 round(100.0 * b['seconds'] / b['total_seconds'], 1) if b['total_seconds'] else 0.0,
             ])
 
+    fname = f'audio_hours_last_{days}d'
+    for _part in (language, artist_filter):
+        if _part:
+            fname += '_' + re.sub(r'[^A-Za-z0-9_-]', '', _part)
     return Response('\ufeff' + out.getvalue(), mimetype='text/csv; charset=utf-8',
                     headers={'Content-Disposition':
-                             f'attachment; filename=audio_hours_last_{days}d.csv'})
+                             f'attachment; filename={fname}.csv'})
 
 
 @app.route('/api/admin/export_annotators_csv', methods=['GET'])
@@ -2469,6 +2568,11 @@ def get_admin_dashboard(current_user):
         # Per voice-artist / per persona audio hours: of the audio THIS ARTIST recorded, how much has been QC'd.
         hours_by_artist = {}
         hours_by_persona = {}
+        # Filterable hours: one row per batch (the denominators) plus one fact per
+        # (annotator, batch, IST day). The Quality tab re-rolls these client-side so
+        # every number on the page follows its language / artist filter.
+        hours_by_batch = []
+        hours_facts = {}
         # Clips whose stored rejection reason is no longer offered in the UI (e.g.
         retired_clips = []
         try:
@@ -2508,12 +2612,20 @@ def get_admin_dashboard(current_user):
 
             seg_language = max(lang_counts, key=lang_counts.get) if lang_counts else "Unknown"
             seg_persona = max(persona_counts, key=persona_counts.get) if persona_counts else "Unknown"
+            # Voice artist of this batch. Resolved here (not after the ratings loop)
+            # because the retired-clip rows and the hours facts below both need it.
+            _set_dir = str(entries[0].get('audio_filename', '')).split('/')[0] if entries else ''
+            _artist = _ar._recorder_for(_set_dir) if (_ar and _set_dir) else 'Unknown'
 
             # Distinct completed task ids per rater for this test + accept/reject tallies read from each submission's results_json ("evaluation" field).
             done_by_rater = {}
             eval_by_rater = {}   # rater_id -> [accepted, rejected]
             seg_accepted = 0
             seg_rejected = 0
+            # Audio behind those verdicts. Counted per submission, exactly like
+            # the accept/reject tallies, so hours and counts always agree.
+            seg_accepted_secs = 0.0
+            seg_rejected_secs = 0.0
             # Clip ids REVIEWED at least once, deduped: two annotators reviewing the same clip must not make the artist look twice as far along.
             seg_reviewed_ids = set()
             seg_reviewed_today_ids = set()
@@ -2526,11 +2638,25 @@ def get_admin_dashboard(current_user):
                     'batches': set(), 'accepted': 0, 'rejected': 0,
                 })
                 _secs = dur_by_task.get(str(r.page_no_progress), 0.0)
+                _fd = _ist_date_str(r.time_of_submission)
+                _fact = hours_facts.setdefault((r.rater_id, test.id, _fd), {
+                    'rater_id': r.rater_id, 'test_id': test.id, 'date': _fd,
+                    'clips': 0, 'seconds': 0.0, 'skipped': 0,
+                    'accepted': 0, 'rejected': 0,
+                    'accepted_seconds': 0.0, 'rejected_seconds': 0.0, 'last': None,
+                })
                 if r.completion_status == 'skipped':
                     hb['total']['skipped'] += 1
+                    _fact['skipped'] += 1
                 else:
                     hb['total']['clips'] += 1
                     hb['total']['seconds'] += _secs
+                    _fact['clips'] += 1
+                    _fact['seconds'] += _secs
+                    # "last activity" counts reviews only, exactly as hb['last'] does
+                    if _fact['last'] is None or (
+                            r.time_of_submission and r.time_of_submission > _fact['last']):
+                        _fact['last'] = r.time_of_submission
                     hb['batches'].add(test.id)
                     _d = _ist_date_str(r.time_of_submission)
                     for _tgt in (hb['daily'].setdefault(_d, _hours_bucket()),
@@ -2549,12 +2675,18 @@ def get_admin_dashboard(current_user):
                 tally = eval_by_rater.setdefault(r.rater_id, [0, 0])
                 if ev == 'accept':
                     seg_accepted += 1
+                    seg_accepted_secs += _secs
                     tally[0] += 1
                     hb['accepted'] += 1
+                    _fact['accepted'] += 1
+                    _fact['accepted_seconds'] += _secs
                 elif ev == 'reject':
                     seg_rejected += 1
+                    seg_rejected_secs += _secs
                     tally[1] += 1
                     hb['rejected'] += 1
+                    _fact['rejected'] += 1
+                    _fact['rejected_seconds'] += _secs
                     # Flag a reason the UI no longer offers, so it can be re-done.
                     _retired = _ar.retired_reasons_of(rj) if _ar else []
                     if _retired:
@@ -2572,6 +2704,8 @@ def get_admin_dashboard(current_user):
                             'custom_reason': rj.get('custom_rejection_reason') or "",
                             'comments': rj.get('comments') or "",
                             'persona': seg_persona,
+                            'language': seg_language,
+                            'artist': _artist,
                             'submitted': r.time_of_submission.isoformat() if r.time_of_submission else None,
                             'link': f"{_SAFFRON_BASE_URL}/{test.id}?task={r.page_no_progress}",
                         })
@@ -2611,15 +2745,14 @@ def get_admin_dashboard(current_user):
             })
 
             # --- roll this batch into its voice artist + persona ---
-            _set_dir = str(entries[0].get('audio_filename', '')).split('/')[0] if entries else ''
-            _artist = _ar._recorder_for(_set_dir) if (_ar and _set_dir) else 'Unknown'
             _rev_secs = sum(dur_by_task.get(t, 0.0) for t in seg_reviewed_ids)
             _today_secs = sum(dur_by_task.get(t, 0.0) for t in seg_reviewed_today_ids)
             for _key, _store in ((_artist, hours_by_artist), (seg_persona, hours_by_persona)):
                 _b = _store.setdefault(_key, {
                     'batches': 0, 'total_clips': 0, 'total_seconds': 0.0,
                     'clips': 0, 'seconds': 0.0, 'today_clips': 0, 'today_seconds': 0.0,
-                    'accepted': 0, 'rejected': 0, 'personas': set(), 'artists': set(),
+                    'accepted': 0, 'rejected': 0, 'accepted_seconds': 0.0,
+                    'rejected_seconds': 0.0, 'personas': set(), 'artists': set(),
                     'languages': set(), 'test_ids': [],
                 })
                 _b['batches'] += 1
@@ -2631,10 +2764,31 @@ def get_admin_dashboard(current_user):
                 _b['today_seconds'] += _today_secs
                 _b['accepted'] += seg_accepted
                 _b['rejected'] += seg_rejected
+                _b['accepted_seconds'] += seg_accepted_secs
+                _b['rejected_seconds'] += seg_rejected_secs
                 _b['personas'].add(seg_persona)
                 _b['artists'].add(_artist)
                 _b['languages'].add(seg_language)
                 _b['test_ids'].append(test.id)
+
+            hours_by_batch.append({
+                'test_id': test.id,
+                'description': test.description or '',
+                'artist': _artist,
+                'persona': seg_persona,
+                'language': seg_language,
+                'total_clips': len(dur_by_task),
+                'total_seconds': round(total_secs, 1),
+                # reviewed = deduped across annotators, same as the coverage rows
+                'clips': len(seg_reviewed_ids),
+                'seconds': round(_rev_secs, 1),
+                'today_clips': len(seg_reviewed_today_ids),
+                'today_seconds': round(_today_secs, 1),
+                'accepted': seg_accepted,
+                'rejected': seg_rejected,
+                'accepted_seconds': round(seg_accepted_secs, 1),
+                'rejected_seconds': round(seg_rejected_secs, 1),
+            })
 
         audio_seg_data.sort(key=lambda x: x['test_id'])
 
@@ -2711,6 +2865,10 @@ def get_admin_dashboard(current_user):
                     'today_seconds': round(b['today_seconds'], 1),
                     'accepted': b['accepted'],
                     'rejected': b['rejected'],
+                    'accepted_seconds': round(b['accepted_seconds'], 1),
+                    'accepted_label': _hms(b['accepted_seconds']),
+                    'rejected_seconds': round(b['rejected_seconds'], 1),
+                    'rejected_label': _hms(b['rejected_seconds']),
                     'rejection_rate': round(
                         100.0 * b['rejected'] / (b['accepted'] + b['rejected']), 1
                     ) if (b['accepted'] + b['rejected']) else 0.0,
@@ -2733,6 +2891,17 @@ def get_admin_dashboard(current_user):
             'daily_series': _all_series,
             'by_artist': _coverage_rows(hours_by_artist, 'artist', 'personas'),
             'by_persona': _coverage_rows(hours_by_persona, 'persona', 'artists'),
+            'by_batch': sorted(hours_by_batch, key=lambda b: b['test_id']),
+            'facts': [
+                {'rater_id': f['rater_id'], 'test_id': f['test_id'], 'date': f['date'],
+                 'clips': f['clips'], 'skipped': f['skipped'],
+                 'seconds': round(f['seconds'], 1),
+                 'accepted': f['accepted'], 'rejected': f['rejected'],
+                 'accepted_seconds': round(f['accepted_seconds'], 1),
+                 'rejected_seconds': round(f['rejected_seconds'], 1),
+                 'last': f['last'].isoformat() if f['last'] else None}
+                for f in hours_facts.values()
+            ],
         }
 
         # Clips still carrying a rejection reason the UI has retired.
