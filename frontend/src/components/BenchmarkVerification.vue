@@ -314,6 +314,7 @@
 </template>
 
 <script setup>
+import { handledAuthFailure } from '@/session'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { API_BASE_URL } from '@/config'
 
@@ -508,6 +509,7 @@ async function handleSubmit() {
   isSubmitting.value = true
   try {
     const r = await post('completed')
+    if (handledAuthFailure(r)) return
     if (!r.ok) throw new Error('submit failed')
     emit('submit-status', { index: props.currentIndex, status: 'completed', results: buildResults() })
     emit('next')
@@ -521,6 +523,7 @@ async function handleSave() {
   isSaving.value = true
   try {
     const r = await post('saved')
+    if (handledAuthFailure(r)) return
     if (!r.ok) throw new Error('save failed')
     emit('submit-status', { index: props.currentIndex, status: 'saved', results: buildResults() })
     toast('Progress saved!')
@@ -534,6 +537,7 @@ async function handleSkip() {
   isSubmitting.value = true
   try {
     const r = await post('skipped')
+    if (handledAuthFailure(r)) return
     if (!r.ok) throw new Error('skip failed')
     emit('submit-status', { index: props.currentIndex, status: 'skipped' })
     emit('next')

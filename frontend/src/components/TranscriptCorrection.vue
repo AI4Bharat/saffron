@@ -104,6 +104,7 @@
 </template>
 
 <script setup>
+import { handledAuthFailure } from '@/session'
 import { ref, computed, watch, nextTick } from 'vue'
 import { API_BASE_URL } from '@/config'
 
@@ -262,6 +263,7 @@ async function handleSave() {
   isSaving.value = true
   try {
     const r = await post('draft')
+    if (handledAuthFailure(r)) return
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
     emit('submit-status', { index: props.currentIndex, status: 'draft', results: buildResults() })
   } catch (e) {
@@ -275,6 +277,7 @@ async function handleSubmit() {
   isSubmitting.value = true
   try {
     const r = await post('completed')
+    if (handledAuthFailure(r)) return
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
     emit('submit-status', { index: props.currentIndex, status: 'completed', results: buildResults() })
     emit('next')

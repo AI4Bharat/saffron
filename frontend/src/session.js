@@ -94,6 +94,32 @@ export async function loadIdentity(force = false) {
   return session
 }
 
+/** Handle an expired or missing session on a raw fetch() response.
+ *
+ *  The annotation components post with their own fetch rather than api(), so a
+ *  token that aged out mid-shift surfaced as a bare "Failed to submit. Please
+ *  try again." -- and trying again reused the same dead token, so it could only
+ *  fail the same way. Callers check this first and return; it says what actually
+ *  happened and sends them somewhere that can fix it.
+ *
+ *  Returns true when it handled the response, so the caller must not then show
+ *  its own error message.
+ */
+export function handledAuthFailure(response) {
+  if (!response || response.status !== 401) return false
+  localStorage.removeItem('authToken')
+  sessionStorage.removeItem('authToken')
+  session.loaded = false
+  window.alert('Your session has expired, so this could not be submitted. Please '
+    + 'sign in again and redo this one item -- everything you submitted earlier '
+    + 'is saved.')
+  if (!window.location.pathname.startsWith('/login')) {
+    window.location.assign('/login')
+  }
+  return true
+}
+
+
 export function clearSession() {
   localStorage.removeItem('authToken')
   sessionStorage.removeItem('authToken')

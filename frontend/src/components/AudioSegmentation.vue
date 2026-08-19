@@ -522,6 +522,7 @@
 </template>
 
 <script setup>
+import { handledAuthFailure } from '@/session'
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { API_BASE_URL } from '@/config';
 
@@ -861,6 +862,7 @@ async function handleSave() {
       })
     })
 
+    if (handledAuthFailure(response)) return
     if (!response.ok) {
       throw new Error('Failed to save draft')
     }
@@ -912,6 +914,7 @@ async function handleSkip() {
       })
     })
 
+    if (handledAuthFailure(response)) return
     if (!response.ok) {
       throw new Error('Failed to skip')
     }
@@ -952,6 +955,7 @@ async function handleSubmit() {
       })
     })
 
+    if (handledAuthFailure(response)) return
     if (!response.ok) {
       throw new Error('Failed to submit evaluation')
     }
