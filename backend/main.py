@@ -63,10 +63,20 @@ def create_app():
             # During the migration step only, cap how long an ALTER will sit in the
             # lock queue. A blocked ALTER makes every later query on that table
             # queue behind it, so failing fast is far cheaper than waiting.
-            'connect_args': (
-                {'connect_timeout': 10, 'options': '-c lock_timeout=5s'}
-                if os.getenv('SAFFRON_RUN_BOOT_MIGRATIONS') == '1'
-                else {'connect_timeout': 10}
+            # The database is on another host. Without keepalives a dropped link
+            # leaves the worker blocked in a socket read until gunicorn's 120s
+            # timeout kills it -- which is how a network blip on 18 Aug took out
+            # 320 workers on traffic well below the day's peak. These let the
+            # kernel declare the peer dead in ~45s; pool_pre_ping then replaces
+            # the connection on the next checkout. No effect on a healthy link.
+            'connect_args': dict(
+                {'connect_timeout': 10,
+                 'keepalives': 1,
+                 'keepalives_idle': 30,
+                 'keepalives_interval': 5,
+                 'keepalives_count': 3},
+                **({'options': '-c lock_timeout=5s'}
+                   if os.getenv('SAFFRON_RUN_BOOT_MIGRATIONS') == '1' else {})
             ),
         }
     app.app_context().push()

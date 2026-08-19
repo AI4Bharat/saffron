@@ -947,8 +947,9 @@ def update_rating(current_user, rating_id):
 
 # CRUD Basic
 @app.route('/api/test', methods=['POST'])
-def create_test():
-    """Create a new test."""
+@token_required
+def create_test(current_user):
+    """Create a new test. Sign-in required, as for every other write."""
     try:
         data = request.get_json()
 
