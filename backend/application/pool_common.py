@@ -532,6 +532,45 @@ def _revoke_assignments(team_id, rater_id=None, task_ids=None):
     return n
 
 
+def release_claims(items, rater_id=None):
+    """Hand these prompts back to the pool: free the item AND drop the claim rows.
+
+    A claim is recorded in two places -- pool_annotation, which the open-items cap
+    and the pull query both count, and pool_item, which the dashboards read. Every
+    release path has to clear both. Clearing only pool_item leaves the annotator
+    holding a slot for ever with nothing on screen to explain it, so all of them go
+    through here rather than freeing the item by hand.
+
+    Passing rater_id drops only that annotator's claim; other holders keep theirs
+    and the prompt stays claimed for them.
+    """
+    from application.models import PoolAnnotation
+    items = [it for it in items if it is not None]
+    if not items:
+        return 0
+
+    q = PoolAnnotation.query.filter(
+        PoolAnnotation.item_id.in_([it.id for it in items]),
+        PoolAnnotation.status == 'claimed')
+    if rater_id is not None:
+        q = q.filter(PoolAnnotation.rater_id == rater_id)
+    q.delete(synchronize_session=False)
+    db.session.flush()
+
+    for it in items:
+        refresh_item_state(it, annotations_target(
+            Team.query.get(it.team_id),
+            PoolTask.query.get(it.task_id) if it.task_id else None))
+        still = PoolAnnotation.query.filter_by(item_id=it.id, status='claimed').first()
+        if still is not None:
+            # somebody else is still on it -- the item follows them, not the leaver
+            it.claimed_by, it.claimed_at, it.pull_id = (still.rater_id, still.claimed_at,
+                                                        still.pull_id)
+        elif it.status == 'available':
+            it.claimed_by = it.claimed_at = it.pull_id = None
+    return len(items)
+
+
 def release_pull_items(pull, rater_id=None):
     """Hand a pull's UNFINISHED prompts back to the pool and close the pull.
 

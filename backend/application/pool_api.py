@@ -29,7 +29,8 @@ from application.pool_common import (  # noqa: F401  (re-exported for pool_tasks
     team_setting, open_items_cap, open_items_held, difficulty_required_for,
     valid_mdfs_results, MDFS_DIMENSIONS, annotations_target, refresh_item_state,
     csv_response, serialize_task, serialize_assignee,
-    serialize_pull, pull_counts, release_pull_items, close_finished_pulls,
+    serialize_pull, pull_counts, release_pull_items, release_claims,
+    close_finished_pulls,
     _revoke_assignments, release_stale_claims, my_work_by_task_type,
 )
 
@@ -444,13 +445,10 @@ def pool_release(current_user):
 
     # all_teams: the sign-out sweep -- every unfinished prompt this annotator holds, in every pool, goes back; everything submitted stays theirs.
     if data.get('all_teams'):
-        n, touched = 0, set()
-        for it in PoolItem.query.filter(PoolItem.claimed_by == rater.id,
-                                        PoolItem.status == 'claimed').all():
-            if it.pull_id:
-                touched.add(it.pull_id)
-            it.status, it.claimed_by, it.claimed_at, it.pull_id = 'available', None, None, None
-            n += 1
+        mine = PoolItem.query.filter(PoolItem.claimed_by == rater.id,
+                                     PoolItem.status == 'claimed').all()
+        touched = {it.pull_id for it in mine if it.pull_id}
+        n = release_claims(mine, rater_id=rater.id)
         if touched:
             now = datetime.utcnow()
             for pull in PoolPull.query.filter(PoolPull.pull_id.in_(list(touched)),
@@ -491,28 +489,7 @@ def pool_release(current_user):
     ids = data.get('item_ids')
     if ids:
         q = q.filter(PoolItem.id.in_([int(i) for i in ids]))
-    n = 0
-    freed_items = []
-    for it in q.all():
-        it.status = 'available'
-        it.claimed_by = None
-        it.claimed_at = None
-        it.pull_id = None
-        freed_items.append(it)
-        n += 1
-
-    # The claim lives on the annotation row too. Freeing only pool_item left the
-    # row at 'claimed' for ever, so the annotator stayed at their open-items cap
-    # and could never pull again -- with nothing showing as held.
-    if freed_items:
-        PoolAnnotation.query.filter(
-            PoolAnnotation.item_id.in_([it.id for it in freed_items]),
-            PoolAnnotation.rater_id == rater.id,
-            PoolAnnotation.status == 'claimed').delete(synchronize_session=False)
-        db.session.flush()
-        for it in freed_items:
-            refresh_item_state(it, annotations_target(
-                team, PoolTask.query.get(it.task_id) if it.task_id else None))
+    n = release_claims(q.all(), rater_id=rater.id)
     close_finished_pulls(rater.id)
     try:
         db.session.commit()
@@ -921,8 +898,7 @@ def pool_admin_member(current_user):
             return jsonify({'message': 'Not a member.'}), 200
         held = PoolItem.query.filter_by(team_id=team.id, claimed_by=rater.id,
                                         status='claimed').all()
-        for it in held:            # untouched work goes back to the pool
-            it.status, it.claimed_by, it.claimed_at, it.pull_id = 'available', None, None, None
+        release_claims(held, rater_id=rater.id)   # untouched work goes back to the pool
         # Their tasks go back on the shelf, otherwise a task nobody can work on would still count as taken and no one else could ever be given it.
         freed = _revoke_assignments(team.id, rater_id=rater.id)
         close_finished_pulls(rater.id)
@@ -992,13 +968,9 @@ def pool_admin_reclaim(current_user):
                               PoolItem.claimed_at < cutoff)
     if data.get('rater_id'):
         q = q.filter(PoolItem.claimed_by == int(data['rater_id']))
-    n = 0
-    touched = set()
-    for it in q.all():
-        if it.claimed_by:
-            touched.add(it.claimed_by)
-        it.status, it.claimed_by, it.claimed_at, it.pull_id = 'available', None, None, None
-        n += 1
+    stale = q.all()
+    touched = {it.claimed_by for it in stale if it.claimed_by}
+    n = release_claims(stale)
     for rid in touched:
         close_finished_pulls(rid)
     db.session.commit()
