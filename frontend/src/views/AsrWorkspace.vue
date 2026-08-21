@@ -587,7 +587,7 @@
               </h6>
               <textarea v-model="editText" rows="4" class="form-control"
                         :dir="rtl(workModal.language) ? 'rtl' : 'ltr'" spellcheck="false"></textarea>
-              <div v-if="workModal.need_difficulty !== false" class="d-flex flex-wrap gap-2 mt-3">
+              <div v-if="workModal.need_difficulty !== false && (!workModal.task_type || workModal.task_type === 'text-review')" class="d-flex flex-wrap gap-2 mt-3">
                 <button v-for="d in ['Easy', 'Medium', 'Hard']" :key="d" type="button"
                         class="btn btn-sm rounded-pill px-3"
                         :class="editDifficulty === d

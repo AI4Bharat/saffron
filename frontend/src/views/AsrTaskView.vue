@@ -107,7 +107,7 @@
                     <h6 class="usage-heading"><i class="bi bi-keyboard me-2"></i>Keyboard shortcuts</h6>
                     <ul class="shortcut-list mb-2">
                       <li><span class="keys"><kbd>Ctrl</kbd><span class="plus">+</span><kbd>Enter</kbd></span><span class="desc">Submit &amp; go to the next prompt</span></li>
-                      <li><span class="keys"><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></span><span class="desc">Set Easy / Medium / Hard</span></li>
+                      <li v-if="needDifficulty"><span class="keys"><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></span><span class="desc">Set Easy / Medium / Hard</span></li>
                       <li><span class="keys"><kbd>&uarr;</kbd> <kbd>&darr;</kbd></span><span class="desc">Move between prompts</span></li>
                     </ul>
                     <p class="text-muted fs-9 mb-0">On macOS, use <kbd>⌘ Cmd</kbd> in place of <kbd>Ctrl</kbd>.</p>
@@ -357,10 +357,17 @@ const mdfsComplete = computed(() =>
 const isRtl = computed(() => rtl(current.value?.language))
 const isModified = computed(() =>
   !!current.value && draftText.value.trim() !== (current.value.original_text || '').trim())
-const needDifficulty = computed(() =>
-  current.value && current.value.need_difficulty !== undefined
-    ? current.value.need_difficulty !== false
-    : teamNeedDifficulty.value)
+// Difficulty is a text-review question. Numeracy and MDFS never ask it, so they
+// are excluded by task type rather than relying on the per-item flag alone -- a
+// missing or stale flag must not be able to put these buttons back.
+const needDifficulty = computed(() => {
+  const it = current.value
+  if (!it) return false
+  if (it.task_type && it.task_type !== 'text-review') return false
+  return it.need_difficulty !== undefined
+    ? it.need_difficulty !== false
+    : teamNeedDifficulty.value
+})
 const canSubmit = computed(() => isMdfs.value
   ? mdfsComplete.value
   : !!draftText.value.trim() && (!needDifficulty.value || !!draftDifficulty.value))

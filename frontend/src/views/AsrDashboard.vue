@@ -3155,8 +3155,12 @@ const previewEnglish = computed(() =>
 /** Whether this prompt actually asks the annotator for a difficulty label. The
  *  API sends need_difficulty per item; only fall back to showing it when the
  *  field is genuinely absent, never when it is false. */
-const previewNeedsDifficulty = computed(() =>
-  !!preview.value?.item && preview.value.item.need_difficulty !== false)
+const previewNeedsDifficulty = computed(() => {
+  const it = preview.value?.item
+  if (!it) return false
+  if (it.task_type && it.task_type !== 'text-review') return false
+  return it.need_difficulty !== false
+})
 
 async function openPreview(taskOrType) {
   const isTask = typeof taskOrType === 'object'
