@@ -1898,8 +1898,20 @@
             <MdfsEvaluation v-if="preview.item.task_type === 'audio-mdfs'"
                             :item="preview.item" v-model="preview.scores" />
 
-            <!-- text-review template -->
+            <!-- text template: text review and numeracy translation correction -->
             <template v-else>
+              <!-- Numeracy: the English is what the annotator judges against, so it
+                   sits above the text here exactly as it does in their view, and is
+                   never editable. -->
+              <div v-if="previewEnglish" class="mb-4">
+                <span class="badge bg-primary-subtle text-primary mb-2 fs-8 text-uppercase">
+                  <i class="bi bi-translate me-1"></i>English source (reference)
+                </span>
+                <div class="p-3 rounded-3 border-start border-3 border-primary bg-light">
+                  <p class="mb-0 text-dark fs-5" dir="ltr">{{ previewEnglish }}</p>
+                </div>
+              </div>
+
               <span class="badge bg-secondary-subtle text-secondary mb-2 fs-8 text-uppercase">Original prompt</span>
               <div class="p-3 bg-light rounded-3 border-start border-3 border-secondary mb-3">
                 <p class="mb-0 text-dark fs-5" :dir="rtl(preview.item.language) ? 'rtl' : 'ltr'">{{ preview.item.original_text }}</p>
@@ -1909,17 +1921,21 @@
               </label>
               <textarea v-model="preview.draft" rows="3" class="form-control mb-3"
                         :dir="rtl(preview.item.language) ? 'rtl' : 'ltr'"></textarea>
-              <label class="form-label small text-uppercase fw-bold text-primary mb-2">
-                How hard is this to read aloud?
-              </label>
-              <div class="d-flex flex-wrap gap-2">
-                <button v-for="d in difficulties" :key="d" type="button"
-                        class="btn rounded-pill px-4"
-                        :class="preview.difficulty === d
-                          ? { Easy: 'btn-success', Medium: 'btn-warning', Hard: 'btn-danger' }[d]
-                          : 'btn-outline-secondary'"
-                        @click="preview.difficulty = d">{{ d }}</button>
-              </div>
+
+              <!-- Difficulty only where the annotator is actually asked for it. -->
+              <template v-if="previewNeedsDifficulty">
+                <label class="form-label small text-uppercase fw-bold text-primary mb-2">
+                  How hard is this to read aloud?
+                </label>
+                <div class="d-flex flex-wrap gap-2">
+                  <button v-for="d in difficulties" :key="d" type="button"
+                          class="btn rounded-pill px-4"
+                          :class="preview.difficulty === d
+                            ? { Easy: 'btn-success', Medium: 'btn-warning', Hard: 'btn-danger' }[d]
+                            : 'btn-outline-secondary'"
+                          @click="preview.difficulty = d">{{ d }}</button>
+                </div>
+              </template>
             </template>
           </template>
         </div>
@@ -3130,6 +3146,18 @@ function projectIcon(key) {
 
 // ── admin preview: fetch one sample item and render the real annotator template ──
 const preview = ref(null)
+/** The English reference for a numeracy prompt, empty for anything else. */
+const previewEnglish = computed(() =>
+  preview.value?.item?.task_type === 'translation-correction'
+    ? (preview.value.item.extra_json || {}).source_en || ''
+    : '')
+
+/** Whether this prompt actually asks the annotator for a difficulty label. The
+ *  API sends need_difficulty per item; only fall back to showing it when the
+ *  field is genuinely absent, never when it is false. */
+const previewNeedsDifficulty = computed(() =>
+  !!preview.value?.item && preview.value.item.need_difficulty !== false)
+
 async function openPreview(taskOrType) {
   const isTask = typeof taskOrType === 'object'
   preview.value = {
