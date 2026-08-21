@@ -189,6 +189,7 @@ import TranscriptCorrection from '@/components/TranscriptCorrection.vue'
 import ConversationEvaluation from '@/components/ConversationEvaluation.vue'
 import AudioSegmentation from '@/components/AudioSegmentation.vue'
 import BenchmarkVerification from '@/components/BenchmarkVerification.vue'
+import ScriptVerification from '@/components/ScriptVerification.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -211,6 +212,7 @@ const COMPONENTS = {
   'conversation-evaluation': ConversationEvaluation,
   'conversation-editable': ConversationEvaluation,
   'audio-segmentation': AudioSegmentation,
+  'script-verification': ScriptVerification,
   'benchmark-verification': BenchmarkVerification,
   'benchmark-parallel': BenchmarkVerification,
   'benchmark-evaluation-v2': BenchmarkVerification,
