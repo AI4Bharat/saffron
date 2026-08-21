@@ -53,28 +53,69 @@
     </div>
     <div class="sv-script mb-4" dir="ltr" lang="ur">{{ script }}</div>
 
-    <!-- ── the only decision: accept or reject ── -->
-    <div v-if="!props.readonly" class="sv-actions">
-      <button type="button" class="btn btn-success btn-lg rounded-pill px-5 d-flex align-items-center gap-2"
-              :disabled="isSubmitting" @click="decide('accept')">
-        <span v-if="isSubmitting && pending === 'accept'" class="spinner-border spinner-border-sm"></span>
-        <i v-else class="bi bi-check-circle-fill"></i> Accept
-      </button>
-      <button type="button" class="btn btn-danger btn-lg rounded-pill px-5 d-flex align-items-center gap-2"
-              :disabled="isSubmitting" @click="decide('reject')">
-        <span v-if="isSubmitting && pending === 'reject'" class="spinner-border spinner-border-sm"></span>
-        <i v-else class="bi bi-x-circle-fill"></i> Reject
-      </button>
+    <!-- ── comment: required, so the decision always carries a reason ── -->
+    <div class="mb-4">
+      <label class="form-label small text-uppercase fw-bold text-primary mb-2" for="sv-comment">
+        Comments <span class="text-danger">*</span>
+      </label>
+      <textarea id="sv-comment" v-model="comment" rows="3" class="form-control"
+                :class="{ 'is-invalid': showCommentError }"
+                :disabled="props.readonly"
+                :placeholder="props.readonly ? '' : 'Say what you found — required for both Accept and Reject.'"
+                spellcheck="false" @input="showCommentError = false"></textarea>
+      <div v-if="showCommentError" class="invalid-feedback d-block">
+        Please add a comment before you accept or reject this script.
+      </div>
+      <div v-else class="form-text">Required. Recorded with your decision.</div>
     </div>
-    <div v-else class="alert alert-secondary py-2 mb-0">
-      <i class="bi bi-eye me-1"></i>Read-only preview of a submitted annotation.
+
+    <!-- ── choose a verdict, then submit it ── -->
+    <div v-if="!props.readonly">
+      <label class="form-label small text-uppercase fw-bold text-primary mb-2">
+        Your verdict <span class="text-danger">*</span>
+      </label>
+      <div class="sv-actions mb-4">
+        <button type="button" class="btn btn-lg rounded-pill px-5 d-flex align-items-center gap-2"
+                :class="decision === 'accept' ? 'btn-success' : 'btn-outline-success'"
+                :disabled="isSubmitting" @click="choose('accept')">
+          <i class="bi bi-check-circle-fill"></i> Accept
+        </button>
+        <button type="button" class="btn btn-lg rounded-pill px-5 d-flex align-items-center gap-2"
+                :class="decision === 'reject' ? 'btn-danger' : 'btn-outline-danger'"
+                :disabled="isSubmitting" @click="choose('reject')">
+          <i class="bi bi-x-circle-fill"></i> Reject
+        </button>
+      </div>
+
+      <button type="button" class="btn btn-primary btn-lg rounded-pill px-5 d-flex align-items-center gap-2"
+              :disabled="!canSubmit" @click="submit">
+        <span v-if="isSubmitting" class="spinner-border spinner-border-sm"></span>
+        <i v-else class="bi bi-send-fill"></i>
+        Submit
+      </button>
+      <p v-if="!canSubmit && !isSubmitting" class="text-muted fs-9 mt-2 mb-0">
+        <i class="bi bi-info-circle me-1"></i>{{ blockedReason }}
+      </p>
+    </div>
+    <div v-else>
+      <div v-if="decision" class="mb-2">
+        <span class="badge rounded-pill px-3 py-2"
+              :class="decision === 'accept' ? 'bg-success' : 'bg-danger'">
+          <i :class="decision === 'accept' ? 'bi bi-check-circle-fill' : 'bi bi-x-circle-fill'"
+             class="me-1"></i>{{ decision === 'accept' ? 'Accepted' : 'Rejected' }}
+        </span>
+      </div>
+      <div class="alert alert-secondary py-2 mb-0">
+        <i class="bi bi-eye me-1"></i>Read-only preview of a submitted annotation.
+      </div>
     </div>
 
     <p v-if="submitError" class="text-danger small mt-3 mb-0">
       <i class="bi bi-exclamation-circle me-1"></i>{{ submitError }}
     </p>
     <p class="text-muted fs-9 mt-3 mb-0">
-      Shortcuts: <kbd>A</kbd> accept · <kbd>R</kbd> reject
+      Shortcuts: <kbd>A</kbd> accept · <kbd>R</kbd> reject ·
+      <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd> submit
     </p>
   </div>
 </template>
@@ -99,12 +140,23 @@ const audioFailed = ref(false)
 const rates = [0.75, 1, 1.25, 1.5]
 const rate = ref(1)
 const durationSec = ref(0)
+const decision = ref('')
+const comment = ref('')
+const showCommentError = ref(false)
 const isSubmitting = ref(false)
 const pending = ref('')
 const submitError = ref('')
 const startTime = ref(Date.now())
 
 const script = computed(() => props.currentTest?.script || '')
+const hasComment = computed(() => comment.value.trim().length > 0)
+const canSubmit = computed(() =>
+  !props.readonly && !!decision.value && hasComment.value && !isSubmitting.value)
+const blockedReason = computed(() => {
+  if (!decision.value && !hasComment.value) return 'Choose Accept or Reject, and add a comment.'
+  if (!decision.value) return 'Choose Accept or Reject.'
+  return 'Add a comment.'
+})
 
 /** The clip is served from backend/tasks/..., which /api/audio already allows. */
 const audioSrc = computed(() => {
@@ -141,6 +193,13 @@ function setRate(r) {
 watch(() => props.currentTest, () => {
   audioFailed.value = false
   submitError.value = ''
+  // A verdict and comment belong to one clip and must never carry over. On an
+  // already-answered item -- the admin preview, or revisiting your own work --
+  // the saved values come back on the item itself, so show those instead.
+  const t = props.currentTest || {}
+  decision.value = t.decision || ''
+  comment.value = t.comment || ''
+  showCommentError.value = false
   durationSec.value = 0
   startTime.value = Date.now()
   if (audioEl.value) {
@@ -149,8 +208,21 @@ watch(() => props.currentTest, () => {
   }
 })
 
-async function decide(verdict) {
+/** Pick a verdict. Nothing is recorded until Submit. */
+function choose(verdict) {
   if (props.readonly || isSubmitting.value) return
+  decision.value = verdict
+}
+
+async function submit() {
+  if (!canSubmit.value) {
+    if (!hasComment.value) {
+      showCommentError.value = true
+      document.getElementById('sv-comment')?.focus()
+    }
+    return
+  }
+  const verdict = decision.value
   isSubmitting.value = true
   pending.value = verdict
   submitError.value = ''
@@ -165,6 +237,7 @@ async function decide(verdict) {
     language: props.currentTest?.language || '',
     duration_s: props.currentTest?.duration_s || null,
     script: script.value,
+    comment: comment.value.trim(),
   }
 
   try {
@@ -197,9 +270,13 @@ async function decide(verdict) {
 function onKeydown(e) {
   if (props.readonly || isSubmitting.value) return
   const tag = document.activeElement?.tagName
-  if (tag === 'INPUT' || tag === 'TEXTAREA') return
-  if (e.key === 'a' || e.key === 'A') { e.preventDefault(); decide('accept') }
-  if (e.key === 'r' || e.key === 'R') { e.preventDefault(); decide('reject') }
+  const typing = tag === 'INPUT' || tag === 'TEXTAREA'
+  // Ctrl/Cmd+Enter still submits from inside the comment box; bare A / R must
+  // not, or they would be swallowed as text.
+  if (typing && !((e.ctrlKey || e.metaKey) && e.key === 'Enter')) return
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); submit(); return }
+  if (e.key === 'a' || e.key === 'A') { e.preventDefault(); choose('accept') }
+  if (e.key === 'r' || e.key === 'R') { e.preventDefault(); choose('reject') }
 }
 
 onMounted(() => window.addEventListener('keydown', onKeydown))
