@@ -51,7 +51,7 @@
       </span>
       <span class="text-muted fs-9">Does this script match what is spoken?</span>
     </div>
-    <div class="sv-script mb-4" dir="rtl" lang="ur">{{ script }}</div>
+    <div class="sv-script mb-4" dir="ltr" lang="ur">{{ script }}</div>
 
     <!-- ── the only decision: accept or reject ── -->
     <div v-if="!props.readonly" class="sv-actions">
@@ -235,10 +235,6 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   word-break: break-word;
   /* reference material, so it cannot be selected into and edited by accident */
   user-select: text;
-}
-.sv-script[dir='rtl'] {
-  border-left: 1px solid #e9ecef;
-  border-right: 4px solid var(--bs-primary, #0d6efd);
 }
 .sv-actions { display: flex; flex-wrap: wrap; gap: .75rem; }
 .fs-8 { font-size: .75rem; }
