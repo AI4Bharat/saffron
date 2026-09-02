@@ -154,3 +154,38 @@ export function dashboardPath(team) {
   if (!team) return '/tts/admin'
   return `/${team.key}/admin`
 }
+
+/** Claims out of our own JWT. Read for display decisions only -- the server is
+ *  what enforces any of this, and a tampered token is simply refused there. */
+function claims() {
+  try {
+    const body = authToken().split('.')[1]
+    if (!body) return {}
+    const json = atob(body.replace(/-/g, '+').replace(/_/g, '/'))
+    return JSON.parse(decodeURIComponent(escape(json)))
+  } catch (e) {
+    return {}
+  }
+}
+
+/** A read-only admin: the server refuses any write from this login. */
+export function isViewOnly() {
+  return claims().view_only === true
+}
+
+/** Test types this login may see; empty means no restriction. */
+export function allowedTaskTypes() {
+  const t = claims().task_types
+  return Array.isArray(t) ? t : []
+}
+
+/** True for the organisation admin (scope 'org'), who alone handles resets. */
+export function isOrgAdmin() {
+  const c = claims()
+  return c.kind === 'admin' && c.scope === 'org'
+}
+
+/** Any admin login (org or team). Display only -- routes do their own checks. */
+export function isAdmin() {
+  return claims().kind === 'admin'
+}

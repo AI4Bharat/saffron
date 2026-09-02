@@ -214,12 +214,44 @@
                 </button>
               </div>
             </div>
+            <!-- Nothing left in this task at all: not a fault, and not
+                 something a different category will fix. -->
+            <div v-if="taskExhausted && !atCap"
+                 class="alert alert-success d-flex align-items-start gap-2 mt-3 mb-0 py-2">
+              <i class="bi bi-check-circle-fill mt-1"></i>
+              <div>
+                <div class="fw-semibold">
+                  All done here — nothing left to take in
+                  {{ currentTask?.label || 'this task' }}.
+                </div>
+                <div class="small">
+                  <template v-if="otherTasksWithWork.length">
+                    Still open for you:
+                    <button v-for="t in otherTasksWithWork" :key="t.task_id"
+                            type="button" class="btn btn-link btn-sm p-0 me-2 align-baseline"
+                            @click="pick.task_id = t.task_id; onTaskChange()">
+                      {{ t.label || (t.language + ' · Class ' + t.class) }}
+                      ({{ t.available_total.toLocaleString() }})
+                    </button>
+                  </template>
+                  <template v-else>
+                    Every task assigned to you is finished. Your admin will assign more
+                    when the next batch is ready — nothing else is needed from you.
+                  </template>
+                </div>
+              </div>
+            </div>
+
             <p class="text-muted small mb-0 mt-3">
               <span v-if="atCap" class="text-danger">
                 You are holding {{ heldNow }} unfinished prompt(s) — the limit is
                 {{ openCap }} at a time. Submit those first, then you can pull more.
               </span>
-              <span v-else-if="!matching">Nothing left for that combination — try another type of prompt.</span>
+              <span v-else-if="!matching && !taskExhausted">
+                Nothing left in <strong>{{ pick.category || 'that combination' }}</strong> —
+                pick another type of prompt above; this task still has
+                {{ (currentTask?.available_total || 0).toLocaleString() }} waiting.
+              </span>
               <span v-else>Prompts come in batches of {{ countOptions.join(', ') }}. Take a batch,
                 annotate it, then take the next.
                 <template v-if="openCap"> You can hold at most {{ openCap }} unfinished
@@ -1050,6 +1082,19 @@ function formatMsgDate(iso) {
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 const notifKind = (c) => c === 'nudge' ? 'nudge' : c === 'broadcast' ? 'broadcast' : 'message'
+/** This task has nothing this annotator can take, whatever category they pick.
+ *  The count is already per-annotator, so 0 means 0 for them specifically. */
+const taskExhausted = computed(() => {
+  const t = currentTask.value
+  return !!t && !t.available_total
+})
+
+/** Their other assigned tasks that do still have work, so the message can
+ *  point somewhere useful rather than just closing the door. */
+const otherTasksWithWork = computed(() =>
+  (tasks.value || []).filter(t => t.available_total > 0
+                                  && t.task_id !== pick.value.task_id))
+
 const notifIcon = (c) => c === 'nudge' ? 'bi-bell-fill' : c === 'broadcast' ? 'bi-broadcast' : 'bi-chat-left-text-fill'
 const notifLabel = (c) => c === 'nudge' ? 'Task reminder' : c === 'broadcast' ? 'Announcement' : 'Message'
 

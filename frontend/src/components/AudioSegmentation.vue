@@ -85,6 +85,15 @@
       <h5 class="fw-bold text-dark mb-3 d-flex align-items-center gap-2">
         <i class="bi bi-music-note-beamed text-primary"></i>
         Audio Player
+        <!-- Admins only: the clip itself, for QC outside the tool. -->
+        <a v-if="isAdmin() && audioUrl"
+           :href="audioUrl"
+           :download="audioFileName"
+           class="btn btn-sm btn-outline-secondary ms-auto d-inline-flex align-items-center gap-1"
+           :title="`Download ${audioFileName}`">
+          <i class="bi bi-download"></i>
+          <span class="d-none d-sm-inline">Download</span>
+        </a>
       </h5>
       
       <!-- Hidden Audio Element -->
@@ -522,7 +531,7 @@
 </template>
 
 <script setup>
-import { handledAuthFailure } from '@/session'
+import { handledAuthFailure, isAdmin } from '@/session'
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { API_BASE_URL } from '@/config';
 
@@ -640,6 +649,12 @@ const modalReasons = computed(() => [...availableReasons, ...legacyReasons.value
 const audioUrl = computed(() => {
   if (!props.currentTest?.audio_filename) return ''
   return `${API_BASE_URL}/audio/${props.currentTest.audio_filename}`
+})
+
+/** Just the file name, so a download is not saved under the whole path. */
+const audioFileName = computed(() => {
+  const p = props.currentTest?.audio_filename || ''
+  return p.split('/').pop() || 'audio.wav'
 })
 
 const isTranscriptModified = computed(() => {

@@ -289,16 +289,68 @@ def serve_audio(filename):
 # CRUD Rater
 
 
-def generate_token(username, kind='rater', team=None, scope=None):
+def generate_token(username, kind='rater', team=None, scope=None,
+                   view_only=False, task_types=None):
     """JWT for an annotator or an admin."""
     payload = {
         'username': username,
         'kind': kind,
         'team': team,
         'scope': scope,
+        # Carried in the token so every worker enforces it without a DB lookup.
+        'view_only': bool(view_only),
+        'task_types': task_types or [],
         'exp': datetime.utcnow() + timedelta(hours=24)
     }
     return jwt.encode(payload, app.config['JWT_SECRET_KEY'], algorithm='HS256')
+
+
+SAFE_METHODS = ('GET', 'HEAD', 'OPTIONS')
+# A read-only login still has to be able to end its own session.
+VIEW_ONLY_WRITE_ALLOWLIST = ('/api/login', '/api/logout')
+
+
+@app.before_request
+def _block_writes_for_view_only():
+    """Refuse any state-changing request made with a read-only admin token.
+
+    Applied to every request rather than to individual routes, so a route added
+    later is covered without anyone having to remember it.
+    """
+    if request.method in SAFE_METHODS:
+        return None
+    path = request.path or ''
+    if not path.startswith('/api/'):
+        return None
+    if path in VIEW_ONLY_WRITE_ALLOWLIST:
+        return None
+
+    parts = (request.headers.get('Authorization') or '').split()
+    token = parts[1] if len(parts) == 2 and parts[0].lower() == 'bearer' else (
+        parts[0] if len(parts) == 1 and parts[0] else '')
+    if not token:
+        return None                      # unauthenticated: the route decides
+    try:
+        data = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
+    except Exception:
+        return None                      # a bad token is the route's problem
+    if data.get('view_only'):
+        return jsonify({'message': 'This account is read-only.'}), 403
+    return None
+
+
+def token_task_types():
+    """Test types the caller may see; empty list means no restriction."""
+    parts = (request.headers.get('Authorization') or '').split()
+    token = parts[1] if len(parts) == 2 and parts[0].lower() == 'bearer' else (
+        parts[0] if len(parts) == 1 and parts[0] else '')
+    if not token:
+        return []
+    try:
+        data = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
+    except Exception:
+        return []
+    return list(data.get('task_types') or [])
 
 
 # Bodhan.AI identity helpers Two kinds of login exist: * ANNOTATOR -- a Rater row; their workspaces are their TeamMember rows.
@@ -487,12 +539,18 @@ def login():
             except Exception:
                 db.session.rollback()
             team = admin.team
+            view_only = bool(getattr(admin, 'is_view_only', False))
+            task_types = list(getattr(admin, 'task_types', []) or [])
             return jsonify({
                 'token': generate_token(admin.username, kind='admin',
                                         team=team.key if team else None,
-                                        scope=admin.scope),
+                                        scope=admin.scope,
+                                        view_only=view_only,
+                                        task_types=task_types),
                 'role': 'admin',
                 'scope': admin.scope,
+                'view_only': view_only,
+                'task_types': task_types,
                 'name': admin.display_name or admin.username,
                 'organization': ORG_NAME,
                 'team': _serialize_team(team) if team else None,
@@ -3625,3 +3683,5 @@ def mark_messages_read(current_user):
 from application import team_api  # noqa: E402,F401
 from application import pool_api  # noqa: E402,F401
 from application import pool_tasks  # noqa: E402,F401
+from application import password_reset  # noqa: E402,F401
+from application import storage_api  # noqa: E402,F401

@@ -67,6 +67,11 @@
       </table>
     </section>
 
+    <!-- Annotators who used "Forgot password?" on the sign-in page. -->
+    <section class="admins-panel" v-if="!loading">
+      <PasswordResetPanel />
+    </section>
+
     <!-- new / reset admin -->
     <div v-if="modal" class="modal-backdrop-x" @click.self="modal = null">
       <div class="modal-card">
@@ -104,6 +109,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { api, dashboardPath, setActiveTeam } from '@/session'
+import PasswordResetPanel from '@/components/PasswordResetPanel.vue'
 
 const loading = ref(true)
 const data = ref({ teams: [], totals: null })

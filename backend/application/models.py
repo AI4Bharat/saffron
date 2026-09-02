@@ -59,8 +59,17 @@ class AdminUser(db.Model):
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     last_login = db.Column(db.DateTime, nullable=True)
+    # A read-only dashboard login: may look at everything it is allowed to see,
+    # may change nothing.
+    is_view_only = db.Column(db.Boolean, nullable=False, default=False)
+    # Comma-separated test types this login may see; NULL/empty means all of them.
+    allowed_task_types = db.Column(db.String(255), nullable=True)
 
     team = db.relationship('Team', backref='admins', lazy=True)
+
+    @property
+    def task_types(self):
+        return [t.strip() for t in (self.allowed_task_types or '').split(',') if t.strip()]
 
     @property
     def scope(self):

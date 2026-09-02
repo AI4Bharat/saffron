@@ -59,7 +59,39 @@
             <span v-if="isSubmitting" class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
             {{ isSubmitting ? 'Logging in...' : 'Login' }}
           </button>
+          <div class="text-center mt-3">
+            <button type="button" class="btn btn-link btn-sm p-0 auth-forgot"
+                    @click="openForgot">Forgot password?</button>
+          </div>
         </form>
+
+        <!-- Forgot password: files a request for an admin to answer. -->
+        <div v-if="forgotOpen" class="forgot-panel mt-3">
+          <template v-if="!forgotSent">
+            <p class="text-muted small mb-2">
+              Enter your username. Your admin will send you a link to set a new password.
+            </p>
+            <form class="d-flex gap-2" @submit.prevent="submitForgot">
+              <input v-model="forgotUsername" class="form-control form-control-sm"
+                     placeholder="Your username" autocomplete="username" :disabled="forgotBusy">
+              <button class="btn btn-sm btn-saffron px-3" type="submit"
+                      :disabled="forgotBusy || !forgotUsername.trim()">
+                <span v-if="forgotBusy" class="spinner-border spinner-border-sm"></span>
+                <span v-else>Send</span>
+              </button>
+            </form>
+            <button type="button" class="btn btn-link btn-sm p-0 mt-2 text-muted"
+                    @click="forgotOpen = false">Cancel</button>
+          </template>
+          <div v-else class="d-flex align-items-start gap-2">
+            <i class="bi bi-check-circle-fill text-success mt-1"></i>
+            <div>
+              <p class="mb-1 small">{{ forgotMessage }}</p>
+              <button type="button" class="btn btn-link btn-sm p-0 text-muted"
+                      @click="forgotOpen = false">Close</button>
+            </div>
+          </div>
+        </div>
 
         <div v-if="error" class="alert alert-danger mt-3 mb-0 d-flex align-items-center gap-2" role="alert">
           <i class="bi bi-exclamation-circle-fill"></i>
@@ -91,7 +123,40 @@ const showPassword = ref(false)
 const isSubmitting = ref(false)
 const error = ref('')
 const usernameInput = ref(null)
+const forgotOpen = ref(false)
+const forgotUsername = ref('')
+const forgotBusy = ref(false)
+const forgotSent = ref(false)
+const forgotMessage = ref('')
 const passwordInput = ref(null)
+
+function openForgot() {
+  forgotOpen.value = true
+  forgotSent.value = false
+  // Save retyping when they already started signing in.
+  if (!forgotUsername.value) forgotUsername.value = username.value
+}
+
+async function submitForgot() {
+  if (forgotBusy.value) return
+  forgotBusy.value = true
+  try {
+    const r = await fetch(`${API_BASE_URL}/password_reset/request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: forgotUsername.value.trim() }),
+    })
+    const d = await r.json().catch(() => ({}))
+    // The server answers the same way whichever the outcome, on purpose.
+    forgotMessage.value = d.message
+      || 'If that account exists, your admin has been notified.'
+  } catch (e) {
+    forgotMessage.value = 'Could not reach the server. Please try again.'
+  } finally {
+    forgotBusy.value = false
+    forgotSent.value = true
+  }
+}
 
 const togglePasswordVisibility = () => {
   showPassword.value = !showPassword.value

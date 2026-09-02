@@ -1741,6 +1741,12 @@
 
       <!-- ADMIN TAB -->
       <!-- ===================== UPLOAD QC TASK ===================== -->
+      <div v-if="activeTab === 'files'">
+        <div class="bg-white p-4 rounded shadow-sm border">
+          <FileBrowser />
+        </div>
+      </div>
+
       <div v-if="activeTab === 'qcupload'">
 
         <!-- Step 1: paste the link -->
@@ -2679,6 +2685,8 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { isViewOnly, allowedTaskTypes } from '@/session'
+import FileBrowser from '@/components/FileBrowser.vue'
 import { API_BASE_URL } from '@/config'
 import router from '@/router'
 
@@ -2687,14 +2695,24 @@ const activeTab = ref('overview')
 // Sub-tab within the Tasks tab: 'overview' (progress by type) | 'alltasks' (batch list)
 const tasksSubTab = ref('overview')
 // Tab bar: labels reflect the content that actually lives under each pane.
-const tabs = [
+const ALL_TABS = [
   { key: 'overview',   label: 'Overview',   icon: 'bi-grid-1x2-fill',      hint: 'Key numbers, batch health & language stats' },
   { key: 'tasks',      label: 'Tasks',      icon: 'bi-list-check',         hint: 'Progress by task type + the full batch list' },
   { key: 'annotators', label: 'Annotators', icon: 'bi-people-fill',        hint: 'Assign tasks, message & manage annotators' },
   { key: 'quality',    label: 'Quality',    icon: 'bi-patch-check-fill',   hint: 'Voice-artist QC & rejection analytics' },
   { key: 'qcupload',   label: 'Upload QC',  icon: 'bi-cloud-arrow-up-fill', hint: 'Load an audio-segmentation set straight from a Drive link' },
   { key: 'admin',      label: 'Admin',      icon: 'bi-gear-fill',          hint: 'Signup PIN and task-list export' },
+  { key: 'files',      label: 'Files',      icon: 'bi-hdd-network',        hint: 'Browse, upload and download the storage bucket' },
 ]
+
+// A read-only login gets the two panes it is meant to have. Everything else
+// either edits something or is irrelevant to it.
+// Files is left out on purpose: it can upload and delete, which a read-only
+// login is refused anyway, so offering it would only produce failures.
+const VIEW_ONLY_TABS = ['tasks', 'quality']
+const tabs = computed(() => isViewOnly()
+  ? ALL_TABS.filter(t => VIEW_ONLY_TABS.includes(t.key))
+  : ALL_TABS)
 const dashboardData = ref({})
 // --- Annotator work in a date period (backed by /api/admin/rater_activity) ---
 const activityFrom = ref('')
@@ -4360,7 +4378,17 @@ const audioSegFilteredTotals = computed(() => {
 
 // ---- Per-task-type overview (Overview tab sub-tabs) ----
 const taskTypes = computed(() => dashboardData.value.task_types || {})
-const taskTypeNames = computed(() => Object.keys(taskTypes.value).sort())
+
+/** Task types this login may see. Empty means unrestricted. */
+const restrictedTypes = computed(() => allowedTaskTypes())
+
+function typeAllowed(tt) {
+  const only = restrictedTypes.value
+  return !only.length || only.includes(tt)
+}
+
+const taskTypeNames = computed(
+  () => Object.keys(taskTypes.value).filter(typeAllowed).sort())
 const activeTypeTab = ref('')
 watch(taskTypeNames, (names) => {
   if (names.length && !names.includes(activeTypeTab.value)) activeTypeTab.value = names[0]
@@ -4505,7 +4533,9 @@ const uniqueVersions = computed(() => {
 
 // Test Types filter list
 const uniqueTestTypes = computed(() => {
-  const types = tests.value.map(t => t.test_type).filter(Boolean)
+  // Only offer types this login is allowed to see, so the filter cannot be
+  // used to reach past the restriction.
+  const types = tests.value.map(t => t.test_type).filter(Boolean).filter(typeAllowed)
   return [...new Set(types)].sort()
 })
 
@@ -4524,7 +4554,11 @@ const almostDoneBatches = computed(() => tests.value.filter(t => {
 
 // Filtered lists
 const filteredTests = computed(() => {
-  let list = tests.value
+  // A restricted login must not reach other types' batches through the list,
+  // so this is filtered here rather than only in the pill nav above.
+  let list = restrictedTypes.value.length
+    ? tests.value.filter(t => typeAllowed(t.test_type))
+    : tests.value
 
   if (batchLanguageFilter.value) {
     list = list.filter(t => t.language === batchLanguageFilter.value)

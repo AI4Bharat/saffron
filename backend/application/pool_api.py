@@ -22,7 +22,8 @@ from application.views import (
 )
 from application.pool_common import (  # noqa: F401  (re-exported for pool_tasks)
     BATCH_SIZES, DIFFICULTIES, FLAG_REASONS, STALE_CLAIM_HOURS, TASK_TYPE_LABELS, ITEM_STATUSES,
-    task_type_label, _ist_day, _today_ist, _ist_stamp, _IST, _pool_team, _member,
+    task_type_label, DEFAULT_TASK_TYPE, _ist_day, _today_ist, _ist_stamp, _IST,
+    _pool_team, _member,
     _current_rater, _allowed_languages, _serialize_item, _blank_counts,
     _with_progress, task_counts, task_category_counts, active_assignments,
     assigned_tasks_for, assigned_task_ids, primary_holder, allowed_categories,
@@ -1717,7 +1718,8 @@ def _rater_activity_payload(team, from_str, to_str):
     q = db.session.query(
         PoolItem.completed_by, PoolItem.completed_at, PoolItem.status,
         PoolItem.is_edited, PoolItem.final_difficulty, PoolItem.source_difficulty,
-        PoolItem.language, PoolItem.time_taken_ms,
+        PoolItem.language, PoolItem.time_taken_ms, PoolItem.task_type,
+        PoolItem.task_id,
     ).filter(PoolItem.team_id == team.id, PoolItem.completed_by.isnot(None))
     if d_from is not None:
         q = q.filter(PoolItem.completed_at >= d_from)
@@ -1727,25 +1729,43 @@ def _rater_activity_payload(team, from_str, to_str):
     per_rater = {}
     totals = {'completed': 0, 'flagged': 0, 'edited': 0, 'difficulty_changed': 0,
               'seconds': 0.0, 'prompts': 0}
-    for rid, when, status, edited, final_d, src_d, lang, ms in q.all():
+    seen_task_ids = set()
+    for rid, when, status, edited, final_d, src_d, lang, ms, ttype, task_id in q.all():
         slot = per_rater.setdefault(rid, {
             'completed': 0, 'flagged': 0, 'edited': 0, 'difficulty_changed': 0,
             'seconds': 0.0, 'languages': {}, 'days': {}, 'last': None})
         day = _ist_day(when)
         d = slot['days'].setdefault(day, {'date': day, 'completed': 0, 'flagged': 0,
-                                          'edited': 0, 'seconds': 0.0})
+                                          'edited': 0, 'seconds': 0.0, 'types': {}})
+        # The day's numbers split by kind of work, so numeracy / MDFS / text review each show their own count instead of merging into one figure.
+        tslot = d['types'].setdefault(ttype or DEFAULT_TASK_TYPE, {
+            'completed': 0, 'flagged': 0, 'edited': 0, 'seconds': 0.0, 'tasks': {}})
+        # Same counters again, one level down, so a project can be opened up
+        # into the individual tasks that made up the day.
+        if task_id:
+            seen_task_ids.add(task_id)
+        kslot = tslot['tasks'].setdefault(str(task_id or 0), {
+            'completed': 0, 'flagged': 0, 'edited': 0, 'seconds': 0.0})
         if status == 'flagged':
             slot['flagged'] += 1
             d['flagged'] += 1
+            tslot['flagged'] += 1
+            kslot['flagged'] += 1
             totals['flagged'] += 1
         else:
             slot['completed'] += 1
             d['completed'] += 1
+            tslot['completed'] += 1
+            kslot['completed'] += 1
             totals['completed'] += 1
         if edited:
             slot['edited'] += 1
             d['edited'] += 1
+            tslot['edited'] += 1
+            kslot['edited'] += 1
             totals['edited'] += 1
+        tslot['seconds'] += (ms or 0) / 1000.0
+        kslot['seconds'] += (ms or 0) / 1000.0
         if final_d and src_d and final_d != src_d:
             slot['difficulty_changed'] += 1
             totals['difficulty_changed'] += 1
@@ -1792,6 +1812,19 @@ def _rater_activity_payload(team, from_str, to_str):
         })
     rows.sort(key=lambda x: (-x['done'], x['name']))
 
+    # Names for the tasks the day rows reference. Only the ones actually worked
+    # on in this window, so an old pool does not pad the dashboard's dropdown.
+    task_names = {}
+    if seen_task_ids:
+        for t in PoolTask.query.filter(PoolTask.id.in_(seen_task_ids)).all():
+            task_names[str(t.id)] = {
+                'label': (f"{t.language} · Class {t.class_label}"
+                          if t.class_label else t.language),
+                'language': t.language,
+                'class_label': t.class_label or '',
+                'task_type': t.task_type or DEFAULT_TASK_TYPE,
+            }
+
     return {
         'from': from_str or None,
         'to': to_str or None,
@@ -1807,6 +1840,7 @@ def _rater_activity_payload(team, from_str, to_str):
             'annotators': len(rows),
             'holding': sum(holding.values()),
         },
+        'tasks': task_names,
         'raters': rows,
     }
 
@@ -1837,8 +1871,14 @@ def pool_export_rater_activity_csv(current_user):
     n = 0
     for r in payload['raters']:
         for d in r['days']:
-            n += 1
-            w.writerow([n, r['name'], r['email'], d['date'], d['completed'], d['flagged'],
-                        d['edited'], d['hours'], task_type_label('text-review')])
+            # One row per kind of work the annotator did that day (numeracy, text review, MDFS, ...), each with its own counts -- the old export collapsed everything into one row labelled text-review.
+            types = d.get('types') or {DEFAULT_TASK_TYPE: d}
+            for tt, td in sorted(types.items()):
+                n += 1
+                w.writerow([n, r['name'], r['email'], d['date'],
+                            td.get('completed', 0), td.get('flagged', 0),
+                            td.get('edited', 0),
+                            round((td.get('seconds') or 0) / 3600.0, 2),
+                            task_type_label(tt)])
     stamp = datetime.utcnow().strftime('%Y%m%d')
     return csv_response(buf, f'asr_annotator_days_{stamp}.csv')

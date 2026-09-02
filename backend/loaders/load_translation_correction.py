@@ -84,7 +84,12 @@ def read_rows(path, wanted_languages=None):
 
         rows = ws.iter_rows(values_only=True)
         header = [str(h).strip() if h is not None else '' for h in next(rows)]
-        lang_cols = {i: h for i, h in enumerate(header) if not is_meta_column(h)}
+        # FIRST occurrence of a language wins: some sheets carry leftover duplicate language columns to the right; the authoritative block is the one adjacent to the English column.
+        lang_cols, seen_langs = {}, set()
+        for i, h in enumerate(header):
+            if not is_meta_column(h) and h not in seen_langs:
+                lang_cols[i] = h
+                seen_langs.add(h)
         if wanted_languages:
             lang_cols = {i: h for i, h in lang_cols.items() if h in wanted_languages}
         print(f'  {ws.title}: class {class_label}, languages -> '
@@ -118,6 +123,8 @@ def item_key(language, class_label, english):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--file', help='xlsx to load (default: download the sheet)')
+    ap.add_argument('--upload-name', default=UPLOAD_NAME,
+                    help='name for the pool_upload record (e.g. "... set 2")')
     ap.add_argument('--languages', help='comma-separated subset of target languages')
     ap.add_argument('--batch', type=int, default=1000)
     ap.add_argument('--dry-run', action='store_true')
@@ -138,7 +145,8 @@ def main():
                 task_type=TASK_TYPE,
                 language=language,
                 class_label=str(class_label) or None,
-                category=(category or '').lower() or None,
+                # The column is varchar(64); the untruncated label stays in extra_json['category_label'].
+                category=(category or '').lower()[:64] or None,
                 source='translation-sheet',
                 n_words=len(text.split()),
                 text=text,
@@ -196,7 +204,7 @@ def main():
         # rather than the table, so writing outside the ORM has to supply them.
         now = _dt.datetime.utcnow()
         upload_id = conn.execute(sa.insert(upload_t).values(
-            team_id=team_id, name=UPLOAD_NAME, source=os.path.relpath(path, BACKEND_DIR),
+            team_id=team_id, name=args.upload_name, source=os.path.relpath(path, BACKEND_DIR),
             item_count=len(fresh), created_at=now).returning(upload_t.c.id)).scalar()
 
         for i in range(0, len(fresh), args.batch):

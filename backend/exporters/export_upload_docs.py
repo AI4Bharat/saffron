@@ -168,15 +168,34 @@ def drive_last_sets_for(language, all_drive):
 
 
 def sync_state_from_drive():
-    """Rewrite the state CSV to mirror the live Drive listing exactly (all languages)."""
+    """Raise the state CSV to match Drive. Never lowers a number.
+
+    The Drive listing is anonymous and therefore partial: it sees only publicly
+    shared files, and a failed listing is warned about rather than raised. So a
+    number coming back smaller than what the CSV already holds means the
+    listing missed something, not that sets disappeared. Taking the max keeps a
+    bad listing from handing the next export a set number already in use.
+    """
     drive_sets = drive_all_last_sets()
     if not drive_sets:
         raise SystemExit("Drive listing returned nothing; state CSV left untouched.")
-    save_state(drive_sets)
-    print(f"State CSV rewritten from Drive: {len(drive_sets)} (language, persona) pairs. "
-          f"-> {STATE_CSV}")
-    for (lang, persona), n in sorted(drive_sets.items()):
-        print(f"  {lang:<10} {persona:<22} last_set = {n}")
+    state = load_state()
+    raised, kept = [], []
+    for key, n in drive_sets.items():
+        have = state.get(key, 0)
+        if n > have:
+            state[key] = n
+            raised.append((key, have, n))
+        elif n < have:
+            kept.append((key, have, n))
+    save_state(state)
+    print(f"State CSV synced with Drive: {len(drive_sets)} pair(s) seen, "
+          f"{len(raised)} raised, {len(kept)} kept ahead of Drive. -> {STATE_CSV}")
+    for (lang, persona), old, new in sorted(raised):
+        print(f"  {lang:<10} {persona:<22} {old} -> {new}")
+    for (lang, persona), have, drv in sorted(kept):
+        print(f"  [kept] {lang:<10} {persona:<22} csv={have} > drive={drv} "
+              f"(listing is anonymous and may not see recent uploads)")
 
 
 def effective_start_sets(language, state, drive_sets):

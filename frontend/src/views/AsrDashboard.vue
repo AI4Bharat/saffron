@@ -183,14 +183,13 @@
       <div v-else-if="tab === 'tasks'" class="tab-pane-active">
         <!-- ── project heads: each kind of work is its own project; everything below is scoped to the selected one ── -->
         <div v-if="projectOptions.length > 1" class="d-flex justify-content-center mb-3">
-          <div class="d-inline-flex flex-wrap justify-content-center gap-2">
+          <div class="tasks-subnav d-inline-flex align-items-center flex-wrap">
             <button v-for="p in projectOptions" :key="p.key" type="button"
-                    class="project-head-btn" :class="{ active: projectTab === p.key }"
+                    :class="['subnav-btn', { active: projectTab === p.key }]"
+                    :title="`${p.count} task${p.count === 1 ? '' : 's'} · ${p.items.toLocaleString()} prompt${p.items === 1 ? '' : 's'}`"
                     @click="projectTab = p.key">
-              <i :class="projectIcon(p.key)"></i>
-              <span class="ph-label">{{ p.label }}</span>
-              <span class="ph-count">{{ p.count }} task{{ p.count === 1 ? '' : 's' }} ·
-                {{ p.items.toLocaleString() }} prompt{{ p.items === 1 ? '' : 's' }}</span>
+              <span>{{ p.label }}</span>
+              <span class="subnav-badge">{{ p.count }}</span>
             </button>
           </div>
         </div>
@@ -901,11 +900,20 @@
 
           <div class="filter-bar border-top border-bottom py-3 mb-3">
             <div class="d-flex flex-wrap gap-2 align-items-center">
-              <select v-model="subFilters.task_id" class="form-select form-select-sm w-auto" @change="loadSubmissions(1)">
+              <select v-model="subTaskPick" class="form-select form-select-sm w-auto"
+                      style="max-width:20rem" title="Project, language, or a single class">
                 <option value="">All tasks</option>
-                <option v-for="t in subMeta.tasks" :key="t.task_id" :value="String(t.task_id)">
-                  #{{ t.task_id }} — {{ t.label }}
-                </option>
+                <optgroup v-if="subTaskProjects.length > 1" label="Whole project">
+                  <option v-for="p in subTaskProjects" :key="p.key" :value="'type:' + p.key">
+                    {{ p.label }} ({{ p.count }})
+                  </option>
+                </optgroup>
+                <optgroup v-for="g in subTaskGroups" :key="g.key" :label="g.label">
+                  <option :value="'lang:' + g.key">All of {{ g.language }} ({{ g.count }})</option>
+                  <option v-for="t in g.tasks" :key="t.task_id" :value="'id:' + t.task_id">
+                    &nbsp;&nbsp;{{ t.klass }}
+                  </option>
+                </optgroup>
               </select>
               <select v-model="subFilters.language" class="form-select form-select-sm w-auto" @change="loadSubmissions(1)">
                 <option value="">All languages</option>
@@ -1811,7 +1819,31 @@
               </div>
             </div>
 
-            <h6 class="fw-bold text-uppercase text-muted text-xs mb-2">Day by day</h6>
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+              <h6 class="fw-bold text-uppercase text-muted text-xs mb-0">Day by day</h6>
+              <div v-if="dayFilterGroups.length" class="d-flex align-items-center gap-1 ms-auto">
+                <label class="text-muted text-xs mb-0" for="day-type-filter">Show</label>
+                <select id="day-type-filter" v-model="dayTypeFilter"
+                        class="form-select form-select-sm" style="width:auto;max-width:20rem">
+                  <option value="">Everything ({{ annotatorRawDays.length }} days)</option>
+                  <optgroup v-if="dayFilterProjects.length > 1" label="Whole project">
+                    <option v-for="p in dayFilterProjects" :key="p.key" :value="'type:' + p.key">
+                      {{ p.label }} ({{ p.completed }})
+                    </option>
+                  </optgroup>
+                  <optgroup v-for="g in dayFilterGroups" :key="g.key" :label="g.label">
+                    <option :value="'lang:' + g.key">All of {{ g.language }} ({{ g.completed }})</option>
+                    <option v-for="t in g.tasks" :key="t.id" :value="'task:' + t.id">
+                      &nbsp;&nbsp;{{ t.klass }} ({{ t.completed }})
+                    </option>
+                  </optgroup>
+                </select>
+              </div>
+            </div>
+            <p v-if="dayTypeFilter" class="text-muted text-xs mb-2">
+              <i class="bi bi-funnel me-1"></i>Counting {{ dayFilterLabel }} only.
+              <a href="#" class="ms-1" @click.prevent="dayTypeFilter = ''">clear</a>
+            </p>
             <div class="table-responsive border rounded mb-3">
               <table class="table table-sm mb-0">
                 <thead class="table-light"><tr><th>Date (IST)</th><th class="text-end">Completed</th><th class="text-end">Flagged</th><th class="text-end">Edited</th><th class="text-end">Hours</th><th style="width:180px"></th></tr></thead>
@@ -2293,6 +2325,12 @@
               <option value="all">Everything in the pool</option>
               <option value="done">Only annotated prompts</option>
             </select>
+            <label class="form-label fw-semibold text-xs text-uppercase text-secondary">Project</label>
+            <select v-model="exportTaskType" class="form-select mb-3">
+              <option value="">All projects</option>
+              <option v-for="p in projectOptions" :key="p.key" :value="p.key">{{ p.label }}</option>
+            </select>
+
             <label class="form-label fw-semibold text-xs text-uppercase text-secondary">Language</label>
             <select v-model="exportLanguage" class="form-select mb-3">
               <option value="">All languages</option>
@@ -2545,7 +2583,77 @@ const subPage = ref(1)
 const subPages = ref(1)
 const subTotal = ref(0)
 const subMeta = ref({ tasks: [], languages: [], classes: [], categories: [], annotators: [] })
-const subFilters = reactive({ task_id: '', language: '', class: '', category: '',
+
+/** Project rows, so the broadest choice is one click away. */
+const subTaskProjects = computed(() => {
+  const seen = {}
+  for (const t of subMeta.value.tasks || []) {
+    const key = t.task_type || 'text-review'
+    const p = seen[key] || (seen[key] = {
+      key, label: t.task_type_label || humanizeType(key), count: 0 })
+    p.count += 1
+  }
+  return Object.values(seen).sort((a, b) => b.count - a.count)
+})
+
+/** One group per project + language, holding that language's classes. */
+const subTaskGroups = computed(() => {
+  const groups = {}
+  for (const t of subMeta.value.tasks || []) {
+    const tt = t.task_type || 'text-review'
+    const lang = t.language || 'Unknown'
+    const key = tt + '|' + lang
+    const g = groups[key] || (groups[key] = {
+      key, type: tt, language: lang,
+      label: (t.task_type_label || humanizeType(tt)) + ' — ' + lang,
+      count: 0, tasks: [],
+    })
+    g.count += 1
+    g.tasks.push({
+      task_id: t.task_id,
+      klass: t.class ? 'Class ' + t.class : (t.label || 'Task ' + t.task_id),
+    })
+  }
+  return Object.values(groups)
+    .map(g => ({ ...g, tasks: g.tasks.sort((a, b) => a.klass.localeCompare(b.klass, undefined, { numeric: true })) }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+})
+
+/** One control, three filters. Reading it rebuilds the encoded value from
+ *  whichever filter is actually set, so it survives a filter reset. */
+const subTaskPick = computed({
+  get() {
+    if (subFilters.task_id) return 'id:' + subFilters.task_id
+    if (subFilters.task_type && subFilters.language) {
+      return 'lang:' + subFilters.task_type + '|' + subFilters.language
+    }
+    if (subFilters.task_type) return 'type:' + subFilters.task_type
+    return ''
+  },
+  set(v) {
+    subFilters.task_id = ''
+    subFilters.task_type = ''
+    if (!v) {
+      // Only clear the language if this control was the thing that set it.
+      if (subTaskPick.value.startsWith('lang:')) subFilters.language = ''
+      loadSubmissions(1)
+      return
+    }
+    const kind = v.slice(0, v.indexOf(':'))
+    const key = v.slice(v.indexOf(':') + 1)
+    if (kind === 'id') {
+      subFilters.task_id = key
+    } else if (kind === 'type') {
+      subFilters.task_type = key
+    } else {
+      const parts = key.split('|')
+      subFilters.task_type = parts[0]
+      subFilters.language = parts[1]
+    }
+    loadSubmissions(1)
+  },
+})
+const subFilters = reactive({ task_id: '', task_type: '', language: '', class: '', category: '',
                               annotator: '', state: 'submitted', difficulty: '',
                               edited: '', flagged: '', changed: '', from: '', to: '', q: '' })
 
@@ -2714,6 +2822,7 @@ function groupSeconds(g) {
 const exportOpen = ref(false)
 const exportFormat = ref('xlsx')
 const exportScope = ref('all')
+const exportTaskType = ref('')
 const exportLanguage = ref('')
 const exportTaskId = ref('')
 const exportCategory = ref('')
@@ -2986,6 +3095,7 @@ async function loadActivityWindow() {
     activityWindow.value = (activityFrom.value || activityTo.value) ? d : null
     todayIst.value = d.today
     windowDays.value = Object.fromEntries(d.raters.map(r => [r.rater_id, r.days]))
+    activityTasks.value = d.tasks || {}
   } catch (e) {
     flash(e.message)
   } finally {
@@ -2993,10 +3103,142 @@ async function loadActivityWindow() {
   }
 }
 
-const annotatorDays = computed(() => {
+/** '' means every task type summed, which is what the day totals already are. */
+const dayTypeFilter = ref('')
+
+/** The name the project tabs use for a task type, so the two agree. */
+function typeLabel(key) {
+  if (!key) return ''
+  return projectOptions.value.find(p => p.key === key)?.label || humanizeType(key)
+}
+
+/** Task id -> {label, task_type}, sent alongside the day rows. */
+const activityTasks = ref({})
+
+function taskLabel(id) {
+  return activityTasks.value[String(id)]?.label || `Task ${id}`
+}
+
+function taskMeta(id) {
+  return activityTasks.value[String(id)] || {}
+}
+
+/** Whole-project rows, so the broadest choice stays one click away. */
+const dayFilterProjects = computed(() => {
+  const seen = {}
+  for (const d of annotatorRawDays.value) {
+    for (const [tt, td] of Object.entries(d.types || {})) {
+      const p = seen[tt] || (seen[tt] = { key: tt, label: typeLabel(tt), completed: 0 })
+      p.completed += td.completed || 0
+    }
+  }
+  return Object.values(seen).sort((a, b) => b.completed - a.completed)
+})
+
+/** One group per project + language, holding that language's classes. Counts
+ *  are included so the biggest chunk of work is easy to spot. */
+const dayFilterGroups = computed(() => {
+  const groups = {}
+  for (const d of annotatorRawDays.value) {
+    for (const [tt, td] of Object.entries(d.types || {})) {
+      for (const [tid, kv] of Object.entries(td.tasks || {})) {
+        const meta = taskMeta(tid)
+        const lang = meta.language || 'Unknown'
+        const key = tt + '|' + lang
+        const g = groups[key] || (groups[key] = {
+          key, type: tt, language: lang,
+          label: typeLabel(tt) + ' — ' + lang, completed: 0, byTask: {},
+        })
+        g.completed += kv.completed || 0
+        const t = g.byTask[tid] || (g.byTask[tid] = {
+          id: tid,
+          klass: meta.class_label ? 'Class ' + meta.class_label : (meta.label || 'Task ' + tid),
+          completed: 0,
+        })
+        t.completed += kv.completed || 0
+      }
+    }
+  }
+  return Object.values(groups)
+    .map(g => ({ ...g, tasks: Object.values(g.byTask).sort((a, b) => b.completed - a.completed) }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+})
+
+const dayFilterLabel = computed(() => {
+  const v = dayTypeFilter.value
+  if (!v) return ''
+  const kind = v.slice(0, v.indexOf(':'))
+  const key = v.slice(v.indexOf(':') + 1)
+  if (kind === 'task') {
+    const m = taskMeta(key)
+    return m.task_type ? typeLabel(m.task_type) + ' — ' + m.label : taskLabel(key)
+  }
+  if (kind === 'lang') {
+    const parts = key.split('|')
+    return typeLabel(parts[0]) + ' — ' + parts[1]
+  }
+  return typeLabel(key)
+})
+
+const annotatorRawDays = computed(() => {
   const id = annotatorModal.value?.annotator?.id
   return id ? (windowDays.value[id] || []) : []
 })
+
+const annotatorDays = computed(() => {
+  const days = annotatorRawDays.value
+  const want = dayTypeFilter.value
+  if (!want) return days
+  const kind = want.slice(0, want.indexOf(':'))
+  const key = want.slice(want.indexOf(':') + 1)
+
+  // Days with no work of the chosen project or task drop out rather than
+  // showing a row of zeroes.
+  const out = []
+  for (const d of days) {
+    let hit = null
+    if (kind === 'type') {
+      hit = (d.types || {})[key]
+    } else if (kind === 'task') {
+      for (const td of Object.values(d.types || {})) {
+        const k = (td.tasks || {})[key]
+        if (k) { hit = k; break }
+      }
+    } else {
+      // A language spans several classes, so its counts are summed.
+      const parts = key.split('|')
+      const wantType = parts[0]
+      const wantLang = parts[1]
+      const sum = { completed: 0, flagged: 0, edited: 0, seconds: 0 }
+      let any = false
+      for (const [tt, td] of Object.entries(d.types || {})) {
+        if (tt !== wantType) continue
+        for (const [tid, kv] of Object.entries(td.tasks || {})) {
+          if ((taskMeta(tid).language || 'Unknown') !== wantLang) continue
+          any = true
+          sum.completed += kv.completed || 0
+          sum.flagged += kv.flagged || 0
+          sum.edited += kv.edited || 0
+          sum.seconds += kv.seconds || 0
+        }
+      }
+      hit = any ? sum : null
+    }
+    if (!hit) continue
+    out.push({
+      date: d.date,
+      completed: hit.completed || 0,
+      flagged: hit.flagged || 0,
+      edited: hit.edited || 0,
+      hours: Math.round(((hit.seconds || 0) / 3600) * 100) / 100,
+      types: d.types,
+    })
+  }
+  return out
+})
+
+// A filter from the previous annotator must not silently hide the next one's work.
+watch(() => annotatorModal.value?.annotator?.id, () => { dayTypeFilter.value = '' })
 
 function dayBarWidth(d) {
   const max = Math.max(1, ...annotatorDays.value.map(x => x.completed + x.flagged))
@@ -3668,6 +3910,7 @@ async function exportSimple(path, filename, label) {
 async function startExport() {
   const body = { team: teamKey.value, format: exportFormat.value }
   if (exportScope.value === 'done') body.only_done = true
+  if (exportTaskType.value) body.task_type = exportTaskType.value
   if (exportLanguage.value) body.language = exportLanguage.value
   if (exportTaskId.value) body.task_id = Number(exportTaskId.value)
   if (exportCategory.value) body.category = exportCategory.value
@@ -3860,18 +4103,6 @@ onBeforeUnmount(() => {
 
 /** Task screens: the same segmented sub-nav, tiles and id badge the TTS dashboard uses, so the two. */
 .preview-modal { max-width: 1100px; width: 96vw; }
-
-.project-head-btn {
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-  min-width: 220px; padding: .65rem 1.25rem; border-radius: .9rem;
-  border: 2px solid #dee2e6; background: #fff; color: #495057;
-  transition: all .15s ease;
-}
-.project-head-btn:hover { border-color: #adb5bd; transform: translateY(-1px); }
-.project-head-btn.active { border-color: #212529; background: #212529; color: #fff; box-shadow: 0 .4rem .9rem rgba(0,0,0,.18); }
-.project-head-btn i { font-size: 1.15rem; }
-.ph-label { font-weight: 700; font-size: .92rem; }
-.ph-count { font-size: .72rem; opacity: .75; }
 
 .tasks-subnav { background: #fff; border: 1px solid #dee2e6; border-radius: 2rem; padding: .25rem; gap: .25rem; }
 .subnav-btn { border: none; background: transparent; color: #6c757d; font-weight: 600; font-size: .86rem;

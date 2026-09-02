@@ -39,6 +39,12 @@ const router = createRouter({
       redirect: '/login',
     },
     {
+      // Reached from the one-time link an admin sends; the token is in the query.
+      path: '/reset-password',
+      name: 'reset-password',
+      component: () => import('@/views/ResetPasswordView.vue'),
+    },
+    {
       path: '/signup',
       name: 'signup',
       component: SignupView,

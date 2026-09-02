@@ -436,3 +436,9 @@ kbd {
   line-height: 1.3;
   box-shadow: 0 2px 0 rgba(15, 23, 42, 0.35);
 }
+
+/* Forgot-password, on the sign-in page */
+.auth-forgot { color: #6c757d; text-decoration: none; }
+.auth-forgot:hover { color: #212529; text-decoration: underline; }
+.forgot-panel { background: #f8f9fa; border: 1px solid #e9ecef;
+                border-radius: .6rem; padding: .85rem; }

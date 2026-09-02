@@ -12,14 +12,16 @@ from application.models import (
 )
 from application.views import token_required, _rater_in_scope, _serialize_team, ORG_NAME
 from application.pool_api import _admin_pool_team
+from sqlalchemy import text
 from application.pool_common import (
+    annotations_target,
     BATCH_SIZES, DIFFICULTIES, FLAG_REASONS, ITEM_STATUSES, STALE_CLAIM_HOURS,
     _ist_day, _today_ist, _ist_stamp,
     _pool_team, _member, _current_rater, _serialize_item, _blank_counts, _with_progress,
     task_counts, task_category_counts, active_assignments, assigned_tasks_for,
     primary_holder, allowed_categories, team_setting, open_items_cap,
     difficulty_required_for, max_annotators_for, task_supports_difficulty,
-    final_label_for, task_type_label, project_annotator_setting,
+    final_label_for, task_type_label, DEFAULT_TASK_TYPE, project_annotator_setting,
     project_annotations_setting,
     language_difficulty_setting, csv_response,
     serialize_task, serialize_assignee, serialize_pull, pull_counts,
@@ -628,6 +630,8 @@ def _submission_query(team, args):
     q = PoolItem.query.filter(PoolItem.team_id == team.id)
     if args.get('task_id', type=int):
         q = q.filter(PoolItem.task_id == args.get('task_id', type=int))
+    if args.get('task_type'):
+        q = q.filter(PoolItem.task_type == args['task_type'])
     if args.get('language'):
         q = q.filter(PoolItem.language == args['language'])
     if args.get('class'):
@@ -748,7 +752,9 @@ def pool_admin_submission_filters(current_user):
 
     return jsonify({
         'tasks': [{'task_id': t.id, 'label': t.label, 'language': t.language,
-                   'class': t.class_label} for t in tasks],
+                   'class': t.class_label,
+                   'task_type': t.task_type or DEFAULT_TASK_TYPE,
+                   'task_type_label': task_type_label(t.task_type)} for t in tasks],
         'languages': sorted({t.language for t in tasks}),
         'classes': sorted({str(t.class_label) for t in tasks if t.class_label},
                           key=lambda c: (len(c), c)),
@@ -849,25 +855,41 @@ def pool_my_workspace(current_user):
     # None = the whole task is theirs; otherwise only these categories are.
     my_cats = {t.id: allowed_categories(assignments) for t, assignments in pairs}
 
-    # --- what is still free in each of my tasks, per category and difficulty (counted only inside the categories this annotator was actually given) ---
+    # --- what is still free in each of my tasks, per category and difficulty ---
+    # Counted with the same rule the pull uses, so the number on screen is what
+    # this annotator can actually take: their categories only, nothing they have
+    # already answered, and only prompts still short of the project's target.
     free_cat, free_diff = {}, {}
     if task_ids:
-        for tid, cat, cnt in db.session.query(
-            PoolItem.task_id, PoolItem.category, func.count(PoolItem.id)
-        ).filter(PoolItem.task_id.in_(task_ids), PoolItem.status == 'available'
-                 ).group_by(PoolItem.task_id, PoolItem.category).all():
-            if my_cats.get(tid) is not None and cat not in my_cats[tid]:
-                continue
-            free_cat.setdefault(tid, {})[cat or 'other'] = cnt
-        for tid, cat, diff, cnt in db.session.query(
-            PoolItem.task_id, PoolItem.category, PoolItem.source_difficulty,
-            func.count(PoolItem.id)
-        ).filter(PoolItem.task_id.in_(task_ids), PoolItem.status == 'available'
-                 ).group_by(PoolItem.task_id, PoolItem.category,
-                            PoolItem.source_difficulty).all():
-            if my_cats.get(tid) is not None and cat not in my_cats[tid]:
-                continue
-            free_diff.setdefault(tid, {}).setdefault(cat or 'other', {})[diff or 'Unset'] = cnt
+        # Tasks may carry different targets, and the target sits inside the
+        # WHERE clause, so tasks are grouped by target and each group scanned
+        # once -- one query in practice, since a team normally uses one target.
+        by_target = {}
+        for t, _ in pairs:
+            by_target.setdefault(annotations_target(team, t), []).append(t.id)
+
+        for target, ids in by_target.items():
+            rows = db.session.execute(text("""
+                SELECT i.task_id, i.category, i.source_difficulty, count(*)
+                  FROM pool_item i
+                 WHERE i.task_id = ANY(:task_ids)
+                   AND (SELECT count(*) FROM pool_annotation a
+                         WHERE a.item_id = i.id
+                           AND a.status IN ('claimed','completed','flagged'))
+                       < :target
+                   AND NOT EXISTS (SELECT 1 FROM pool_annotation mine
+                                    WHERE mine.item_id = i.id
+                                      AND mine.rater_id = :rid)
+                 GROUP BY i.task_id, i.category, i.source_difficulty
+            """), {'task_ids': ids, 'rid': rater.id, 'target': target}).fetchall()
+
+            for tid, cat, diff, cnt in rows:
+                if my_cats.get(tid) is not None and cat not in my_cats[tid]:
+                    continue
+                key = cat or 'other'
+                free_cat.setdefault(tid, {})
+                free_cat[tid][key] = free_cat[tid].get(key, 0) + cnt
+                free_diff.setdefault(tid, {}).setdefault(key, {})[diff or 'Unset'] = cnt
 
     # --- my own numbers inside each task ---
     mine = {}
