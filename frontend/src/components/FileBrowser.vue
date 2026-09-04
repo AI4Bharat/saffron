@@ -20,6 +20,11 @@
         <button class="btn btn-sm btn-outline-primary" @click="newFolder">
           <i class="bi bi-folder-plus me-1"></i>New folder
         </button>
+        <button v-if="files.length" class="btn btn-sm btn-outline-primary"
+                :disabled="bulk.busy" @click="downloadHere">
+          <span v-if="bulk.busy" class="spinner-border spinner-border-sm me-1"></span>
+          <i v-else class="bi bi-download me-1"></i>Download all ({{ files.length }})
+        </button>
         <button class="btn btn-sm btn-primary" :disabled="uploading" @click="pickFiles">
           <span v-if="uploading" class="spinner-border spinner-border-sm me-1"></span>
           <i v-else class="bi bi-upload me-1"></i>Upload
@@ -41,6 +46,18 @@
         </li>
       </ol>
     </nav>
+
+    <div v-if="bulk.busy || bulk.done" class="alert alert-info py-2 px-3 small d-flex align-items-center gap-2">
+      <span v-if="bulk.busy" class="spinner-border spinner-border-sm"></span>
+      <i v-else class="bi bi-check-circle-fill"></i>
+      <span>
+        <template v-if="bulk.busy">Downloading {{ bulk.at }} of {{ bulk.total }}…</template>
+        <template v-else>Started {{ bulk.total }} download(s). Your browser may ask
+          permission to save several files.</template>
+      </span>
+      <button v-if="!bulk.busy" class="btn btn-link btn-sm p-0 ms-auto"
+              @click="bulk.done = false">Dismiss</button>
+    </div>
 
     <div v-if="error" class="alert alert-danger py-2 px-3 small">{{ error }}</div>
     <div v-if="notice" class="alert alert-success py-2 px-3 small">{{ notice }}</div>
@@ -76,10 +93,14 @@
             </td>
             <td class="text-end text-muted">—</td>
             <td class="text-muted">—</td>
-            <td class="text-end">
+            <td class="text-end text-nowrap">
+              <button class="btn btn-sm btn-link p-0 me-2" title="Download everything in this folder"
+                      :disabled="bulk.busy" @click="downloadFolder(f)">
+                <i class="bi bi-download"></i>
+              </button>
               <button class="btn btn-sm btn-link text-danger p-0"
                       title="Delete this folder and everything in it"
-                      @click="remove(f.prefix, f.name, true)">
+                      @click="askDelete(f.prefix, f.name, true)">
                 <i class="bi bi-trash"></i>
               </button>
             </td>
@@ -101,7 +122,7 @@
                 <i class="bi bi-download"></i>
               </button>
               <button class="btn btn-sm btn-link text-danger p-0" title="Delete"
-                      @click="remove(f.key, f.name, false)">
+                      @click="askDelete(f.key, f.name, false)">
                 <i class="bi bi-trash"></i>
               </button>
             </td>
@@ -120,6 +141,45 @@
     <p v-if="truncated" class="text-muted text-xs mt-2 mb-0">
       Showing the first 1,000 entries in this folder.
     </p>
+
+    <!-- Deleting is not undoable, so it takes a deliberate act: the exact name
+         has to be typed before the button turns on. -->
+    <div v-if="del.open" class="fb-backdrop" @click.self="cancelDelete">
+      <div class="fb-dialog">
+        <h5 class="fw-bold text-danger mb-2">
+          <i class="bi bi-exclamation-triangle-fill me-2"></i>
+          Delete {{ del.isFolder ? 'folder' : 'file' }}?
+        </h5>
+        <p class="small mb-2">
+          You are about to permanently delete
+          <strong class="font-monospace">{{ del.name }}</strong>.
+        </p>
+        <div v-if="del.isFolder" class="alert alert-warning py-2 px-3 small">
+          <div v-if="del.counting"><span class="spinner-border spinner-border-sm me-1"></span>
+            Checking what is inside…</div>
+          <div v-else>
+            This removes <strong>{{ del.count }}</strong> file(s),
+            <strong>{{ human(del.bytes) }}</strong> in total, including everything
+            in sub-folders.
+          </div>
+        </div>
+        <p class="small text-muted mb-2">
+          This cannot be undone. Type <strong class="font-monospace">{{ del.name }}</strong>
+          to confirm.
+        </p>
+        <input v-model="del.typed" class="form-control form-control-sm mb-3"
+               :placeholder="del.name" autocomplete="off" spellcheck="false"
+               @keyup.enter="del.typed === del.name && doDelete()">
+        <div class="d-flex justify-content-end gap-2">
+          <button class="btn btn-sm btn-outline-secondary" @click="cancelDelete">Cancel</button>
+          <button class="btn btn-sm btn-danger" :disabled="del.typed !== del.name || del.busy"
+                  @click="doDelete">
+            <span v-if="del.busy" class="spinner-border spinner-border-sm me-1"></span>
+            Delete permanently
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- inline player, so audio can be checked without downloading -->
     <div v-if="playing" class="border rounded p-2 mt-3 d-flex align-items-center gap-2">
@@ -153,6 +213,9 @@ const notice = ref('')
 const fileInput = ref(null)
 const playing = ref(null)
 const playingKey = ref('')
+const bulk = ref({ busy: false, at: 0, total: 0, done: false })
+const del = ref({ open: false, key: '', name: '', isFolder: false, typed: '',
+                  busy: false, counting: false, count: 0, bytes: 0 })
 
 async function call(path, opts = {}) {
   const r = await fetch(`${API_BASE_URL}${path}`, { headers: authHeaders(), ...opts })
@@ -283,17 +346,100 @@ async function play(f) {
   }
 }
 
-async function remove(key, name, isFolder) {
-  const what = isFolder
-    ? `Delete the folder "${name}" and everything inside it? This cannot be undone.`
-    : `Delete "${name}"? This cannot be undone.`
-  if (!window.confirm(what)) return
+function askDelete(key, name, isFolder) {
+  del.value = { open: true, key, name, isFolder, typed: '', busy: false,
+                counting: isFolder, count: 0, bytes: 0 }
+  if (isFolder) countFolder(key)
+}
+
+function cancelDelete() {
+  del.value.open = false
+}
+
+/** What is actually inside, so the dialog can say what will be lost. */
+async function countFolder(prefix) {
+  let count = 0
+  let bytes = 0
+  let cursor = ''
+  try {
+    for (let page = 0; page < 50; page++) {
+      const qs = `prefix=${encodeURIComponent(prefix)}` + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '')
+      const d = await call(`/storage/list?${qs}`)
+      for (const f of d.files || []) { count += 1; bytes += f.size || 0 }
+      // Sub-folders count too: a delete takes the whole prefix.
+      for (const sub of d.folders || []) {
+        const inner = await call(`/storage/list?prefix=${encodeURIComponent(sub.prefix)}`)
+        for (const f of inner.files || []) { count += 1; bytes += f.size || 0 }
+      }
+      if (!d.truncated || !d.cursor) break
+      cursor = d.cursor
+    }
+  } catch (e) {
+    // A count we cannot take must not block the dialog; the warning still stands.
+  }
+  del.value.count = count
+  del.value.bytes = bytes
+  del.value.counting = false
+}
+
+async function doDelete() {
+  if (del.value.typed !== del.value.name) return
+  del.value.busy = true
   error.value = ''
   try {
-    const d = await call(`/storage/object?key=${encodeURIComponent(key)}`, { method: 'DELETE' })
+    const d = await call(`/storage/object?key=${encodeURIComponent(del.value.key)}`,
+                         { method: 'DELETE' })
     notice.value = d.message
+    del.value.open = false
     await load()
     loadUsage()
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    del.value.busy = false
+  }
+}
+
+/** Download every file in a folder, one at a time so the browser keeps up. */
+async function downloadMany(list) {
+  bulk.value = { busy: true, at: 0, total: list.length, done: false }
+  error.value = ''
+  try {
+    for (let i = 0; i < list.length; i++) {
+      bulk.value.at = i + 1
+      try {
+        const d = await call(`/storage/download?key=${encodeURIComponent(list[i].key)}`)
+        const a = document.createElement('a')
+        a.href = d.url
+        a.download = list[i].name
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+      } catch (e) {
+        error.value = `${list[i].name}: ${e.message}`
+      }
+      await new Promise(r => setTimeout(r, 350))
+    }
+  } finally {
+    bulk.value.busy = false
+    bulk.value.done = true
+  }
+}
+
+function downloadHere() {
+  downloadMany(files.value)
+}
+
+async function downloadFolder(f) {
+  error.value = ''
+  try {
+    const d = await call(`/storage/list?prefix=${encodeURIComponent(f.prefix)}`)
+    const list = d.files || []
+    if (!list.length) {
+      error.value = `"${f.name}" has no files directly inside it.`
+      return
+    }
+    downloadMany(list)
   } catch (e) {
     error.value = e.message
   }
@@ -331,6 +477,10 @@ onMounted(() => { load(''); loadUsage() })
 </script>
 
 <style scoped>
+.fb-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.45);
+               display: flex; align-items: center; justify-content: center; z-index: 1080; }
+.fb-dialog { background: #fff; border-radius: .75rem; padding: 1.25rem;
+             width: 100%; max-width: 30rem; box-shadow: 0 1rem 3rem rgba(0,0,0,.3); }
 .drop-hot { outline: 2px dashed #0d6efd; outline-offset: -4px; background: #f8fbff; }
 .breadcrumb-item + .breadcrumb-item::before { content: "/"; }
 </style>

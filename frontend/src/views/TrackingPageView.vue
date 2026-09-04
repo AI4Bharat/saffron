@@ -1185,23 +1185,52 @@
           </div>
 
           <!-- Review progress for the current language selection -->
-          <div v-if="artistStats.artists.length" class="row g-2 mb-3">
+          <!-- Totals for the selected language. Deliberately read from
+               scope_total, so choosing an artist narrows the table below without
+               changing what "total" means up here. -->
+          <div v-if="artistStats.artists.length" class="row g-2 mb-2">
             <div class="col-6 col-md-3">
               <div class="border rounded-3 p-2 h-100 bg-light">
                 <div class="text-muted text-xs text-uppercase fw-bold">Total clips</div>
-                <div class="fs-5 fw-bold text-dark">{{ artistStats.overall.clips || 0 }}</div>
+                <div class="fs-5 fw-bold text-dark">{{ (qualityTotals.clips || 0).toLocaleString() }}</div>
+                <div class="text-muted fs-9">{{ qualityTotals.hours || 0 }} h of audio</div>
               </div>
             </div>
             <div class="col-6 col-md-3">
-              <div class="border rounded-3 p-2 h-100 bg-light">
-                <div class="text-muted text-xs text-uppercase fw-bold">Reviewed</div>
-                <div class="fs-5 fw-bold text-dark">{{ artistStats.overall.total || 0 }}</div>
+              <div class="border rounded-3 p-2 h-100 bg-success-subtle">
+                <div class="text-muted text-xs text-uppercase fw-bold">Accepted</div>
+                <div class="fs-5 fw-bold text-success-emphasis">{{ (qualityTotals.accepted || 0).toLocaleString() }}</div>
+                <div class="text-muted fs-9">{{ qualityTotals.hours_accepted || 0 }} h</div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="border rounded-3 p-2 h-100 bg-danger-subtle">
+                <div class="text-muted text-xs text-uppercase fw-bold">Rejected</div>
+                <div class="fs-5 fw-bold text-danger-emphasis">{{ (qualityTotals.rejected || 0).toLocaleString() }}</div>
+                <div class="text-muted fs-9">{{ qualityTotals.hours_rejected || 0 }} h</div>
               </div>
             </div>
             <div class="col-6 col-md-3">
               <div class="border rounded-3 p-2 h-100 bg-warning-subtle">
                 <div class="text-muted text-xs text-uppercase fw-bold">Pending review</div>
-                <div class="fs-5 fw-bold text-warning-emphasis">{{ artistStats.overall.pending || 0 }}</div>
+                <div class="fs-5 fw-bold text-warning-emphasis">{{ (qualityTotals.pending || 0).toLocaleString() }}</div>
+                <div class="text-muted fs-9">{{ qualityTotals.hours_pending || 0 }} h</div>
+              </div>
+            </div>
+          </div>
+
+          <p class="text-muted fs-9 mb-3">
+            <i class="bi bi-info-circle me-1"></i>
+            Totals cover <strong>{{ qualityLanguage || 'every language' }}</strong>
+            and do not change when a voice artist is selected &mdash; the table below does.
+          </p>
+
+          <div v-if="artistStats.artists.length" class="row g-2 mb-3">
+            <div class="col-6 col-md-3">
+              <div class="border rounded-3 p-2 h-100 bg-light">
+                <div class="text-muted text-xs text-uppercase fw-bold">Reviewed</div>
+                <div class="fs-5 fw-bold text-dark">{{ (artistStats.overall.total || 0).toLocaleString() }}</div>
+                <div class="text-muted fs-9">{{ qualityArtist ? qualityArtist : 'all artists' }}</div>
               </div>
             </div>
             <div class="col-6 col-md-3">
@@ -2955,6 +2984,11 @@ const rawArtistStats = computed(() => {
     all_artists: d.all_artists || [],
   }
 })
+
+/** Language-scoped totals. scope_total ignores the artist filter; older
+ *  payloads without it fall back to overall so nothing breaks mid-deploy. */
+const qualityTotals = computed(() =>
+  artistStats.value?.scope_total || artistStats.value?.overall || {})
 
 const qualityLanguageOptions = computed(() => {
   const d = rawArtistStats.value

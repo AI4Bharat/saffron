@@ -331,7 +331,33 @@ def _allowed_languages(member, team):
 
 # item serialisation
 
-def _serialize_item(it, include_original=True):
+# What an annotator's page is allowed to see of an item's extra_json: the audio
+# to play, the English source a text task shows, and their own saved answer.
+# Anything else on the row is reference data for reporting, not for the rater.
+# NOTE: 'results' is deliberately absent. The copy the item keeps belongs to
+# whoever answered last; only the caller's own answer is added, below.
+RATER_VISIBLE_EXTRA = ('audio', 'source_en')
+
+
+def own_results_map(item_ids, rater_id):
+    """{item_id: that rater's own results} -- what they may be shown of a prompt.
+
+    Several people answer the same prompt, so the copy the item keeps is only
+    the most recent one and belongs to somebody else more often than not.
+    """
+    if not item_ids or not rater_id:
+        return {}
+    # imported here, as the other annotation lookups in this module do, to keep
+    # the module-level import list free of a cycle
+    from application.models import PoolAnnotation
+    rows = PoolAnnotation.query.filter(
+        PoolAnnotation.item_id.in_(list(item_ids)),
+        PoolAnnotation.rater_id == rater_id).all()
+    return {a.item_id: (a.results_json if isinstance(a.results_json, dict) else None,
+                        a.notes) for a in rows}
+
+
+def _serialize_item(it, include_original=True, for_rater=None, own=None):
     out = {
         'id': it.id,
         'task_id': it.task_id,
@@ -352,7 +378,7 @@ def _serialize_item(it, include_original=True):
         'task_type': it.task_type or DEFAULT_TASK_TYPE,
         'task_type_label': task_type_label(it.task_type),
         # Source metadata (audio path, intended scores, ...) plus, after submission, the annotator's 'results' dict for score-based task types.
-        'extra_json': it.extra_json,
+        'extra_json': it.extra_json,   # replaced below when for_rater is set
         'claimed_at': it.claimed_at.isoformat() if it.claimed_at else None,
         'claimed_at_ist': _ist_stamp(it.claimed_at),
         'completed_at': it.completed_at.isoformat() if it.completed_at else None,
@@ -362,6 +388,20 @@ def _serialize_item(it, include_original=True):
     }
     if include_original:
         out['original_text'] = it.text
+    if for_rater is not None:
+        # Only this annotator's own answer travels back to them, and only the
+        # handful of fields the rating page actually reads. Everything else the
+        # row carries -- the reference E/P/S/Pa values, the tagged transcript,
+        # the source paths -- would tell them what to score, so it stays here.
+        mine = (own or {}).get(it.id)
+        bag = dict(out.get('extra_json') or {})
+        bag = {k: v for k, v in bag.items() if k in RATER_VISIBLE_EXTRA}
+        bag.pop('results', None)          # belt and braces: never the shared copy
+        if mine and mine[0]:
+            bag['results'] = mine[0]
+        out['extra_json'] = bag or None
+        out['notes'] = mine[1] if mine else None
+
     return out
 
 
@@ -376,8 +416,15 @@ def _blank_counts(**extra):
 def _with_progress(counts):
     """Add the two derived numbers every table shows, so no caller computes them a slightly different way."""
     counts['done'] = counts['completed'] + counts['flagged']
-    counts['progress'] = (round(100.0 * counts['done'] / counts['total'], 1)
-                          if counts['total'] else 0.0)
+    # A project wanting several answers per prompt carries answers_required;
+    # its progress is answers given against answers wanted, because its prompts
+    # stay open until the last annotator reaches them.
+    required = counts.get('answers_required')
+    if required:
+        counts['progress'] = round(100.0 * counts.get('answers', 0) / required, 1)
+    else:
+        counts['progress'] = (round(100.0 * counts['done'] / counts['total'], 1)
+                              if counts['total'] else 0.0)
     return counts
 
 
@@ -395,8 +442,77 @@ def task_counts(team_id, task_ids=None):
         slot['total'] += cnt
         if status in slot:
             slot[status] += cnt
-    return {k: _with_progress(v) for k, v in out.items()}
+    out = {k: _with_progress(v) for k, v in out.items()}
 
+    # A prompt that wants several answers stays open until the last one, so
+    # closed-prompt progress reads near zero however much work has been done.
+    # Re-base those on answers given; single-answer projects are unaffected.
+    from application.models import PoolTask, Team
+    team = Team.query.get(team_id)
+    tasks = {t.id: t for t in PoolTask.query.filter(
+        PoolTask.id.in_(list(out.keys()))).all()} if out else {}
+    if any(annotations_target(team, t) > 1 for t in tasks.values()):
+        answers = answers_by_task(team_id, list(out.keys()))
+        for tid, slot in out.items():
+            apply_answer_progress(slot, answers.get(tid, 0),
+                                  annotations_target(team, tasks.get(tid)))
+    return out
+
+
+
+def rater_answer_counts(team_id, rater_id, task_ids=None):
+    """{task_id: {'done': n, 'flagged': n, 'claimed': n}} from the rater's own rows.
+
+    A prompt answered by several people keeps only the last answerer on the
+    item, so PoolItem.completed_by cannot say what any one annotator did. Their
+    own annotation rows can.
+    """
+    from application.models import PoolAnnotation
+    q = db.session.query(PoolAnnotation.task_id, PoolAnnotation.status,
+                         func.count(PoolAnnotation.id)).filter(
+        PoolAnnotation.team_id == team_id, PoolAnnotation.rater_id == rater_id)
+    if task_ids is not None:
+        if not task_ids:
+            return {}
+        q = q.filter(PoolAnnotation.task_id.in_(list(task_ids)))
+    out = {}
+    for task_id, status, cnt in q.group_by(PoolAnnotation.task_id,
+                                           PoolAnnotation.status).all():
+        slot = out.setdefault(task_id, {'done': 0, 'flagged': 0, 'claimed': 0})
+        if status == 'completed':
+            slot['done'] += cnt
+        elif status == 'flagged':
+            slot['flagged'] += cnt
+            slot['done'] += cnt
+        elif status == 'claimed':
+            slot['claimed'] += cnt
+    return out
+
+
+def answers_by_task(team_id, task_ids=None):
+    """{task_id: answers submitted} across every annotator."""
+    from application.models import PoolAnnotation
+    q = db.session.query(PoolAnnotation.task_id, func.count(PoolAnnotation.id)).filter(
+        PoolAnnotation.team_id == team_id,
+        PoolAnnotation.status.in_(['completed', 'flagged']))
+    if task_ids is not None:
+        if not task_ids:
+            return {}
+        q = q.filter(PoolAnnotation.task_id.in_(list(task_ids)))
+    return {tid: n for tid, n in q.group_by(PoolAnnotation.task_id).all()}
+
+
+def apply_answer_progress(counts, answers, target):
+    """Re-base a task's progress on answers when a prompt wants more than one.
+
+    With target 1 the two agree, so the single-answer projects are untouched.
+    """
+    if target and target > 1:
+        counts['answers'] = answers
+        counts['answers_required'] = counts['total'] * target
+        counts['progress'] = (round(100.0 * answers / counts['answers_required'], 1)
+                              if counts['answers_required'] else 0.0)
+    return counts
 
 def task_category_counts(team_id, task_ids=None):
     """{task_id: {category: counts}} -- the granularity an annotator pulls at."""
@@ -603,17 +719,21 @@ def my_work_by_task_type(team_id, rater_id):
     """One row per kind of work this annotator has submitted: counts, edits, flags and total time. These are the payment-relevant numbers, shown identically to the annotator and the admin."""
     from sqlalchemy import case
 
+    from application.models import PoolAnnotation
+
+    # One row per answer they gave. On work rated by several people the prompt
+    # records only the last of them, so counting prompts paid at most one.
     ttype = func.coalesce(PoolItem.task_type, 'text-review')
     rows = db.session.query(
         ttype,
-        func.count(PoolItem.id),
-        func.sum(case((PoolItem.status == 'completed', 1), else_=0)),
-        func.sum(case((PoolItem.is_flagged == True, 1), else_=0)),      # noqa: E712
-        func.sum(case((PoolItem.is_edited == True, 1), else_=0)),       # noqa: E712
-        func.sum(func.coalesce(PoolItem.time_taken_ms, 0)),
-    ).filter(
-        PoolItem.team_id == team_id, PoolItem.completed_by == rater_id,
-        PoolItem.status.in_(['completed', 'flagged']),
+        func.count(PoolAnnotation.id),
+        func.sum(case((PoolAnnotation.status == 'completed', 1), else_=0)),
+        func.sum(case((PoolAnnotation.is_flagged == True, 1), else_=0)),   # noqa: E712
+        func.sum(case((PoolAnnotation.is_edited == True, 1), else_=0)),    # noqa: E712
+        func.sum(func.coalesce(PoolAnnotation.time_taken_ms, 0)),
+    ).join(PoolItem, PoolItem.id == PoolAnnotation.item_id).filter(
+        PoolAnnotation.team_id == team_id, PoolAnnotation.rater_id == rater_id,
+        PoolAnnotation.status.in_(['completed', 'flagged']),
     ).group_by(ttype).all()
 
     out = []

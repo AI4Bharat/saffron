@@ -31,6 +31,7 @@ from application.pool_common import (  # noqa: F401  (re-exported for pool_tasks
     valid_mdfs_results, MDFS_DIMENSIONS, annotations_target, refresh_item_state,
     csv_response, serialize_task, serialize_assignee,
     serialize_pull, pull_counts, release_pull_items, release_claims,
+    own_results_map,
     close_finished_pulls,
     _revoke_assignments, release_stale_claims, my_work_by_task_type,
 )
@@ -191,6 +192,10 @@ def pool_pull(current_user):
     # A prompt is offered while it has fewer than this many answers-or-holders, and
     # never twice to the same person, so N annotators means N DIFFERENT annotators.
     target = annotations_target(team, task)
+    # Rating work is handed out shuffled: a run of consecutive ids is one
+    # speaker in one language, and judging twenty of those in a row is exactly
+    # how an ear stops discriminating. Other task types keep a stable order.
+    pick_order = 'random()' if (task.task_type or '') == 'audio-mdfs' else 'i.id'
     try:
         stmt = text(f"""
             INSERT INTO pool_annotation
@@ -211,7 +216,7 @@ def pool_pull(current_user):
                                            WHERE mine.item_id = i.id
                                              AND mine.rater_id = :rid)
                           {extra_sql}
-                    ORDER BY i.id
+                    ORDER BY {pick_order}
                     LIMIT :n {row_lock}) picked
         """)
         for name in expanding:
@@ -237,9 +242,12 @@ def pool_pull(current_user):
         app.logger.error(f"pool_pull failed: {e}")
         return jsonify({'message': 'Could not fetch work right now. Please try again.'}), 500
 
-    items = PoolItem.query.filter(PoolItem.id.in_(
-        db.session.query(PoolAnnotation.item_id).filter_by(pull_id=pull_id)
-    )).order_by(PoolItem.id).all()
+    # In the order they were picked: the annotation rows were written as the
+    # pick produced them, so this keeps a shuffled batch shuffled. Sorting by
+    # item id here would put a rating batch back into speaker runs.
+    items = PoolItem.query.join(
+        PoolAnnotation, PoolAnnotation.item_id == PoolItem.id
+    ).filter(PoolAnnotation.pull_id == pull_id).order_by(PoolAnnotation.id).all()
     what = task.label + (f' · {category}' if category else '') + \
            (f' · {difficulty}' if difficulty else '')
     return jsonify({
@@ -252,7 +260,10 @@ def pool_pull(current_user):
         'category': category or None,
         'difficulty': difficulty or None,
         'pull_id': pull_id,
-        'items': [_serialize_item(i) for i in items],
+        # for_rater: an annotator gets their own answer back, never anyone else's
+        'items': [_serialize_item(i, for_rater=rater.id,
+                                  own=own_results_map([x.id for x in items], rater.id))
+                  for i in items],
     }), 200
 
 
@@ -266,27 +277,33 @@ def pool_my_items(current_user):
         return jsonify({'items': []}), 200
 
     scope = (request.args.get('scope') or 'open').lower()
-    q = PoolItem.query.filter(PoolItem.team_id == team.id)
+    # Driven by this annotator's own rows. The item records only the last
+    # person to claim, pull or complete it, so on work rated by several people
+    # it cannot say what any one of them is holding.
+    q = PoolItem.query.join(
+        PoolAnnotation, PoolAnnotation.item_id == PoolItem.id
+    ).filter(PoolItem.team_id == team.id, PoolAnnotation.rater_id == rater.id)
     # Narrow to one pull or one task when the annotator opened a specific slice.
     if request.args.get('pull_id'):
-        q = q.filter(PoolItem.pull_id == request.args['pull_id'])
+        q = q.filter(PoolAnnotation.pull_id == request.args['pull_id'])
     if request.args.get('task_id', type=int):
-        q = q.filter(PoolItem.task_id == request.args.get('task_id', type=int))
+        q = q.filter(PoolAnnotation.task_id == request.args.get('task_id', type=int))
     if scope == 'done':
-        q = q.filter(PoolItem.completed_by == rater.id,
-                     PoolItem.status.in_(['completed', 'flagged']))
-        q = q.order_by(PoolItem.completed_at.desc())
+        q = q.filter(PoolAnnotation.status.in_(['completed', 'flagged']))
+        q = q.order_by(PoolAnnotation.completed_at.desc())
         limit = min(int(request.args.get('limit', 200)), 1000)
         items = q.limit(limit).all()
     else:
-        q = q.filter(PoolItem.claimed_by == rater.id, PoolItem.status == 'claimed')
-        items = q.order_by(PoolItem.id).all()
+        # In the order they were handed out, so a shuffled batch stays shuffled.
+        q = q.filter(PoolAnnotation.status == 'claimed')
+        items = q.order_by(PoolAnnotation.id).all()
 
     # Whether each prompt needs a difficulty label (admin-controlled per language/class/category).
     tasks = {t.id: t for t in PoolTask.query.filter_by(team_id=team.id).all()}
+    own = own_results_map([i.id for i in items], rater.id)
     out = []
     for i in items:
-        d = _serialize_item(i)
+        d = _serialize_item(i, for_rater=rater.id, own=own)
         d['need_difficulty'] = difficulty_required_for(team, tasks.get(i.task_id), i.category)
         out.append(d)
     return jsonify({'items': out, 'count': len(items)}), 200
@@ -431,7 +448,9 @@ def pool_submit(current_user):
     remaining = db.session.query(func.count(PoolItem.id)).filter(
         PoolItem.team_id == item.team_id, PoolItem.claimed_by == rater.id,
         PoolItem.status == 'claimed').scalar() or 0
-    return jsonify({'message': 'Saved', 'item': _serialize_item(item),
+    return jsonify({'message': 'Saved',
+                    'item': _serialize_item(item, for_rater=rater.id,
+                                            own=own_results_map([item.id], rater.id)),
                     'remaining_in_batch': remaining}), 200
 
 
@@ -510,12 +529,15 @@ def pool_my_stats(current_user):
     if not (team and rater):
         return jsonify({'enabled': False}), 200
 
+    # Their own annotation rows, not the prompts: a prompt rated by three
+    # people records only the last of them and stays open until the third
+    # answer, so counting prompts shows an MDFS annotator almost nothing.
     rows = db.session.query(
-        PoolItem.language, PoolItem.status, func.count(PoolItem.id)
-    ).filter(PoolItem.team_id == team.id,
-             db.or_(PoolItem.claimed_by == rater.id,
-                    PoolItem.completed_by == rater.id)
-             ).group_by(PoolItem.language, PoolItem.status).all()
+        PoolItem.language, PoolAnnotation.status, func.count(PoolAnnotation.id)
+    ).join(PoolItem, PoolItem.id == PoolAnnotation.item_id
+           ).filter(PoolAnnotation.team_id == team.id,
+                    PoolAnnotation.rater_id == rater.id
+                    ).group_by(PoolItem.language, PoolAnnotation.status).all()
 
     by_lang = {}
     for lang, status, cnt in rows:
@@ -524,16 +546,18 @@ def pool_my_stats(current_user):
         if status in slot:
             slot[status] = cnt
 
-    for lang, cnt in db.session.query(PoolItem.language, func.count(PoolItem.id)).filter(
-        PoolItem.completed_by == rater.id, PoolItem.is_edited == True  # noqa: E712
-    ).group_by(PoolItem.language).all():
+    for lang, cnt in db.session.query(PoolItem.language, func.count(PoolAnnotation.id)).join(
+        PoolItem, PoolItem.id == PoolAnnotation.item_id
+    ).filter(PoolAnnotation.rater_id == rater.id,
+             PoolAnnotation.is_edited == True  # noqa: E712
+             ).group_by(PoolItem.language).all():
         if lang in by_lang:
             by_lang[lang]['edited'] = cnt
 
     daily = {}
     since = datetime.utcnow() - timedelta(days=31)
-    for (ts,) in db.session.query(PoolItem.completed_at).filter(
-        PoolItem.completed_by == rater.id, PoolItem.completed_at >= since
+    for (ts,) in db.session.query(PoolAnnotation.completed_at).filter(
+        PoolAnnotation.rater_id == rater.id, PoolAnnotation.completed_at >= since
     ).all():
         d = _ist_day(ts)
         if d:
@@ -1226,11 +1250,16 @@ def pool_admin_annotator(current_user, rater_id):
     totals = {'completed': 0, 'flagged': 0, 'claimed': 0, 'edited': 0,
               'difficulty_changed': 0, 'seconds': 0.0}
     by_language = {}
+    # Their own answers: a prompt wanting three of them keeps only the last
+    # answerer, so counting prompts credits at most one of the three.
     for lang, klass, status, cnt in db.session.query(
-        PoolItem.language, PoolItem.class_label, PoolItem.status, func.count(PoolItem.id)
-    ).filter(PoolItem.team_id == team.id,
-             db.or_(PoolItem.completed_by == rater_id, PoolItem.claimed_by == rater_id)
-             ).group_by(PoolItem.language, PoolItem.class_label, PoolItem.status).all():
+        PoolItem.language, PoolItem.class_label, PoolAnnotation.status,
+        func.count(PoolAnnotation.id)
+    ).join(PoolItem, PoolItem.id == PoolAnnotation.item_id
+           ).filter(PoolAnnotation.team_id == team.id,
+                    PoolAnnotation.rater_id == rater_id
+                    ).group_by(PoolItem.language, PoolItem.class_label,
+                               PoolAnnotation.status).all():
         L = by_language.setdefault(lang, {'language': lang, 'completed': 0, 'flagged': 0,
                                           'claimed': 0, 'classes': {}})
         K = L['classes'].setdefault(str(klass or '-'), {'class': str(klass or '-'),
@@ -1245,20 +1274,22 @@ def pool_admin_annotator(current_user, rater_id):
     for lang in by_language.values():
         lang['classes'] = sorted(lang['classes'].values(), key=lambda k: k['class'])
 
-    totals['edited'] = db.session.query(func.count(PoolItem.id)).filter(
-        PoolItem.team_id == team.id, PoolItem.completed_by == rater_id,
-        PoolItem.is_edited == True).scalar() or 0            # noqa: E712
+    totals['edited'] = db.session.query(func.count(PoolAnnotation.id)).filter(
+        PoolAnnotation.team_id == team.id, PoolAnnotation.rater_id == rater_id,
+        PoolAnnotation.is_edited == True).scalar() or 0      # noqa: E712
     totals['difficulty_changed'] = db.session.query(func.count(PoolItem.id)).filter(
         PoolItem.team_id == team.id, PoolItem.completed_by == rater_id,
         PoolItem.final_difficulty.isnot(None), PoolItem.source_difficulty.isnot(None),
         PoolItem.final_difficulty != PoolItem.source_difficulty).scalar() or 0
-    secs = db.session.query(func.sum(PoolItem.time_taken_ms)).filter(
-        PoolItem.team_id == team.id, PoolItem.completed_by == rater_id).scalar() or 0
+    secs = db.session.query(func.sum(PoolAnnotation.time_taken_ms)).filter(
+        PoolAnnotation.team_id == team.id,
+        PoolAnnotation.rater_id == rater_id).scalar() or 0
     totals['seconds'] = round(secs / 1000.0, 1)
 
     categories = {c or 'other': n for c, n in db.session.query(
-        PoolItem.category, func.count(PoolItem.id)).filter(
-        PoolItem.team_id == team.id, PoolItem.completed_by == rater_id
+        PoolItem.category, func.count(PoolAnnotation.id)).join(
+        PoolItem, PoolItem.id == PoolAnnotation.item_id).filter(
+        PoolAnnotation.team_id == team.id, PoolAnnotation.rater_id == rater_id
     ).group_by(PoolItem.category).all()}
     difficulties = {d or 'Unset': n for d, n in db.session.query(
         PoolItem.final_difficulty, func.count(PoolItem.id)).filter(
@@ -1266,9 +1297,9 @@ def pool_admin_annotator(current_user, rater_id):
         PoolItem.status == 'completed').group_by(PoolItem.final_difficulty).all()}
 
     daily = {}
-    for (ts,) in db.session.query(PoolItem.completed_at).filter(
-        PoolItem.team_id == team.id, PoolItem.completed_by == rater_id,
-        PoolItem.completed_at >= datetime.utcnow() - timedelta(days=31)).all():
+    for (ts,) in db.session.query(PoolAnnotation.completed_at).filter(
+        PoolAnnotation.team_id == team.id, PoolAnnotation.rater_id == rater_id,
+        PoolAnnotation.completed_at >= datetime.utcnow() - timedelta(days=31)).all():
         d = _ist_day(ts)
         if d:
             daily[d] = daily.get(d, 0) + 1
@@ -1281,24 +1312,27 @@ def pool_admin_annotator(current_user, rater_id):
     tasks = {t.id: t for t in PoolTask.query.filter_by(team_id=team.id).all()}
     mine_tasks = {}
     for tid, status, cnt in db.session.query(
-        PoolItem.task_id, PoolItem.status, func.count(PoolItem.id)
-    ).filter(PoolItem.team_id == team.id, PoolItem.task_id.isnot(None),
-             db.or_(PoolItem.completed_by == rater_id, PoolItem.claimed_by == rater_id)
-             ).group_by(PoolItem.task_id, PoolItem.status).all():
+        PoolAnnotation.task_id, PoolAnnotation.status, func.count(PoolAnnotation.id)
+    ).filter(PoolAnnotation.team_id == team.id, PoolAnnotation.task_id.isnot(None),
+             PoolAnnotation.rater_id == rater_id
+             ).group_by(PoolAnnotation.task_id, PoolAnnotation.status).all():
         slot = mine_tasks.setdefault(tid, _blank_counts(task_id=tid))
         slot['total'] += cnt
         if status in slot:
             slot[status] += cnt
     for tid, secs, last in db.session.query(
-        PoolItem.task_id, func.sum(PoolItem.time_taken_ms), func.max(PoolItem.completed_at)
-    ).filter(PoolItem.team_id == team.id, PoolItem.completed_by == rater_id,
-             PoolItem.task_id.isnot(None)).group_by(PoolItem.task_id).all():
+        PoolAnnotation.task_id, func.sum(PoolAnnotation.time_taken_ms),
+        func.max(PoolAnnotation.completed_at)
+    ).filter(PoolAnnotation.team_id == team.id, PoolAnnotation.rater_id == rater_id,
+             PoolAnnotation.task_id.isnot(None)).group_by(PoolAnnotation.task_id).all():
         if tid in mine_tasks:
             mine_tasks[tid]['hours'] = round((secs or 0) / 3600000.0, 2)
             mine_tasks[tid]['last_active_ist'] = _ist_stamp(last)
-    for tid, cnt in db.session.query(PoolItem.task_id, func.count(PoolItem.id)).filter(
-            PoolItem.team_id == team.id, PoolItem.completed_by == rater_id,
-            PoolItem.is_edited == True).group_by(PoolItem.task_id).all():   # noqa: E712
+    for tid, cnt in db.session.query(
+            PoolAnnotation.task_id, func.count(PoolAnnotation.id)).filter(
+            PoolAnnotation.team_id == team.id, PoolAnnotation.rater_id == rater_id,
+            PoolAnnotation.is_edited == True).group_by(
+            PoolAnnotation.task_id).all():                       # noqa: E712
         if tid in mine_tasks:
             mine_tasks[tid]['edited'] = cnt
 

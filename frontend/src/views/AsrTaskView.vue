@@ -19,7 +19,7 @@
             <div class="input-group mb-3 search-box">
               <span class="input-group-text bg-light border-0 text-muted"><i class="bi bi-search"></i></span>
               <input v-model="searchQuery" type="text" class="form-control bg-light border-0 shadow-none fs-7"
-                     placeholder="Search prompts..." />
+                     placeholder="Search tasks..." />
               <button v-if="searchQuery" class="btn btn-light border-0 text-muted" @click="searchQuery = ''">
                 <i class="bi bi-x-lg"></i>
               </button>
@@ -37,7 +37,7 @@
                     <span v-else class="status-indicator bg-secondary-subtle border text-muted">{{ task.originalIndex + 1 }}</span>
                   </div>
                   <div class="text-truncate flex-grow-1">
-                    <div class="task-title fw-semibold text-truncate text-dark">Prompt #{{ task.originalIndex + 1 }}</div>
+                    <div class="task-title fw-semibold text-truncate text-dark">Task #{{ task.originalIndex + 1 }}</div>
                     <div class="task-id-line text-truncate"><i class="bi bi-hash"></i>ID: {{ task.id }}</div>
                     <span class="task-desc text-muted d-block text-truncate" :dir="rtl(task.language) ? 'rtl' : 'ltr'">
                       {{ trim(task.text, 40) }}
@@ -67,7 +67,7 @@
           <div class="card-body py-3 px-4">
             <div class="d-flex justify-content-between align-items-center mb-2">
               <span class="fw-semibold text-dark">
-                Prompt {{ currentIndex + 1 }} of {{ items.length }}
+                Task {{ currentIndex + 1 }} of {{ items.length }}
                 <span class="text-muted fw-normal">· {{ doneCount }} finished this batch</span>
               </span>
               <span class="badge bg-primary-subtle text-primary rounded-pill px-3">{{ progressPct }}%</span>
@@ -273,7 +273,9 @@
                         :disabled="saving || !canSubmit" @click="submit(false)">
                   <span v-if="saving" class="spinner-border spinner-border-sm"></span>
                   <i v-else class="bi bi-cloud-arrow-up-fill"></i>
-                  {{ saving ? 'Saving…' : (items.length === 1 ? 'Submit & Finish' : 'Submit & Next') }}
+                  {{ saving ? 'Saving…'
+                     : current?.done ? 'Already submitted'
+                     : (allDone ? 'Submit & Finish' : 'Submit & Next') }}
                 </button>
               </div>
             </div>
@@ -368,18 +370,37 @@ const needDifficulty = computed(() => {
     ? it.need_difficulty !== false
     : teamNeedDifficulty.value
 })
-const canSubmit = computed(() => isMdfs.value
-  ? mdfsComplete.value
-  : !!draftText.value.trim() && (!needDifficulty.value || !!draftDifficulty.value))
+const canSubmit = computed(() => {
+  // A task already submitted in this batch is not offered again; the server
+  // would refuse a second answer anyway.
+  if (current.value?.done) return false
+  return isMdfs.value
+    ? mdfsComplete.value
+    : !!draftText.value.trim() && (!needDifficulty.value || !!draftDifficulty.value)
+})
 const progressPct = computed(() =>
   batchTotal.value ? Math.round(100 * doneCount.value / batchTotal.value) : 0)
 
 const filteredTasks = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
   return items.value
-    .map((it, i) => ({ ...it, originalIndex: i, done: false }))
+    // `done` is set when the task is submitted, so the list ticks off as you go
+    .map((it, i) => ({ ...it, originalIndex: i, done: !!it.done }))
     .filter(t => !q || String(t.id).includes(q) || (t.text || '').toLowerCase().includes(q))
 })
+
+/** The next task still to do, starting after the current one and wrapping. */
+function nextUnfinished(from) {
+  const n = items.value.length
+  for (let step = 1; step <= n; step++) {
+    const i = (from + step) % n
+    if (!items.value[i]?.done) return i
+  }
+  return -1
+}
+
+const allDone = computed(() =>
+  items.value.length > 0 && items.value.every(it => it.done))
 
 const RTL_LANGUAGES = ['urdu', 'arabic', 'sindhi', 'kashmiri']
 function rtl(lang) { return RTL_LANGUAGES.includes(String(lang || '').toLowerCase()) }
@@ -466,11 +487,21 @@ async function submit(flagged) {
             + 'Please tell the admin before rating more clips.')
       return
     }
-    items.value.splice(currentIndex.value, 1)
+    // Keep the task in the list and mark it finished, so the sidebar ticks it
+    // off rather than the row disappearing and renumbering everything below.
+    const finished = { ...items.value[currentIndex.value], done: true }
+    items.value.splice(currentIndex.value, 1, finished)
     doneCount.value += 1
-    if (currentIndex.value >= items.value.length) currentIndex.value = Math.max(0, items.value.length - 1)
+
+    const nxt = nextUnfinished(currentIndex.value)
+    if (nxt >= 0) {
+      currentIndex.value = nxt
+      shownAt = Date.now()
+    }
     loadDraft()
-    toast.value = flagged ? 'Flagged' : 'Saved'
+    toast.value = allDone.value
+      ? 'That is the whole batch finished'
+      : (flagged ? 'Flagged — next task' : 'Saved — next task')
     setTimeout(() => (toast.value = ''), 1800)
   } catch (e) {
     alert(e.message)

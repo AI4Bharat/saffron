@@ -1192,6 +1192,12 @@
         </div>
       </div>
 
+      <div v-else-if="tab === 'mdfs'" class="tab-pane-active">
+        <div class="bg-white p-4 rounded shadow-sm border">
+          <MdfsScores :team-key="teamKey" />
+        </div>
+      </div>
+
       <!-- ══════════════════ ADMIN ══════════════════ -->
       <div v-else-if="tab === 'admin'" class="tab-pane-active">
         <div class="row g-4">
@@ -2406,6 +2412,7 @@
 import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, authToken, session } from '@/session'
+import MdfsScores from '@/components/MdfsScores.vue'
 import MdfsEvaluation from '@/components/MdfsEvaluation.vue'
 import { API_BASE_URL } from '@/config'
 import DiffToggle from '@/components/DiffToggle.vue'
@@ -2416,7 +2423,7 @@ const teamKey = computed(() =>
   String(route.params.team || session.team?.key || 'asr').toLowerCase())
 
 // Same icons the TTS dashboard uses for the same ideas, so the two read as one product.
-const tabs = [
+const ALL_TABS = [
   { key: 'overview',    label: 'Overview',    icon: 'bi-grid-1x2-fill', hint: 'Key numbers and language stats' },
   { key: 'tasks',       label: 'Tasks',       icon: 'bi-list-task',     hint: 'Every task, who holds it, how far along it is' },
   { key: 'annotators',  label: 'Annotators',  icon: 'bi-people-fill',   hint: 'Assign tasks, message & manage annotators' },
@@ -2424,6 +2431,13 @@ const tabs = [
   { key: 'activity',    label: 'Activity',    icon: 'bi-clock-history', hint: 'Everything that happened, with timestamps' },
   { key: 'admin',       label: 'Admin',       icon: 'bi-gear-fill',     hint: 'Signup PIN, reports and maintenance' },
 ]
+// The MDFS tab is only worth showing where MDFS work exists.
+const tabs = computed(() => hasMdfs.value
+  ? [...ALL_TABS.slice(0, -1),
+     { key: 'mdfs', label: 'MDFS scores', icon: 'bi-sliders',
+       hint: 'Every fluency rating, per annotator, with export' },
+     ALL_TABS[ALL_TABS.length - 1]]
+  : ALL_TABS)
 const tab = ref('overview')
 
 const loading = ref(false)
@@ -3361,6 +3375,10 @@ async function loadTasks() {
 
 // ── project heads: each kind of work (task_type) is its own project; the whole tasks tab is scoped to one at a time ──
 const projectTab = ref('')
+/** Only offer the MDFS tab where there is MDFS work to look at. */
+const hasMdfs = computed(() =>
+  (tasks.value || []).some(t => (t.task_type || '') === 'audio-mdfs'))
+
 const projectOptions = computed(() => {
   const seen = {}
   for (const t of tasks.value) {

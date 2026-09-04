@@ -13,7 +13,9 @@ import logging
 from logging.handlers import RotatingFileHandler
 from flask_caching import Cache
 
-random.seed(42)
+# Deliberately not seeded: a fixed seed gave every worker the same stream.
+# random.seed() with no argument reseeds from OS entropy.
+random.seed()
 
 cache_config = {
     'CACHE_TYPE': 'filesystem',  # More persistent than SimpleCache
@@ -1870,7 +1872,14 @@ def export_tasks_csv(current_user):
     version = request.args.get('version') or None
     test_type = request.args.get('test_type') or None
     tests = _scoped_tests(_request_team_id(current_user), Test.query.order_by(Test.id)).all()
-    csv_text = admin_reports.tasks_export_csv(tests, test_type=test_type, version=version)
+    # Audio-segmentation rows carry their hours, which needs the reviews.
+    ratings_by_test = {}
+    if any(t.test_type == 'audio-segmentation' for t in tests):
+        for r in Rating.query.yield_per(5000):
+            ratings_by_test.setdefault(r.test_id, []).append(r)
+    csv_text = admin_reports.tasks_export_csv(tests, test_type=test_type,
+                                              version=version,
+                                              ratings_by_test=ratings_by_test)
     fname = "tasks_export"
     if test_type:
         fname += f"_{test_type}"
@@ -3685,3 +3694,4 @@ from application import pool_api  # noqa: E402,F401
 from application import pool_tasks  # noqa: E402,F401
 from application import password_reset  # noqa: E402,F401
 from application import storage_api  # noqa: E402,F401
+from application import mdfs_scores  # noqa: E402,F401

@@ -2,8 +2,10 @@
 """admin_reports.py — admin dashboard reporting helpers."""
 import csv
 import io
+import json
 import os
 import re
+import wave
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 AUDIO_DIR = os.path.join(BACKEND_DIR, "audio_segmentation")
@@ -29,6 +31,58 @@ def retired_reasons_of(results_json):
 
 def reason_label(slug):
     return str(slug).replace('_', ' ').title()
+
+
+_DUR_CACHE_PATH = os.path.join(BACKEND_DIR, "state", "wav_durations.json")
+_DUR_CACHE = None
+
+
+def _load_duration_cache():
+    """{relpath: [mtime, seconds]}, kept on disk so the headers are read once."""
+    global _DUR_CACHE
+    if _DUR_CACHE is None:
+        try:
+            with open(_DUR_CACHE_PATH, encoding="utf-8") as fh:
+                _DUR_CACHE = json.load(fh)
+        except Exception:
+            _DUR_CACHE = {}
+    return _DUR_CACHE
+
+
+def _save_duration_cache():
+    if not _DUR_CACHE:
+        return
+    try:
+        os.makedirs(os.path.dirname(_DUR_CACHE_PATH), exist_ok=True)
+        tmp = _DUR_CACHE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(_DUR_CACHE, fh)
+        os.replace(tmp, _DUR_CACHE_PATH)
+    except Exception:
+        pass                      # a cache that cannot be written is not fatal
+
+
+def _clip_seconds(rel):
+    """Length of one clip in seconds; 0.0 when it cannot be read."""
+    if not rel:
+        return 0.0
+    cache = _load_duration_cache()
+    path = os.path.join(AUDIO_DIR, rel)
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return 0.0
+    hit = cache.get(rel)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    try:
+        with wave.open(path, "rb") as w:
+            rate = w.getframerate()
+            dur = w.getnframes() / float(rate) if rate else 0.0
+    except Exception:
+        dur = 0.0
+    cache[rel] = [mtime, dur]
+    return dur
 
 
 def _set_dir_of(entries):
@@ -63,14 +117,22 @@ def _batch_language(entries):
 
 def _empty_bucket():
     return {"clips": 0, "total": 0, "accepted": 0, "rejected": 0,
-            "pending": 0, "batch_count": 0, "_reasons": {}}
+            "pending": 0, "batch_count": 0, "_reasons": {},
+            "secs": 0.0, "secs_accepted": 0.0, "secs_rejected": 0.0,
+            "secs_pending": 0.0}
 
 
 def _merge_bucket(dst, src):
     for k in ("clips", "total", "accepted", "rejected", "pending", "batch_count"):
         dst[k] += src[k]
+    for k in ("secs", "secs_accepted", "secs_rejected", "secs_pending"):
+        dst[k] = dst.get(k, 0.0) + src.get(k, 0.0)
     for slug, cnt in src["_reasons"].items():
         dst["_reasons"][slug] = dst["_reasons"].get(slug, 0) + cnt
+
+
+def _hours(sec):
+    return round((sec or 0.0) / 3600.0, 2)
 
 
 def _finish_bucket(b):
@@ -98,6 +160,10 @@ def _finish_bucket(b):
         "rejection_rate": round(100.0 * b["rejected"] / b["total"], 1) if b["total"] else 0.0,
         "pending_rate": round(100.0 * b["pending"] / b["clips"], 1) if b["clips"] else 0.0,
         "reviewed_rate": round(100.0 * (b["clips"] - b["pending"]) / b["clips"], 1) if b["clips"] else 0.0,
+        "hours": _hours(b.get("secs")),
+        "hours_accepted": _hours(b.get("secs_accepted")),
+        "hours_rejected": _hours(b.get("secs_rejected")),
+        "hours_pending": _hours(b.get("secs_pending")),
         "reasons": reasons,
     }
 
@@ -122,6 +188,9 @@ def artist_rejection_stats(tests, ratings_by_test, language=None, artist=None):
     per_artist = {}
     lang_seen = {}          # every language present, even when filtered out
     artist_seen = {}        # every artist present, even when filtered out
+    # Choosing an artist should narrow the per-artist table, not redefine the
+    # headline totals -- those follow the language filter alone.
+    scope = _empty_bucket()
 
     for test in tests:
         if test.test_type != "audio-segmentation":
@@ -135,14 +204,16 @@ def artist_rejection_stats(tests, ratings_by_test, language=None, artist=None):
         artist_seen[artist_name.lower()] = artist_name
         if want_lang and language_name.lower() != want_lang:
             continue
+        in_scope = True                    # passed the language filter above
         if want_artist and artist_name.lower() != want_artist:
-            continue
+            in_scope = False
 
         clips = len(entries)
         b_acc = b_rej = 0
         b_reasons = {}
         reviewed_ids = set()
 
+        accepted_ids, rejected_ids = set(), set()
         for r in ratings_by_test.get(test.id, []):
             if not (r.page_no_progress and r.completion_status in ("completed", "skipped")):
                 continue
@@ -151,9 +222,11 @@ def artist_rejection_stats(tests, ratings_by_test, language=None, artist=None):
             if ev == "accept":
                 b_acc += 1
                 reviewed_ids.add(str(r.page_no_progress))
+                accepted_ids.add(str(r.page_no_progress))
             elif ev == "reject":
                 b_rej += 1
                 reviewed_ids.add(str(r.page_no_progress))
+                rejected_ids.add(str(r.page_no_progress))
                 for slug in _reasons_of(rj):
                     b_reasons[slug] = b_reasons.get(slug, 0) + 1
 
@@ -161,6 +234,36 @@ def artist_rejection_stats(tests, ratings_by_test, language=None, artist=None):
         # A clip counts as pending until somebody has reviewed it; two annotators reviewing the same clip must not make it look like two clips are done.
         b_pending = max(0, clips - len(reviewed_ids))
         if not clips and not b_total:
+            continue
+
+        # Durations, attributed the same way the counts are. Read from the WAV
+        # headers via a disk cache, so this costs nothing after the first call.
+        secs_acc = secs_rej = secs_pend = 0.0
+        for e in entries:
+            rel = (e or {}).get("audio_filename") or ""
+            eid = str((e or {}).get("id") or "")
+            d = _clip_seconds(rel)
+            if eid in accepted_ids:
+                secs_acc += d
+            elif eid in rejected_ids:
+                secs_rej += d
+            elif eid not in reviewed_ids:
+                secs_pend += d
+        secs_all = secs_acc + secs_rej + secs_pend
+
+        # The headline figures follow the language, whatever artist is selected.
+        scope["clips"] += clips
+        scope["total"] += b_total
+        scope["accepted"] += b_acc
+        scope["rejected"] += b_rej
+        scope["pending"] += b_pending
+        scope["batch_count"] += 1
+        scope["secs"] += secs_all
+        scope["secs_accepted"] += secs_acc
+        scope["secs_rejected"] += secs_rej
+        scope["secs_pending"] += secs_pend
+
+        if not in_scope:
             continue
 
         a = per_artist.setdefault(artist_name, {"artist": artist_name, "batches": [], "langs": {}})
@@ -171,6 +274,10 @@ def artist_rejection_stats(tests, ratings_by_test, language=None, artist=None):
         bucket["rejected"] += b_rej
         bucket["pending"] += b_pending
         bucket["batch_count"] += 1
+        bucket["secs"] += secs_all
+        bucket["secs_accepted"] += secs_acc
+        bucket["secs_rejected"] += secs_rej
+        bucket["secs_pending"] += secs_pend
         for slug, cnt in b_reasons.items():
             bucket["_reasons"][slug] = bucket["_reasons"].get(slug, 0) + cnt
 
@@ -215,9 +322,14 @@ def artist_rejection_stats(tests, ratings_by_test, language=None, artist=None):
         (dict(_finish_bucket(b), language=lang) for lang, b in per_language.items()),
         key=lambda x: x["language"],
     )
+    # Persist anything newly measured, so the next request reads no headers.
+    _save_duration_cache()
+
     return {
         "artists": artists,
         "overall": _finish_bucket(overall),
+        # Totals for the chosen language, unaffected by the artist filter.
+        "scope_total": _finish_bucket(scope),
         "languages": languages,
         # Every language / artist on record, so a UI filter can offer them all.
         "all_languages": sorted(lang_seen.values()),
@@ -278,7 +390,35 @@ def pretty_test_type(test_type):
     return " ".join(w.capitalize() for w in (test_type or "").split("-")) or "Unknown"
 
 
-def tasks_export_rows(tests, test_type=None, version=None):
+def _batch_hours(test, ratings):
+    """(reviewed, pending, total) hours of audio in one audio-segmentation batch.
+
+    A clip counts as reviewed once somebody has given it a verdict; two people
+    reviewing the same clip must not make it look like two clips are done.
+    """
+    entries = test.json_entry if isinstance(test.json_entry, list) else []
+    if not entries:
+        return 0.0, 0.0, 0.0
+
+    reviewed_ids = set()
+    for r in (ratings or []):
+        if not (r.page_no_progress and r.completion_status in ("completed", "skipped")):
+            continue
+        rj = r.results_json if isinstance(r.results_json, dict) else {}
+        if str(rj.get("evaluation") or "").strip().lower() in ("accept", "reject"):
+            reviewed_ids.add(str(r.page_no_progress))
+
+    done = pending = 0.0
+    for e in entries:
+        secs = _clip_seconds((e or {}).get("audio_filename") or "")
+        if str((e or {}).get("id")) in reviewed_ids:
+            done += secs
+        else:
+            pending += secs
+    return _hours(done), _hours(pending), _hours(done + pending)
+
+
+def tasks_export_rows(tests, test_type=None, version=None, ratings_by_test=None):
     """Rows for the export table, Sr."""
     want_v = None
     if version:
@@ -298,12 +438,18 @@ def tasks_export_rows(tests, test_type=None, version=None):
         if want_v and test_version(desc) != want_v:
             continue
         n = len(t.json_entry) if isinstance(t.json_entry, list) else 0
-        picked.append((test_language(desc), pretty_test_type(t.test_type), t.id, desc, n))
+        # Hours only mean something where there is audio to measure.
+        if t.test_type == "audio-segmentation" and ratings_by_test is not None:
+            done_h, pend_h, all_h = _batch_hours(t, ratings_by_test.get(t.id))
+        else:
+            done_h = pend_h = all_h = None
+        picked.append((test_language(desc), pretty_test_type(t.test_type), t.id, desc,
+                       n, done_h, pend_h, all_h))
 
     # group by language, then task type, keeping test-id order inside a group
     picked.sort(key=lambda r: (r[0], r[1], r[2]))
     rows, counters = [], {}
-    for lang, ttype, tid, desc, n in picked:
+    for lang, ttype, tid, desc, n, done_h, pend_h, all_h in picked:
         key = (lang, ttype)
         counters[key] = counters.get(key, 0) + 1
         rows.append({
@@ -313,19 +459,37 @@ def tasks_export_rows(tests, test_type=None, version=None):
             "task_id": f"#{tid}",
             "detail": desc,
             "num_tasks": n,
+            "hours_completed": done_h,
+            "hours_pending": pend_h,
+            "hours_total": all_h,
         })
-    headers = ["Sr. No.", "Language", "Task Type", "Task ID", "Detail", "No. of Task"]
+    headers = ["Sr. No.", "Language", "Task Type", "Task ID", "Detail", "No. of Task",
+               "Hours Completed", "Hours Pending", "Total Hours"]
     return rows, headers
 
 
-def tasks_export_csv(tests, test_type=None, version=None):
-    rows, headers = tasks_export_rows(tests, test_type, version)
+def tasks_export_csv(tests, test_type=None, version=None, ratings_by_test=None):
+    rows, headers = tasks_export_rows(tests, test_type, version, ratings_by_test)
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(headers)
+    audio_done = audio_pending = audio_total = 0.0
     for r in rows:
         w.writerow([r["sr_no"], r["language"], r["task_type"], r["task_id"],
-                    r["detail"], r["num_tasks"]])
+                    r["detail"], r["num_tasks"],
+                    "" if r["hours_completed"] is None else r["hours_completed"],
+                    "" if r["hours_pending"] is None else r["hours_pending"],
+                    "" if r["hours_total"] is None else r["hours_total"]])
+        if r["hours_total"] is not None:
+            audio_done += r["hours_completed"] or 0
+            audio_pending += r["hours_pending"] or 0
+            audio_total += r["hours_total"] or 0
+    # A total line, so the hours can be read off without summing the sheet.
+    if audio_total:
+        w.writerow([])
+        w.writerow(["", "", "Audio Segmentation TOTAL", "", "", "",
+                    round(audio_done, 2), round(audio_pending, 2), round(audio_total, 2)])
+    _save_duration_cache()
     return buf.getvalue()
 
 

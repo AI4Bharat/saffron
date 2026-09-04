@@ -895,11 +895,11 @@ def pool_my_workspace(current_user):
     mine = {}
     if task_ids:
         for tid, status, cnt in db.session.query(
-            PoolItem.task_id, PoolItem.status, func.count(PoolItem.id)
-        ).filter(PoolItem.task_id.in_(task_ids),
-                 db.or_(PoolItem.claimed_by == rater.id,
-                        PoolItem.completed_by == rater.id)
-                 ).group_by(PoolItem.task_id, PoolItem.status).all():
+            PoolAnnotation.task_id, PoolAnnotation.status,
+            func.count(PoolAnnotation.id)
+        ).filter(PoolAnnotation.task_id.in_(task_ids),
+                 PoolAnnotation.rater_id == rater.id
+                 ).group_by(PoolAnnotation.task_id, PoolAnnotation.status).all():
             slot = mine.setdefault(tid, _blank_counts())
             slot['total'] += cnt
             if status in slot:
@@ -937,18 +937,22 @@ def pool_my_workspace(current_user):
     pulls = [serialize_pull(p, stats.get(p.pull_id), task_by_id.get(p.task_id))
              for p in open_pulls]
 
-    outstanding = db.session.query(func.count(PoolItem.id)).filter(
-        PoolItem.team_id == team.id, PoolItem.claimed_by == rater.id,
-        PoolItem.status == 'claimed').scalar() or 0
+    # All three read the annotator's own answers. Counting prompts made these
+    # disagree with each other on multi-rater work: a prompt stays open until
+    # its last answer, so "completed" was 0 next to a non-zero "done today".
+    outstanding = db.session.query(func.count(PoolAnnotation.id)).filter(
+        PoolAnnotation.team_id == team.id, PoolAnnotation.rater_id == rater.id,
+        PoolAnnotation.status == 'claimed').scalar() or 0
     today = 0
     since = datetime.utcnow() - timedelta(days=2)
-    for (ts,) in db.session.query(PoolItem.completed_at).filter(
-            PoolItem.completed_by == rater.id, PoolItem.completed_at >= since).all():
+    for (ts,) in db.session.query(PoolAnnotation.completed_at).filter(
+            PoolAnnotation.rater_id == rater.id,
+            PoolAnnotation.completed_at >= since).all():
         if _ist_day(ts) == _today_ist():
             today += 1
-    done_total = db.session.query(func.count(PoolItem.id)).filter(
-        PoolItem.team_id == team.id, PoolItem.completed_by == rater.id,
-        PoolItem.status.in_(['completed', 'flagged'])).scalar() or 0
+    done_total = db.session.query(func.count(PoolAnnotation.id)).filter(
+        PoolAnnotation.team_id == team.id, PoolAnnotation.rater_id == rater.id,
+        PoolAnnotation.status.in_(['completed', 'flagged'])).scalar() or 0
 
     # What they have done, per kind of work -- the numbers payment is based on, so the annotator sees exactly what the admin sees.
     by_task_type = my_work_by_task_type(team.id, rater.id)
@@ -986,13 +990,19 @@ def pool_my_tree(current_user):
     if not (team and rater):
         return jsonify({'languages': [], 'totals': _with_progress(_blank_counts())}), 200
 
+    # Their own answers: a prompt several people rate keeps only the last
+    # answerer on the item, so prompt status cannot describe one annotator.
     rows = db.session.query(
-        PoolItem.task_id, PoolItem.language, PoolItem.class_label, PoolItem.category,
-        PoolItem.final_difficulty, PoolItem.status, func.count(PoolItem.id)
-    ).filter(PoolItem.team_id == team.id,
-             db.or_(PoolItem.claimed_by == rater.id, PoolItem.completed_by == rater.id)
-             ).group_by(PoolItem.task_id, PoolItem.language, PoolItem.class_label,
-                        PoolItem.category, PoolItem.final_difficulty, PoolItem.status).all()
+        PoolAnnotation.task_id, PoolItem.language, PoolItem.class_label,
+        PoolItem.category, PoolAnnotation.final_difficulty, PoolAnnotation.status,
+        func.count(PoolAnnotation.id)
+    ).join(PoolItem, PoolItem.id == PoolAnnotation.item_id
+           ).filter(PoolAnnotation.team_id == team.id,
+                    PoolAnnotation.rater_id == rater.id
+                    ).group_by(PoolAnnotation.task_id, PoolItem.language,
+                               PoolItem.class_label, PoolItem.category,
+                               PoolAnnotation.final_difficulty,
+                               PoolAnnotation.status).all()
 
     languages, totals = {}, _blank_counts()
     for task_id, lang, klass, cat, diff, status, cnt in rows:

@@ -207,6 +207,64 @@ def find_docx_locally(language, persona, set_no):
     return max(hits, key=os.path.getmtime) if hits else None
 
 
+def _download_drive_file(file_id, out_path):
+    """Fetch one Drive file by id, clearing the confirmation page if shown.
+
+    gdown handles the small ones; anything served behind Drive's virus-scan
+    interstitial comes back as HTML instead of bytes, and that form is posted
+    here rather than treated as a failure.
+    """
+    import re as _re
+
+    import gdown
+    import requests
+
+    tmp = out_path + ".part"
+    try:
+        got = gdown.download(id=file_id, output=out_path, quiet=True)
+        if got and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            return out_path
+    except Exception as e:
+        print(f"  gdown could not fetch it ({str(e)[:70]}); trying the "
+              f"confirmation form")
+
+    session = requests.Session()
+    session.headers["User-Agent"] = "Mozilla/5.0"
+    r = session.get("https://drive.google.com/uc",
+                    params={"export": "download", "id": file_id},
+                    stream=True, timeout=120)
+    if "text/html" in (r.headers.get("Content-Type") or "").lower():
+        body = r.text
+        r.close()
+        action = _re.search(r'action="([^"]+)"', body)
+        fields = dict(_re.findall(r'name="([^"]+)"\s+value="([^"]*)"', body))
+        if not action:
+            raise SystemExit(f"Drive returned a page with no download form "
+                             f"for id={file_id}")
+        fields.setdefault("id", file_id)
+        fields.setdefault("export", "download")
+        fields.setdefault("confirm", "t")
+        r = session.get(action.group(1).replace("&amp;", "&"), params=fields,
+                        stream=True, timeout=120)
+        if "text/html" in (r.headers.get("Content-Type") or "").lower():
+            r.close()
+            raise SystemExit(f"Drive kept serving a page rather than the file "
+                             f"(id={file_id})")
+
+    total = 0
+    with open(tmp, "wb") as fh:
+        for chunk in r.iter_content(1024 * 1024):
+            if chunk:
+                fh.write(chunk)
+                total += len(chunk)
+    r.close()
+    if total == 0:
+        os.remove(tmp)
+        raise SystemExit(f"Empty download for id={file_id}")
+    os.replace(tmp, out_path)
+    return out_path
+
+
 def fetch_docx_from_drive(language, persona, set_no, dest_dir):
     """Download <Language>/<Persona>/<Language>_<Persona>_Set<n>.docx from the conversation-docs Drive folder; fall back to local export runs if the set is not on."""
     import gdown
@@ -254,8 +312,8 @@ def fetch_docx_from_drive(language, persona, set_no, dest_dir):
     os.makedirs(dest_dir, exist_ok=True)
     out_path = os.path.join(dest_dir, os.path.basename(target.path.replace("\\", "/")))
     print(f"Downloading {target.path} (id={target.id}) ...")
-    got = gdown.download(id=target.id, output=out_path, quiet=True)
-    if not got or not os.path.exists(out_path):
+    _download_drive_file(target.id, out_path)
+    if not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
         raise SystemExit(f"Download failed for {target.path}")
     print(f"Downloaded -> {out_path}")
     return out_path
